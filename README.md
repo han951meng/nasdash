@@ -25,7 +25,7 @@
 - 内存 / Swap 使用率
 - 运行时长
 - **温度传感器**：分类显示（CPU 各核心 / PCH 芯片组 / 主板 / ACPI），CPU 温度带 max/crit 上限，中文标注
-- **风扇转速**：读取 FanControlServer 配置获取风扇名称和控制模式（曲线温控/手动等），0 RPM 停转风扇标红显示
+- **风扇转速**：通过 `sensors -j` 读取硬件转速，0 RPM 停转风扇标红显示。若安装了 FanControlServer，额外显示风扇名称和控制模式（曲线温控/手动等）
 - **电压**：+3.3V / 3VSB 待机 / CMOS 电池等，中文标注
 - **显卡**：lspci 解析 VGA/3D/Display 控制器
 - **网卡**：物理网卡和 bond 接口，显示 IP / 速率 / 状态 / MAC，自动过滤 docker/虚拟网桥
@@ -57,7 +57,7 @@
 | 阵列卡 | `storcli /c0 show` |
 | 硬盘 SMART | `smartctl -a /dev/sdX` |
 | 温度/风扇/电压 | `sensors -j`（JSON 输出分类解析） |
-| 风扇名称/模式 | `/vol2/@appconf/FanControlServer/config.json` |
+| 风扇名称/模式（可选） | `/vol2/@appconf/FanControlServer/config.json`（未安装时用默认名称） |
 | 显卡 | `lspci` |
 | 网卡 | `ip -o link/addr` + `/sys/class/net/` |
 | RAID 阵列 | `cat /proc/mdstat` |
@@ -74,5 +74,5 @@
 
 - 需要 storcli 安装在 `/usr/local/bin/storcli`
 - smartctl 需要 sudo 免密权限（飞牛OS 应用框架默认提供）
-- 风扇名称依赖 FanControlServer 应用配置（未安装时显示默认名称）
+- FanControlServer 为可选依赖——未安装时风扇转速正常显示，仅缺少名称和模式标签
 - 端口 9800（飞牛OS 应用框架分配）
