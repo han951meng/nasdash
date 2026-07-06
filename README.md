@@ -4,6 +4,15 @@
 
 一个轻量级单文件 Flask Web 应用，通过 storcli / smartctl / sensors / mdadm 等系统命令采集 NAS 硬件状态，以网页面板展示，免去每次 SSH 敲命令的麻烦。
 
+## 安装
+
+1. 下载 `nasdash.fpk`
+2. 在飞牛OS应用中心上传安装
+3. 安装时自动安装依赖：smartmontools / lm-sensors / mdadm / Flask（storcli 可选，非 LSI 阵列卡可忽略）
+4. 安装后浏览器访问 `http://NAS_IP:9800`
+
+> 旧版本手动安装过依赖的用户：直接覆盖安装即可，install_callback 会跳过已安装的工具。
+
 ## 功能
 
 四个标签页，覆盖 NAS 硬件运维核心场景：
@@ -36,19 +45,19 @@
 - 挂载点容量（总大小 / 已用 / 可用 / 使用率 / 文件系统类型）
 - 自动过滤 docker overlay / tmpfs 等非存储卷
 
-## 安装方法
+## 依赖
 
-1. 下载 `nasdash.fpk`
-2. 在飞牛OS应用中心上传安装
-3. 或通过 SSH：`appcenter-cli install-fpk /path/to/nasdash.fpk`
-4. 安装后浏览器访问 `http://NAS_IP:9800`
+| 工具 | 用途 | 必需 | 自动安装 |
+|------|------|------|----------|
+| Python 3 + Flask | Web 框架 | ✅ | ✅ pip/apt |
+| smartctl (smartmontools) | 硬盘 SMART | ✅ | ✅ apt |
+| sensors (lm-sensors) | 温度/风扇/电压 | ✅ | ✅ apt |
+| mdadm | RAID 阵列 | ✅ | ✅ apt |
+| storcli | LSI 阵列卡信息 | ❌ | ❌ 需手动 |
+| lspci (pciutils) | 显卡 | ✅ | 系统自带 |
+| ip (iproute2) | 网卡 | ✅ | 系统自带 |
 
-## 技术栈
-
-- Python 3 + Flask（单文件应用，仅需 Flask 依赖）
-- storcli / smartctl / sensors / lspci / ip / mdadm 系统命令采集
-- 内联 HTML/CSS/JS 前端，无构建步骤
-- 标准 fnOS FPK 应用包格式
+**storcli** 不在标准软件源中，LSI/MegaRAID 阵列卡用户需手动从 [Broadcom 官网](https://www.broadcom.com/support/download-search) 下载安装。其他类型阵列卡用户可忽略此工具，对应面板会显示"未检测到"。
 
 ## 数据来源
 
@@ -70,8 +79,15 @@
 - `GET /` — 面板页面
 - `GET /api/all` — 全部数据 JSON（阵列卡 + 硬盘 + 系统 + 存储）
 
+## 技术栈
+
+- Python 3 + Flask（单文件应用）
+- storcli / smartctl / sensors / lspci / ip / mdadm 系统命令采集
+- 内联 HTML/CSS/JS 前端，无构建步骤
+- 标准 fnOS FPK 应用包格式
+
 ## 注意事项
 
-- 需要 storcli 安装在 `/usr/local/bin/storcli`
-- smartctl 需要 sudo 免密权限（飞牛OS 应用框架默认提供）
-- 端口 9800（飞牛OS 应用框架分配）
+- 服务端口 9800（飞牛OS 应用框架分配），修改需同步更新 manifest 的 service_port
+- smartctl 需要 sudo 权限（飞牛OS 应用框架默认提供）
+- 风扇 PWM 模式显示依赖 it87 / nct6775 等主板传感器驱动
