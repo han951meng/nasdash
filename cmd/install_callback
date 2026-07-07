@@ -1,0 +1,116 @@
+#!/bin/bash
+# 安装后回调：自动安装所有运行依赖
+# 工具：storcli（阵列卡）、smartmontools（SMART）、lm-sensors（温度/风扇/电压）、mdadm（RAID）、Flask（Web）
+LOG="${TRIM_TEMP_LOGFILE}"
+
+PYTHON=$(which python3 2>/dev/null || echo "/usr/bin/python3")
+
+# 1. 工具检测
+need_install=()
+command -v storcli >/dev/null 2>&1 || need_install+=("storcli")
+command -v smartctl >/dev/null 2>&1 || need_install+=("smartctl")
+command -v sensors >/dev/null 2>&1 || need_install+=("sensors")
+command -v mdadm >/dev/null 2>&1 || need_install+=("mdadm")
+$PYTHON -c "import flask" 2>/dev/null || need_install+=("flask")
+
+if [ ${#need_install[@]} -gt 0 ]; then
+    echo "[nasdash] 缺少依赖: ${need_install[@]}，开始安装..." >> "$LOG"
+
+    # 2. 检测包管理器
+    if command -v apt-get >/dev/null 2>&1; then
+        PM="apt"
+    elif command -v yum >/dev/null 2>&1; then
+        PM="yum"
+    elif command -v dnf >/dev/null 2>&1; then
+        PM="dnf"
+    elif command -v apk >/dev/null 2>&1; then
+        PM="apk"
+    else
+        echo "[nasdash] 未找到支持的包管理器，请手动安装 storcli/smartmontools/lm-sensors/mdadm/flask" >> "$LOG"
+        exit 0
+    fi
+
+    # 3. 更新源
+    case "$PM" in
+        apt)
+            apt-get update -qq 2>>"$LOG"
+            APT_INSTALL="apt-get install -y -qq"
+            ;;
+        yum|dnf)
+            $PM install -y -q
+            ;;
+        apk)
+            apk update -q 2>>"$LOG"
+            APK_INSTALL="apk add"
+            ;;
+    esac
+
+    # 4. 安装系统工具（storcli 需手动下载 MegaRAID 包，先跳过用 megacli 或 smartctl 兜底）
+    for tool in "${need_install[@]}"; do
+        case "$tool" in
+            smartctl)
+                case "$PM" in
+                    apt) $APT_INSTALL smartmontools >>"$LOG" 2>&1 ;;
+                    yum|dnf) $PM install -y smartmontools >>"$LOG" 2>&1 ;;
+                    apk) apk add smartmontools >>"$LOG" 2>&1 ;;
+                esac
+                ;;
+            sensors)
+                case "$PM" in
+                    apt) $APT_INSTALL lm-sensors >>"$LOG" 2>&1 ;;
+                    yum|dnf) $PM install -y lm_sensors >>"$LOG" 2>&1 ;;
+                    apk) apk add lm-sensors >>"$LOG" 2>&1 ;;
+                esac
+                # 探测传感器（首次安装时执行）
+                command -v sensors-detect >/dev/null 2>&1 && yes "" | sensors-detect --auto 2>/dev/null >>"$LOG" 2>&1
+                ;;
+            mdadm)
+                case "$PM" in
+                    apt) $APT_INSTALL mdadm >>"$LOG" 2>&1 ;;
+                    yum|dnf) $PM install -y mdadm >>"$LOG" 2>&1 ;;
+                    apk) apk add mdadm >>"$LOG" 2>&1 ;;
+                esac
+                ;;
+            storcli)
+                # storcli 不在标准源里，提示用户从 Broadcom 官网下载
+                echo "[nasdash] storcli 未安装。可选：LSI 阵列卡用户从 Broadcom 官网下载 storcli_*.deb 并安装；非 LSI 阵列卡可忽略此提示" >> "$LOG"
+                ;;
+            flask)
+                $PYTHON -m pip install --break-system-packages flask 2>>"$LOG" 1>/dev/null
+                if ! $PYTHON -c "import flask" 2>/dev/null; then
+                    $PYTHON -m pip install flask 2>>"$LOG" 1>/dev/null
+                fi
+                if ! $PYTHON -c "import flask" 2>/dev/null; then
+                    case "$PM" in
+                        apt) $APT_INSTALL python3-flask >>"$LOG" 2>&1 ;;
+                        yum|dnf) $PM install -y python3-flask >>"$LOG" 2>&1 ;;
+                        apk) apk add py3-flask >>"$LOG" 2>&1 ;;
+                    esac
+                fi
+                ;;
+        esac
+    done
+    echo "[nasdash] 依赖安装完成" >> "$LOG"
+fi
+
+# 5. 加载 it87 驱动（用于读取主板风扇 PWM）
+if [ -d /sys/class/hwmon ]; then
+    for chip in /sys/class/hwmon/hwmon*/name; do
+        [ -f "$chip" ] || continue
+        if grep -qi "it87\|nct6687\|nct6775" "$chip" 2>/dev/null; then
+            echo "[nasdash] 已检测到 $(cat $chip) 传感器" >> "$LOG"
+            break
+        fi
+    done
+fi
+
+# 6. 启动 lm-sensors 服务（如有 systemd）
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl enable lm-sensors 2>/dev/null
+    systemctl start lm-sensors 2>/dev/null
+fi
+
+# 7. 确保脚本可执行
+chmod +x "${TRIM_APPDEST}"/*.py 2>/dev/null
+
+exit 0

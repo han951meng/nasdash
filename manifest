@@ -1,0 +1,17 @@
+appname               = com.dashboard.nasdash
+version               = 1.4.2
+display_name          = NAS硬件监控
+desc                  = <p>飞牛OS 硬件监控面板，可视化查看 NAS 硬件状态，免去 SSH 敲命令。</p><p>自动识别阵列卡类型：MegaRAID 卡显示型号 / 固件 / CacheVault / 物理盘列表及芯片温度（ROC Temperature）；HBA 直通卡（IT 模式）内联显示每块盘温度；纯 SATA 主板给出提示。阵列卡标签页统一显示「模式 / 状态 / 说明」。</p><p>四个标签页：阵列卡 / 硬盘 SMART / 系统资源（CPU·内存·温度·风扇·电压·显卡·网卡）/ 存储卷。</p><p>安装时自动安装依赖（smartmontools、lm-sensors、mdadm、Flask）；LSI MegaRAID 卡需另装 storcli，HBA 直通卡与纯 SATA 主板无需 storcli。</p>
+platform              = x86
+source                = thirdparty
+maintainer            = nasdash
+distributor           = nasdash
+service_port          = 9800
+checkport             = true
+os_min_version        = 0.9.0
+desktop_uidir         = ui
+desktop_applaunchname = com.dashboard.nasdash.main
+ctl_stop              = true
+install_type          = root
+changelog             = 1.4.2: 更新应用商店介绍（manifest desc）与安装向导（wizard），补充自动检测阵列卡类型/芯片温度/HBA内联盘温/模式状态说明等能力，并修正 storcli 安装说明（需手动安装，非自动）
+checksum              = c39d1ca3c8a4a4a8100e7d7bca048566

@@ -1,0 +1,11 @@
+[
+    {
+        "stepTitle": "安装说明",
+        "items": [
+            {
+                "type": "tips",
+                "helpText": "<p><b>NAS硬件监控面板（nasdash）</b></p><p>安装后将在飞牛桌面生成图标，点击即可打开监控面板；也可浏览器直接访问 NAS_IP:9800。</p><p>自动检测阵列卡类型：MegaRAID 卡显示型号 / 固件 / 物理盘 / 芯片温度（ROC Temperature）；HBA 直通卡（IT 模式）内联显示每块盘温度；纯 SATA 主板给出提示。</p><p>四个标签页：阵列卡 / 硬盘 SMART / 系统资源 / 存储卷。</p><p>依赖说明：smartmontools、lm-sensors、mdadm、Flask 安装时自动安装；LSI MegaRAID 卡需另装 storcli，HBA 直通卡与纯 SATA 主板无需 storcli。</p>"
+            }
+        ]
+    }
+]

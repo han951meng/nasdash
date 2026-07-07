@@ -1,0 +1,9 @@
+#!/bin/bash
+# 卸载后回调：清理进程（如有残留）
+PID_FILE="${TRIM_PKGVAR}/app.pid"
+if [ -f "$PID_FILE" ]; then
+    pid=$(cat "$PID_FILE" | tr -d '[:space:]')
+    [ -n "$pid" ] && kill "$pid" 2>/dev/null
+    rm -f "$PID_FILE"
+fi
+exit 0

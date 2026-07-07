@@ -1,0 +1,55 @@
+#!/bin/bash
+PID_FILE="${TRIM_PKGVAR}/app.pid"
+APP_DIR="${TRIM_APPDEST}"
+PYTHON=$(which python3 2>/dev/null || echo "/usr/bin/python3")
+LOG_FILE="${TRIM_PKGVAR}/app.log"
+
+case $1 in
+start)
+    if [ -f "$PID_FILE" ]; then
+        pid=$(cat "$PID_FILE" | tr -d '[:space:]')
+        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+            echo "应用已在运行 (PID: $pid)" > "${TRIM_TEMP_LOGFILE}"
+            exit 0
+        fi
+        rm -f "$PID_FILE"
+    fi
+    cd "$APP_DIR"
+    PORT="${TRIM_SERVICE_PORT:-9800}"
+    $PYTHON "$APP_DIR/app.py" > "$LOG_FILE" 2>&1 &
+    echo $! > "$PID_FILE"
+    sleep 2
+    if kill -0 "$(cat "$PID_FILE" | tr -d '[:space:]')" 2>/dev/null; then
+        exit 0
+    else
+        echo "应用启动失败，请查看日志: $LOG_FILE" > "${TRIM_TEMP_LOGFILE}"
+        rm -f "$PID_FILE"
+        exit 1
+    fi
+    ;;
+stop)
+    if [ -f "$PID_FILE" ]; then
+        pid=$(cat "$PID_FILE" | tr -d '[:space:]')
+        if [ -n "$pid" ]; then
+            kill "$pid" 2>/dev/null
+            sleep 1
+            kill -9 "$pid" 2>/dev/null
+        fi
+        rm -f "$PID_FILE"
+    fi
+    exit 0
+    ;;
+status)
+    if [ -f "$PID_FILE" ]; then
+        pid=$(cat "$PID_FILE" | tr -d '[:space:]')
+        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+            exit 0
+        fi
+        rm -f "$PID_FILE"
+    fi
+    exit 3
+    ;;
+*)
+    exit 1
+    ;;
+esac
