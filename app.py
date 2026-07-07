@@ -626,7 +626,7 @@ function fmtHours(h){
   return h+' 小时';
 }
 
-function renderRaid(r){
+function renderRaid(r, disks){
   // 纯 SATA 主板：无独立阵列卡 / HBA
   if(r.mode === 'none'){
     return '<div class="card"><div class="loading">'+(r.note||'未检测到阵列卡')+'</div></div>';
@@ -635,8 +635,16 @@ function renderRaid(r){
   if(r.mode === 'mega_error'){
     return '<div class="card"><div class="loading" style="color:var(--red)">'+(r.note||'读取失败')+'</div></div>';
   }
-  // HBA 直通卡（IT 模式）：盘由系统直接管理，引导去看硬盘 SMART
+  // HBA 直通卡（IT 模式）：盘由系统直接管理，内联 smartctl 直读的磁盘温度
   if(r.mode === 'hba'){
+    let diskRows = (disks && disks.length) ? disks.map(d=>{
+      let trip = d.temp_trip || 60;
+      let tstr = d.temp != null ? d.temp + '°C' : 'N/A';
+      let tcol = tempColor(d.temp, trip);
+      let mdl = (d.vendor ? d.vendor + ' ' : '') + (d.model || '');
+      let typ = d.type === 'sas' ? 'SAS' : (d.rota === '1' ? 'SATA HDD' : 'SATA SSD');
+      return `<tr><td>${d.dev}</td><td>${mdl}</td><td>${typ}</td><td style="color:${tcol};font-weight:600">${tstr}</td></tr>`;
+    }).join('') : '<tr><td colspan=4>未检测到磁盘（请用 smartctl 确认盘已被系统识别）</td></tr>';
     return `
     <div class="cards">
       <div class="card">
@@ -649,6 +657,10 @@ function renderRaid(r){
         <h3>说明</h3>
         <div style="margin-top:6px;color:var(--muted);font-size:13px;line-height:1.7">${r.note}</div>
       </div>
+    </div>
+    <div class="section-title">已识别磁盘温度（smartctl 直读，无需阵列卡）</div>
+    <div class="card">
+      <table class="table"><thead><tr><th>设备</th><th>型号</th><th>类型</th><th>温度</th></tr></thead><tbody>${diskRows}</tbody></table>
     </div>`;
   }
   // MegaRAID (IR 模式)：现有展示逻辑
@@ -827,7 +839,7 @@ function renderAll(){
     document.querySelectorAll('.panel').forEach(p=>p.innerHTML='<div class="card"><div class="loading" style="color:var(--red)">加载失败: '+DATA.error+'</div></div>');
     return;
   }
-  document.getElementById('raid').innerHTML = renderRaid(DATA.raid);
+  document.getElementById('raid').innerHTML = renderRaid(DATA.raid, DATA.disks);
   document.getElementById('disks').innerHTML = renderDisks(DATA.disks);
   document.getElementById('system').innerHTML = renderSystem(DATA.system);
   document.getElementById('storage').innerHTML = renderStorage(DATA.storage);
