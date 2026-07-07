@@ -684,6 +684,8 @@ function renderRaid(r, disks){
     <div class="card">
       <h3>阵列卡信息</h3>
       <div class="kv"><span class="k">型号</span><span class="v">${r.model}</span></div>
+      <div class="kv"><span class="k">模式</span><span class="v"><span class="badge b-info">MegaRAID (IR)</span></span></div>
+      <div class="kv"><span class="k">状态</span><span class="v" style="color:var(--green)">✓ 正常工作</span></div>
       <div class="kv"><span class="k">序列号</span><span class="v">${r.serial}</span></div>
       <div class="kv"><span class="k">SAS 地址</span><span class="v">${r.sas_address}</span></div>
       <div class="kv"><span class="k">PCI 地址</span><span class="v">${r.pci}</span></div>
@@ -700,6 +702,10 @@ function renderRaid(r, disks){
       <h3>缓存 / 电池</h3>
       <div class="kv"><span class="k">CacheVault</span><span class="v">${r.cachevault}</span></div>
       <div class="kv"><span class="k">JBOD 盘数</span><span class="v">${r.jbod_count}</span></div>
+    </div>
+    <div class="card" style="grid-column: 1 / -1">
+      <h3>说明</h3>
+      <div style="margin-top:6px;color:var(--muted);font-size:13px;line-height:1.7">MegaRAID (IR 模式)：磁盘由阵列卡固件统一管理，支持 RAID 0/1/5/10 与 JBOD。阵列卡芯片温度由 storcli 读取（ROC temperature）；每张物理盘的状态与转速见下方列表，单盘 SMART 温度与健康度请见「硬盘 SMART」标签页。</div>
     </div>
   </div>
   <div class="section-title">物理盘列表</div>
