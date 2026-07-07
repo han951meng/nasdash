@@ -499,6 +499,18 @@ def fmt_blocks(blocks):
         return f"{kb/1048576:.1f} GB"
     return f"{kb/1024:.0f} MB"
 
+# ===================== 采集：Docker =====================
+def get_docker():
+    """统计 Docker 容器数（运行中/总数）"""
+    try:
+        out = sudo("docker ps -a --format '{{.State}}'", 8)
+        states = [s.strip() for s in out.splitlines() if s.strip()]
+        running = sum(1 for s in states if s.lower() in ("running", "up"))
+        total = len(states)
+        return {"running": running, "total": total, "ok": True}
+    except Exception:
+        return {"running": 0, "total": 0, "ok": False}
+
 # ===================== 路由 =====================
 @app.route("/")
 def index():
@@ -513,6 +525,7 @@ def api_all():
             "disks": get_disks(),
             "system": get_system(),
             "storage": get_storage(),
+            "docker": get_docker(),
             "time": time.strftime("%Y-%m-%d %H:%M:%S"),
             "elapsed": round(time.time() - t0, 2),
         }
@@ -537,11 +550,14 @@ HTML = r"""<!DOCTYPE html>
   .header{background:linear-gradient(135deg,#1e3a5f,#2563eb);color:#fff;padding:18px 28px;display:flex;align-items:center;justify-content:space-between;box-shadow:0 2px 8px rgba(0,0,0,.1)}
   .header h1{font-size:20px;font-weight:600}
   .header .meta{font-size:13px;opacity:.9;display:flex;gap:16px;align-items:center}
-  .container{max-width:1600px;margin:0 auto;padding:20px}
-  .tabs{display:flex;gap:6px;margin-bottom:18px;background:var(--card);padding:6px;border-radius:10px;box-shadow:0 1px 3px rgba(0,0,0,.06)}
-  .tab{flex:1;padding:10px 16px;text-align:center;cursor:pointer;border-radius:8px;font-size:14px;font-weight:500;color:var(--muted);transition:all .2s;border:none;background:none}
+  .container{max-width:1600px;margin:0 auto;padding:20px;display:flex;gap:20px;align-items:flex-start}
+  .sidebar{width:210px;flex:0 0 210px;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:8px;box-shadow:0 1px 3px rgba(0,0,0,.06);position:sticky;top:20px}
+  .sidebar-title{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;padding:6px 10px 10px}
+  .tabs{display:flex;flex-direction:column;gap:4px}
+  .tab{width:100%;padding:12px 14px;text-align:left;cursor:pointer;border-radius:8px;font-size:14px;font-weight:500;color:var(--muted);transition:all .2s;border:none;background:none;display:flex;align-items:center;gap:10px}
   .tab:hover{background:#f3f4f6}
   .tab.active{background:var(--blue);color:#fff}
+  .content{flex:1;min-width:0}
   .panel{display:none}
   .panel.active{display:block}
   .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}
@@ -585,7 +601,19 @@ HTML = r"""<!DOCTYPE html>
   .pill{display:inline-block;padding:1px 8px;border-radius:6px;font-size:11px;margin-left:6px}
   .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
   .grid-auto{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px}
-  @media(max-width:700px){.grid-2,.grid-auto{grid-template-columns:1fr}.header{flex-direction:column;gap:10px}}
+  .detect-title{font-size:22px;font-weight:700;margin-bottom:2px}
+  .detect-sub{font-size:13px;color:var(--muted);margin-bottom:18px}
+  .statusbar{display:flex;justify-content:space-between;align-items:center;background:var(--card);border:1px solid var(--border);border-radius:12px;padding:10px 18px;margin-bottom:20px;box-shadow:0 1px 3px rgba(0,0,0,.06)}
+  .status-left{display:flex;align-items:center;gap:8px}
+  .status-dot{width:9px;height:9px;border-radius:50%;background:var(--green)}
+  .status-right{display:flex;gap:26px;align-items:center}
+  .status-item{display:flex;flex-direction:column;gap:2px}
+  .status-item .k{font-size:11px;color:var(--muted)}
+  .status-item .v{font-size:13px;font-weight:600}
+  .detect-cards{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .disk-mini{display:flex;justify-content:space-between;padding:5px 0;font-size:13px;border-bottom:1px solid #f3f4f6;gap:10px}
+  .disk-mini:last-child{border-bottom:none}
+  @media(max-width:700px){.grid-2,.grid-auto{grid-template-columns:1fr}.header{flex-direction:column;gap:10px}.container{flex-direction:column}.sidebar{width:100%;flex:auto;position:static}.status-right{gap:14px}.detect-cards{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
@@ -600,17 +628,23 @@ HTML = r"""<!DOCTYPE html>
 </div>
 
 <div class="container">
-  <div class="tabs">
-    <button class="tab active" onclick="switchTab('raid',this)">💾 阵列卡</button>
-    <button class="tab" onclick="switchTab('disks',this)">💿 硬盘 SMART</button>
-    <button class="tab" onclick="switchTab('system',this)">📊 系统资源</button>
-    <button class="tab" onclick="switchTab('storage',this)">🗄️ 存储卷</button>
-  </div>
-
-  <div id="raid" class="panel active"><div class="loading">加载中…</div></div>
-  <div id="disks" class="panel"><div class="loading">加载中…</div></div>
-  <div id="system" class="panel"><div class="loading">加载中…</div></div>
-  <div id="storage" class="panel"><div class="loading">加载中…</div></div>
+  <aside class="sidebar">
+    <div class="sidebar-title">监控模块</div>
+    <div class="tabs">
+      <button class="tab active" onclick="switchTab('detect',this)">🔧 硬件配置检测</button>
+      <button class="tab" onclick="switchTab('raid',this)">💾 阵列卡</button>
+      <button class="tab" onclick="switchTab('disks',this)">💿 硬盘 SMART</button>
+      <button class="tab" onclick="switchTab('system',this)">📊 系统资源</button>
+      <button class="tab" onclick="switchTab('storage',this)">🗄️ 存储卷</button>
+    </div>
+  </aside>
+  <main class="content">
+    <div id="detect" class="panel active"><div class="loading">加载中…</div></div>
+    <div id="raid" class="panel"><div class="loading">加载中…</div></div>
+    <div id="disks" class="panel"><div class="loading">加载中…</div></div>
+    <div id="system" class="panel"><div class="loading">加载中…</div></div>
+    <div id="storage" class="panel"><div class="loading">加载中…</div></div>
+  </main>
 </div>
 
 <script>
@@ -854,12 +888,115 @@ function renderStorage(st){
   <div class="card"><pre>${(st.topology||'').replace(/</g,'&lt;')}</pre></div>`;
 }
 
+function renderDetect(D){
+  if(!D) return '';
+  let r = D.raid||{}, disks = D.disks||[], s = D.system||{}, st = D.storage||{}, dk = D.docker||{};
+  // 状态栏健康判定
+  let fans = (s.sensors&&s.sensors.fans)||[];
+  let fanOk = fans.length>0 && fans.every(f=>!(f.stopped||f.rpm<1));
+  let fanStr = fans.length===0 ? 'N/A' : (fanOk?'正常':'异常');
+  let raidOk = r.mode==='mega'||r.mode==='hba';
+  let raidStr = r.mode==='mega' ? '正常' : r.mode==='hba' ? '正常' : (r.mode==='mega_error'?'读取失败':'未配置');
+  let healthy = disks.filter(d=>d.health_ok).length;
+  let diskStr = disks.length ? healthy+'/'+disks.length+' 健康' : '无';
+  let dockerStr = (dk.running||0)+' 运行中';
+  let statusBar = `
+  <div class="statusbar">
+    <div class="status-left"><span class="status-dot"></span><span>系统运行正常 · 最近检测 ${D.time||''}</span></div>
+    <div class="status-right">
+      <div class="status-item"><span class="k">散热风扇</span><span class="v" style="color:${fanOk?'var(--green)':'var(--red)'}">${fanStr}</span></div>
+      <div class="status-item"><span class="k">阵列卡</span><span class="v" style="color:${raidOk?'var(--green)':'var(--yellow)'}">${raidStr}</span></div>
+      <div class="status-item"><span class="k">SAS硬盘</span><span class="v" style="color:${disks.length&&healthy===disks.length?'var(--green)':'var(--orange)'}">${diskStr}</span></div>
+      <div class="status-item"><span class="k">Docker</span><span class="v" style="color:var(--blue)">${dockerStr}</span></div>
+    </div>
+  </div>`;
+  // 系统配置
+  let cpuPct = s.cpu_threads ? Math.min(Math.round(parseFloat((s.load&&s.load[0])||0)/s.cpu_threads*100),100) : 0;
+  let memCard = `
+  <div class="card">
+    <h3>内存</h3>
+    <div class="kv"><span class="k">总量</span><span class="v">${(s.memory&&s.memory.total)||'-'}</span></div>
+    <div class="kv"><span class="k">已用</span><span class="v">${(s.memory&&s.memory.used)||'-'}</span></div>
+    <div class="kv"><span class="k">占用率</span><span class="v" style="color:${s.memory&&s.memory.percent>70?'var(--orange)':'var(--green)'}">${(s.memory&&s.memory.percent)||0}%</span></div>
+  </div>`;
+  let sysConfig = `
+  <div class="detect-cards">
+    <div class="card">
+      <h3>处理器</h3>
+      <div class="kv"><span class="k">型号</span><span class="v">${s.cpu_model||'-'}</span></div>
+      <div class="kv"><span class="k">核心/线程</span><span class="v">${s.cpu_cores||0}核 / ${s.cpu_threads||0}线程</span></div>
+      <div class="kv"><span class="k">CPU 温度</span><span class="v" style="color:${tempColor(s.cpu_temp,100)}">${s.cpu_temp!=null?s.cpu_temp+'°C':'N/A'}</span></div>
+      <div class="kv"><span class="k">负载占用</span><span class="v">${cpuPct}%</span></div>
+    </div>
+    ${memCard}
+  </div>`;
+  // 阵列卡 & 磁盘
+  let raidCard;
+  if(r.mode==='mega'){
+    raidCard = `
+    <div class="card">
+      <h3>RAID 控制器</h3>
+      <div class="kv"><span class="k">型号</span><span class="v">${r.model}</span></div>
+      <div class="kv"><span class="k">模式</span><span class="v"><span class="badge b-info">MegaRAID (IR)</span></span></div>
+      <div class="kv"><span class="k">状态</span><span class="v" style="color:var(--green)">✓ 正常</span></div>
+      <div class="kv"><span class="k">芯片温度</span><span class="v" style="color:${tempColor(r.controller_temp,85)}">${r.controller_temp!=null?r.controller_temp+'°C':'N/A'}</span></div>
+      <div class="kv"><span class="k">物理盘</span><span class="v">${r.drives?r.drives.length:0} 块</span></div>
+      <div class="kv"><span class="k">固件</span><span class="v">${r.fw_package||'-'}</span></div>
+    </div>`;
+  } else if(r.mode==='hba'){
+    raidCard = `
+    <div class="card">
+      <h3>控制器 (HBA 直通)</h3>
+      <div class="kv"><span class="k">型号</span><span class="v">${r.model}</span></div>
+      <div class="kv"><span class="k">模式</span><span class="v"><span class="badge b-info">IT 直通</span></span></div>
+      <div class="kv"><span class="k">状态</span><span class="v" style="color:var(--green)">✓ 正常工作</span></div>
+    </div>`;
+  } else {
+    raidCard = `<div class="card"><h3>阵列卡</h3><div class="loading">${r.note||'未检测到阵列卡'}</div></div>`;
+  }
+  let diskMini = (disks&&disks.length) ? disks.map(d=>`
+    <div class="disk-mini">
+      <span>${d.dev} · ${d.vendor} ${d.model}</span>
+      <span><span style="color:${tempColor(d.temp,d.temp_trip||60)};font-weight:600">${d.temp!=null?d.temp+'°C':'N/A'}</span> · <span class="badge ${d.health_ok?'b-ok':'b-bad'}">${d.health}</span></span>
+    </div>`).join('') : '<div class="loading">未检测到硬盘</div>';
+  let raidDisk = `
+  <div class="detect-cards">
+    ${raidCard}
+    <div class="card">
+      <h3>磁盘健康 (SMART)</h3>
+      ${diskMini}
+    </div>
+  </div>`;
+  // 存储卷
+  let vols = (st.volumes||[]).map(v=>{
+    let pct = parseInt(v.pcent);
+    let col = pct>85?'var(--red)':pct>70?'var(--orange)':'var(--green)';
+    return `<tr><td>${v.mount}</td><td>${v.fstype}</td><td>${v.size}</td><td>${v.used} / ${v.avail}</td><td style="min-width:120px"><div class="progress"><div class="progress-fill" style="width:${pct}%;background:${col}">${pct}%</div></div></td></tr>`;
+  }).join('');
+  let volTable = `
+  <div class="section-title">存储卷（mdadm）</div>
+  <div class="card">
+    <table class="table"><thead><tr><th>挂载点</th><th>文件系统</th><th>总容量</th><th>已用/可用</th><th>使用率</th></tr></thead><tbody>${vols||'<tr><td colspan=5>无</td></tr>'}</tbody></table>
+  </div>`;
+  return `
+  <div class="detect-title">硬件配置检测</div>
+  <div class="detect-sub">实时监测设备健康状态与硬件详情 · v1.5.0 整合版</div>
+  ${statusBar}
+  <div class="detect-title" style="font-size:16px;margin-bottom:10px">系统配置</div>
+  ${sysConfig}
+  <div class="detect-title" style="font-size:16px;margin:18px 0 10px">阵列卡 &amp; 磁盘</div>
+  ${raidDisk}
+  ${volTable}
+  `;
+}
+
 function renderAll(){
   if(!DATA) return;
   if(DATA.error){
     document.querySelectorAll('.panel').forEach(p=>p.innerHTML='<div class="card"><div class="loading" style="color:var(--red)">加载失败: '+DATA.error+'</div></div>');
     return;
   }
+  document.getElementById('detect').innerHTML = renderDetect(DATA);
   document.getElementById('raid').innerHTML = renderRaid(DATA.raid, DATA.disks);
   document.getElementById('disks').innerHTML = renderDisks(DATA.disks);
   document.getElementById('system').innerHTML = renderSystem(DATA.system);
