@@ -72,6 +72,17 @@ def get_raid_card():
             data["cachevault"] = f"{cv.group(0).strip()}"
         else:
             data["cachevault"] = "未检测到"
+        # 阵列卡芯片温度 (ROC Temperature)
+        # 匹配多种 storcli 版本/卡型的输出格式
+        temp_m = re.search(r"(?:Controller\s+Temperature|ROC\s+temperature[^=]*)\s*=\s*(\d+)", out, re.I)
+        if not temp_m:
+            # 备选：从 /c0 show all 输出中解析（需用 show all 而非 show）
+            all_out = sudo(f"{STORCLI} /c0 show all", 15)
+            temp_m = re.search(r"ROC\s+temperature[^=]*\s*=\s*(\d+)", all_out, re.I)
+        if temp_m:
+            data["controller_temp"] = int(temp_m.group(1))
+        else:
+            data["controller_temp"] = None
         # 物理盘列表（用 split 解析表格行，更健壮）
         # 格式: 252:0 21 JBOD - 6.366 TB SAS HDD N N 4 KB ST14000NM0001 U -
         drives = []
@@ -664,6 +675,9 @@ function renderRaid(r, disks){
     </div>`;
   }
   // MegaRAID (IR 模式)：现有展示逻辑
+  let ct = r.controller_temp;
+  let ctStr = ct != null ? ct + '°C' : 'N/A';
+  let ctCol = tempColor(ct, 85);
   let drives = r.drives.map(d=>`<tr><td>${d.slot}</td><td>${d.model}</td><td>${d.intf}</td><td>${d.size}</td><td><span class="badge ${d.state==='JBOD'||d.state==='Onln'?'b-ok':'b-warn'}">${d.state}</span></td><td>${d.sp==='U'?'运转':'停止'}</td></tr>`).join('');
   return `
   <div class="cards">
@@ -673,6 +687,7 @@ function renderRaid(r, disks){
       <div class="kv"><span class="k">序列号</span><span class="v">${r.serial}</span></div>
       <div class="kv"><span class="k">SAS 地址</span><span class="v">${r.sas_address}</span></div>
       <div class="kv"><span class="k">PCI 地址</span><span class="v">${r.pci}</span></div>
+      <div class="kv"><span class="k">芯片温度</span><span class="v" style="color:${ctCol};font-weight:600">${ctStr}</span></div>
     </div>
     <div class="card">
       <h3>固件版本</h3>
