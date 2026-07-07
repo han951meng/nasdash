@@ -153,9 +153,14 @@ def get_raid_card():
         # 匹配多种 storcli 版本/卡型的输出格式
         temp_m = re.search(r"(?:Controller\s+Temperature|ROC\s+temperature[^=]*)\s*=\s*(\d+)", out, re.I)
         if not temp_m:
-            # 备选：从 /c0 show all 输出中解析（需用 show all 而非 show）
+            # 备选1：从 /c0 show all 输出中解析（需用 show all 而非 show）
             all_out = sudo(f"{STORCLI} /c0 show all", 15)
             temp_m = re.search(r"ROC\s+temperature[^=]*\s*=\s*(\d+)", all_out, re.I)
+        if not temp_m:
+            # 备选2：LSI-9300 等 HBA 卡的 /c0 show 不含温度，
+            # 必须单独跑 /c0 show temperature 才能拿到 ROC 温度
+            tmp_out = sudo(f"{STORCLI} /c0 show temperature", 10)
+            temp_m = re.search(r"ROC\s+temperature[^=]*\s*=\s*(\d+)", tmp_out, re.I)
         if temp_m:
             data["controller_temp"] = int(temp_m.group(1))
         else:
@@ -998,6 +1003,7 @@ function renderRaid(r, disks){
         <div class="kv"><span class="k">型号</span><span class="v">${r.model}</span></div>
         <div class="kv"><span class="k">模式</span><span class="v"><span class="badge b-info">IT 直通</span></span></div>
         <div class="kv"><span class="k">状态</span><span class="v" style="color:var(--green)">✓ 正常工作</span></div>
+        ${r.controller_temp != null ? `<div class="kv"><span class="k">芯片温度</span><span class="v" style="color:${tempColor(r.controller_temp,85)};font-weight:600">${r.controller_temp}°C</span></div>` : ''}
       </div>
       <div class="card" style="grid-column: span 2">
         <h3>说明</h3>
