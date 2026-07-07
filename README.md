@@ -17,10 +17,11 @@
 
 四个标签页，覆盖 NAS 硬件运维核心场景：
 
-### 💾 阵列卡
-- 型号 / 序列号 / SAS 地址 / 固件版本 / BIOS 版本 / 驱动版本 / PCI 地址
-- CacheVault 缓存电池状态
-- JBOD 物理盘列表（槽位 / DID / 状态 / 容量 / 接口 / 型号）
+### 💾 阵列卡（自动检测卡类型）
+通过 `lspci` 自动识别存储控制器类型，分三种情况展示，避免误报：
+- **MegaRAID 阵列卡**（如 LSI 9271-8i，IR/RAID 模式）：走 `storcli /c0 show` 显示完整信息——型号 / 序列号 / SAS 地址 / 固件版本 / BIOS 版本 / 驱动版本 / PCI 地址、CacheVault 缓存电池状态、JBOD 物理盘列表（槽位 / DID / 状态 / 容量 / 接口 / 型号）
+- **HBA 直通卡**（如 LSI 9300-8E，IT 模式）：显示卡型号与「IT 直通模式」说明，并引导前往「硬盘 SMART」标签页查看每块盘的温度（直通卡的盘由系统直接识别为 `/dev/sdX`，storcli 查不到温度是正常现象）
+- **纯 SATA 主板**（无独立阵列卡）：提示无独立阵列卡，温度请见「硬盘 SMART」标签
 
 ### 💿 硬盘 SMART
 - 同时支持 SAS/SCSI 盘和 SATA/ATA 盘
@@ -53,17 +54,17 @@
 | smartctl (smartmontools) | 硬盘 SMART | ✅ | ✅ apt |
 | sensors (lm-sensors) | 温度/风扇/电压 | ✅ | ✅ apt |
 | mdadm | RAID 阵列 | ✅ | ✅ apt |
-| storcli | LSI 阵列卡信息 | ❌ | ❌ 需手动 |
+| storcli | LSI MegaRAID 阵列卡信息 | ❌ | ❌ 需手动 |
 | lspci (pciutils) | 显卡 | ✅ | 系统自带 |
 | ip (iproute2) | 网卡 | ✅ | 系统自带 |
 
-**storcli** 不在标准软件源中，LSI/MegaRAID 阵列卡用户需手动从 [Broadcom 官网](https://www.broadcom.com/support/download-search) 下载安装。其他类型阵列卡用户可忽略此工具，对应面板会显示"未检测到"。
+**storcli** 不在标准软件源中，LSI/MegaRAID 阵列卡（IR/RAID 模式）用户需手动从 [Broadcom 官网](https://www.broadcom.com/support/download-search) 下载安装。**HBA 直通卡（IT 模式，如 9300-8E）无需 storcli**——此类卡不做 RAID，盘直接透传给系统，面板会自动识别为「IT 直通模式」并引导查看「硬盘 SMART」标签，storcli 查不到温度是正常现象。纯 SATA 主板用户可忽略此工具。
 
 ## 数据来源
 
 | 数据 | 命令 |
 |------|------|
-| 阵列卡 | `storcli /c0 show` |
+| 阵列卡 | `lspci` 检测卡类型；MegaRAID 卡再 `storcli /c0 show` |
 | 硬盘 SMART | `smartctl -a /dev/sdX` |
 | 温度/风扇/电压 | `sensors -j`（JSON 输出分类解析） |
 | 风扇转速 | `sensors -j` + sysfs `pwmN_enable` / `pwmN` |
