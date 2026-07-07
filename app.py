@@ -45,6 +45,83 @@ def detect_storage_controllers():
         controllers.append({"model": model, "is_megaraid": is_megaraid, "is_hba": is_hba})
     return controllers
 
+def _storcli_size_to_decimal(size_str):
+    """storcli 把二进制 TiB/GiB 误标成 TB/GB，这里换算回十进制显示（如 6.366 TB -> 7.0T）"""
+    try:
+        m = re.match(r"^([\d.]+)\s*(TB|GB|MB)$", size_str.strip(), re.I)
+        if not m:
+            return size_str
+        num = float(m.group(1))
+        unit = m.group(2).upper()
+        # storcli 实际是按二进制：TB=TiB(1024^4)、GB=GiB(1024^3)
+        bytes_ = num * (1024 ** 4 if unit == "TB" else 1024 ** 3 if unit == "GB" else 1024 ** 2)
+        tb = bytes_ / 1e12
+        if tb >= 1:
+            return f"{tb:.1f}T"
+        gb = bytes_ / 1e9
+        return f"{gb:.0f}G"
+    except Exception:
+        return size_str
+
+def disk_brand_and_feature(model):
+    """根据型号解析硬盘品牌与特性（如双磁臂/双执行器）。返回 (brand_cn, feature)"""
+    model_u = (model or "").strip().upper()
+    # 品牌识别
+    if model_u.startswith("ST"):
+        brand = "希捷(Seagate)"
+    elif model_u.startswith(("WD", "WDC")):
+        brand = "西部数据(WD)"
+    elif "TOSHIBA" in model_u:
+        brand = "东芝(Toshiba)"
+    elif model_u.startswith(("HGST", "HUH", "HUS")):
+        brand = "HGST(日立)"
+    elif "SAMSUNG" in model_u or model_u.startswith("SV"):
+        brand = "三星(Samsung)"
+    elif model_u.startswith("INTEL"):
+        brand = "英特尔(Intel)"
+    elif model_u.startswith("KINGSTON"):
+        brand = "金士顿(Kingston)"
+    elif model_u.startswith(("CT", "CRUCIAL")):
+        brand = "英睿达(Crucial)"
+    elif "MICRON" in model_u:
+        brand = "美光(Micron)"
+    elif "SANDISK" in model_u:
+        brand = "闪迪(SanDisk)"
+    elif model_u.startswith("PNY"):
+        brand = "PNY"
+    elif "HITACHI" in model_u:
+        brand = "日立(Hitachi)"
+    else:
+        brand = ""
+    # 双磁臂（双执行器）识别：已知 Seagate Exos 2X 系列
+    dual_models = {"ST14000NM0001", "ST10000NM0096", "ST18000NM000J", "ST20000NM007D"}
+    feature = "双磁臂(双执行器)" if model_u in dual_models else ""
+    return brand, feature
+
+def _smart_rpm_by_serial():
+    """扫描所有 /dev/sdX，建立 {序列号(大写): 转速文本} 映射。
+    storcli 不提供真实转速，必须用 smartctl -i 取 Rotation Rate（7200 rpm / 固态）。
+    """
+    rpm_map = {}
+    try:
+        devs = [d for d in os.listdir("/dev") if re.match(r"^sd[a-z]$", d)]
+    except Exception:
+        return rpm_map
+    for d in sorted(devs):
+        try:
+            out = sudo(f"smartctl -i /dev/{d}", 8)
+        except Exception:
+            continue
+        sn_m = re.search(r"Serial\s*(?:number|Number)\s*:\s*(\S+)", out)
+        rpm_m = re.search(r"Rotation Rate:\s*(.+)", out)
+        if not (sn_m and rpm_m):
+            continue
+        rpm = rpm_m.group(1).strip()
+        if "Solid State" in rpm or "SSD" in rpm:
+            rpm = "固态(SSD)"
+        rpm_map[sn_m.group(1).strip().upper()] = rpm
+    return rpm_map
+
 def get_raid_card():
     data = {"ok": False, "mode": "none", "model": "未检测到",
             "drives": [], "raw": "", "note": "", "controllers": []}
@@ -85,6 +162,7 @@ def get_raid_card():
             data["controller_temp"] = None
         # 物理盘列表（用 split 解析表格行，更健壮）
         # 格式: 252:0 21 JBOD - 6.366 TB SAS HDD N N 4 KB ST14000NM0001 U -
+        rpm_map = _smart_rpm_by_serial()
         drives = []
         seen_slots = set()
         for line in out.splitlines():
@@ -93,12 +171,37 @@ def get_raid_card():
                 if parts[0] in seen_slots:
                     continue
                 seen_slots.add(parts[0])
+                model = parts[12] if len(parts) > 12 else ""
+                brand, feature = disk_brand_and_feature(model)
+                # 用每张盘的序列号匹配 smartctl 真实转速（storcli 不提供 RPM）
+                e, s = parts[0].split(":")
+                sn = ""
+                try:
+                    sn_out = sudo(f"{STORCLI} /c0 /e{e} /s{s} show all", 15)
+                    sn_m = re.search(r"SN\s*=\s*(\S+)", sn_out)
+                    if sn_m:
+                        sn = sn_m.group(1).strip()
+                except Exception:
+                    pass
+                rpm = rpm_map.get(sn.upper(), "")
+                if not rpm:
+                    rpm = "固态(SSD)" if parts[7].upper() == "SSD" else "—"
+                size_dec = _storcli_size_to_decimal(parts[4] + " " + parts[5])
+                size_note = ""
+                if feature and "双磁臂" in feature:
+                    # 双磁臂盘每块执行器向系统暴露一半容量，整盘为 2×；显示整盘标称容量
+                    m = re.match(r"^([\d.]+)\s*([TG])$", size_dec)
+                    if m:
+                        full = float(m.group(1)) * 2
+                        size_dec = f"{full:.1f}{m.group(2)}"
+                        size_note = f"双磁臂·整盘{size_dec}（每执行器 {(full/2):.1f}{m.group(2)}）"
                 drives.append({
                     "slot": parts[0], "did": parts[1], "state": parts[2],
-                    "dg": parts[3], "size": parts[4] + " " + parts[5],
+                    "dg": parts[3], "size": size_dec, "size_note": size_note,
                     "intf": parts[6], "media": parts[7],
-                    "model": parts[12] if len(parts) > 12 else "",
-                    "sp": parts[13] if len(parts) > 13 else "",
+                    "model": model, "sp": parts[13] if len(parts) > 13 else "",
+                    "sn": sn, "rpm": rpm,
+                    "brand": brand, "feature": feature,
                 })
         data["drives"] = drives
         return data
@@ -208,6 +311,8 @@ def get_disks():
         if len(p) >= 2:
             linfo[p[0]] = {"size_b": p[1], "rota": p[2] if len(p) > 2 else "?",
                            "tran": p[3] if len(p) > 3 else ""}
+    # 真实转速：smartctl -i 的 Rotation Rate（覆盖 ATA/SAS 机械盘；SSD 标“固态(SSD)”）
+    rpm_map = _smart_rpm_by_serial()
     for name in devnames:
         dev = f"/dev/{name}"
         info = linfo.get(name, {})
@@ -250,6 +355,10 @@ def get_disks():
                 m = re.search(r"Serial Number:\s*(\S+)", smart_out)
                 disk["serial"] = m.group(1) if m else ""
                 disk["vendor"] = disk["model"].split()[0] if disk["model"] else ""
+        b, f = disk_brand_and_feature(disk["model"])
+        disk["brand"] = b
+        disk["feature"] = f
+        disk["rpm"] = rpm_map.get(disk.get("serial", "").upper(), "") if disk.get("serial") else ""
         disk["health_ok"] = disk["health"].upper() in ("OK", "PASSED")
         disks.append(disk)
     return disks
@@ -500,16 +609,202 @@ def fmt_blocks(blocks):
     return f"{kb/1024:.0f} MB"
 
 # ===================== 采集：Docker =====================
+def _listening_ports_in_netns(pid):
+    """读取某 PID 网络命名空间内处于 LISTEN 的 TCP 端口（容器内视角）"""
+    ports = set()
+    for f in (f"/proc/{pid}/net/tcp", f"/proc/{pid}/net/tcp6"):
+        try:
+            with open(f) as fh:
+                next(fh, None)
+                for line in fh:
+                    fld = line.split()
+                    if len(fld) >= 4 and fld[3] == "0A":  # 0A = LISTEN
+                        ports.add(int(fld[1].split(":")[1], 16))
+        except Exception:
+            continue
+    return sorted(ports)
+
+def _listening_ports_for_pids(pids):
+    """汇总一组进程拥有的、处于 LISTEN 的 TCP 端口（host 网络模式按进程归属判定）"""
+    inodes = set()
+    for pid in pids:
+        try:
+            for fd in os.listdir(f"/proc/{pid}/fd"):
+                try:
+                    link = os.readlink(f"/proc/{pid}/fd/{fd}")
+                except Exception:
+                    continue
+                if link.startswith("socket:["):
+                    inodes.add(link[8:-1])
+        except Exception:
+            continue
+    ports = set()
+    for f in ("/proc/net/tcp", "/proc/net/tcp6"):
+        try:
+            with open(f) as fh:
+                next(fh, None)
+                for line in fh:
+                    fld = line.split()
+                    if len(fld) < 10:
+                        continue
+                    if fld[3] == "0A" and fld[9] in inodes:
+                        ports.add(int(fld[1].split(":")[1], 16))
+        except Exception:
+            continue
+    return sorted(ports)
+
+def _container_pids(name):
+    """用 docker top 取容器内所有进程 PID（host 网络模式端口归属用）"""
+    pids = []
+    out = sudo(f"docker top {name}", 5)
+    for line in out.splitlines()[1:]:  # 跳过表头
+        f = line.split()
+        if len(f) >= 2 and f[1].isdigit():
+            pids.append(int(f[1]))
+    return pids
+
+def _detect_ports(meta):
+    """根据 docker inspect 信息自动探测端口号（兼容 bridge 发布端口 / host 模式真实监听端口）"""
+    netmode = (meta.get("netmode") or "bridge")
+    ports_map = meta.get("ports") or {}
+    pid = meta.get("pid") or 0
+    parts = []
+    # 1) 已发布端口映射（bridge / 自定义网络，-p 映射），去重（IPv4/IPv6 双绑定）
+    if ports_map:
+        seen = set()
+        for cport, bindings in ports_map.items():
+            if bindings:
+                for b in bindings:
+                    hip = (b.get("HostIp") or "").strip()
+                    hport = b.get("HostPort", "")
+                    if hip and hip not in ("0.0.0.0", "::", "::/0"):
+                        s = f"{hip}:{hport}→{cport}"
+                    else:
+                        s = f"{hport}→{cport}"
+                    if s not in seen:
+                        seen.add(s)
+                        parts.append(s)
+            else:
+                s = f"{cport} (未发布)"
+                if s not in seen:
+                    seen.add(s)
+                    parts.append(s)
+    # 2) host 网络模式：端口即主机端口，按进程归属探测真实监听端口
+    if netmode.startswith("host"):
+        pids = _container_pids(meta.get("name", ""))
+        if pids:
+            for p in _listening_ports_for_pids(pids):
+                parts.append(f"{p}/tcp")
+        else:
+            parts.append("host 网络")
+    # 3) 非 host 且无发布端口：探测容器内部监听端口（提示性）
+    if not ports_map and not netmode.startswith("host") and pid:
+        for p in _listening_ports_in_netns(pid):
+            parts.append(f"{p}/tcp (容器内部)")
+    if not parts:
+        return "-"
+    return "  ".join(parts)
+
+def _cn_status(status):
+    """把 docker 的英文状态串转换为中文（含运行时长）"""
+    s = (status or "").strip()
+    low = s.lower()
+    if low.startswith("up"):
+        # 运行中：Up 3 days / Up 5 hours / Up 30 seconds / Up About a minute
+        body = s[2:].strip()
+        body = re.split(r"[\(（]", body)[0].strip()  # 去掉 (health: ...) 等括号
+        repl = [("about a minute", "约1分钟"), ("about an hour", "约1小时"),
+                ("days", "天"), ("day", "天"), ("hours", "小时"), ("hour", "小时"),
+                ("minutes", "分钟"), ("minute", "分钟"), ("seconds", "秒"), ("second", "秒")]
+        cn = body
+        for a, b in repl:
+            cn = re.sub(r"\b" + re.escape(a) + r"\b", b, cn, flags=re.I)
+        cn = re.sub(r"\ba\b", "1", cn)  # 兜底 a day / a hour
+        return "已运行 " + cn
+    m = re.search(r"exited.*?(\d+)\s*(day|days|hour|hours|minute|minutes|second|seconds)", low)
+    if m:
+        num = m.group(1)
+        unit = m.group(2)
+        ucn = {"day": "天", "days": "天", "hour": "小时", "hours": "小时",
+               "minute": "分钟", "minutes": "分钟", "second": "秒", "seconds": "秒"}[unit]
+        return "已停止 (停于 %s%s前)" % (num, ucn)
+    if low.startswith("created"):
+        return "已创建未启动"
+    return s  # 兜底原串
+
 def get_docker():
-    """统计 Docker 容器数（运行中/总数）"""
+    """统计 Docker 容器数（运行中/总数），并自动探测每个容器真实监听端口"""
     try:
-        out = sudo("docker ps -a --format '{{.State}}'", 8)
-        states = [s.strip() for s in out.splitlines() if s.strip()]
-        running = sum(1 for s in states if s.lower() in ("running", "up"))
-        total = len(states)
-        return {"running": running, "total": total, "ok": True}
+        out = sudo("docker ps -a --format '{{.Names}}|{{.Status}}|{{.Image}}'", 8)
+        containers = []
+        for line in out.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split("|")
+            name = parts[0].strip() if len(parts) > 0 else ""
+            status = parts[1].strip() if len(parts) > 1 else ""
+            image = parts[2].strip() if len(parts) > 2 else ""
+            running = status.lower().startswith("up") or "running" in status.lower()
+            containers.append({"name": name, "status": status, "image": image, "ports": "-", "running": running, "mem": None, "runtime": _cn_status(status)})
+        # 批量 inspect 取端口 / pid / 网络模式，自动探测端口
+        try:
+            ids = sudo("docker ps -a -q", 8).split()
+            if ids:
+                raw = sudo("docker inspect " + " ".join(ids), 15)
+                data = json.loads(raw) if raw.strip() else []
+                info = {}
+                for c in data:
+                    nm = (c.get("Name") or "").lstrip("/")
+                    info[nm] = {
+                        "netmode": (c.get("HostConfig", {}).get("NetworkMode") or "bridge"),
+                        "pid": c.get("State", {}).get("Pid", 0),
+                        "ports": c.get("NetworkSettings", {}).get("Ports") or {},
+                        "name": nm,
+                    }
+                for c in containers:
+                    meta = info.get(c["name"])
+                    if meta:
+                        c["ports"] = _detect_ports(meta)
+        except Exception:
+            # 兜底：用 docker ps 的 Ports 字段
+            try:
+                out2 = sudo("docker ps -a --format '{{.Names}}|{{.Ports}}'", 8)
+                pm = {}
+                for line in out2.splitlines():
+                    line = line.strip()
+                    if not line or "|" not in line:
+                        continue
+                    n, p = line.split("|", 1)
+                    pm[n.strip()] = p.strip()
+                for c in containers:
+                    if not c["ports"] or c["ports"] == "-":
+                        c["ports"] = pm.get(c["name"], "-")
+            except Exception:
+                pass
+        # 运行中容器的内存占用（docker stats 仅对运行中容器有数据）
+        try:
+            stat = sudo("docker stats --no-stream --format '{{.Name}}|{{.MemUsage}}'", 8)
+            for line in stat.splitlines():
+                line = line.strip()
+                if not line or "|" not in line:
+                    continue
+                cname, mem = line.split("|", 1)
+                cname = cname.strip()
+                for c in containers:
+                    if c["name"] == cname:
+                        c["mem"] = mem.strip()
+                        break
+        except Exception:
+            pass
+        # 停止的容器且无端口配置 → 标注「容器停止不检测端口」，避免与「运行中但无端口」的 "-" 混淆
+        for c in containers:
+            if c["ports"] in ("-", "") and not c["running"]:
+                c["ports"] = "容器停止不检测端口"
+        running = sum(1 for c in containers if c["running"])
+        return {"running": running, "total": len(containers), "containers": containers, "ok": True}
     except Exception:
-        return {"running": 0, "total": 0, "ok": False}
+        return {"running": 0, "total": 0, "containers": [], "ok": False}
 
 # ===================== 路由 =====================
 @app.route("/")
@@ -613,6 +908,10 @@ HTML = r"""<!DOCTYPE html>
   .detect-cards{display:grid;grid-template-columns:1fr 1fr;gap:14px}
   .disk-mini{display:flex;justify-content:space-between;padding:5px 0;font-size:13px;border-bottom:1px solid #f3f4f6;gap:10px}
   .disk-mini:last-child{border-bottom:none}
+  .disk-group-title{font-size:12px;font-weight:600;color:#6b7280;margin:10px 0 4px;padding-left:2px}
+  .disk-group-title:first-child{margin-top:0}
+  .b-sas{background:#1e40af;color:#fff}
+  .b-sata{background:#15803d;color:#fff}
   @media(max-width:700px){.grid-2,.grid-auto{grid-template-columns:1fr}.header{flex-direction:column;gap:10px}.container{flex-direction:column}.sidebar{width:100%;flex:auto;position:static}.status-right{gap:14px}.detect-cards{grid-template-columns:1fr}}
 </style>
 </head>
@@ -636,6 +935,7 @@ HTML = r"""<!DOCTYPE html>
       <button class="tab" onclick="switchTab('disks',this)">💿 硬盘 SMART</button>
       <button class="tab" onclick="switchTab('system',this)">📊 系统资源</button>
       <button class="tab" onclick="switchTab('storage',this)">🗄️ 存储卷</button>
+      <button class="tab" onclick="switchTab('docker',this)">🐳 Docker</button>
     </div>
   </aside>
   <main class="content">
@@ -644,6 +944,7 @@ HTML = r"""<!DOCTYPE html>
     <div id="disks" class="panel"><div class="loading">加载中…</div></div>
     <div id="system" class="panel"><div class="loading">加载中…</div></div>
     <div id="storage" class="panel"><div class="loading">加载中…</div></div>
+    <div id="docker" class="panel"><div class="loading">加载中…</div></div>
   </main>
 </div>
 
@@ -712,7 +1013,7 @@ function renderRaid(r, disks){
   let ct = r.controller_temp;
   let ctStr = ct != null ? ct + '°C' : 'N/A';
   let ctCol = tempColor(ct, 85);
-  let drives = r.drives.map(d=>`<tr><td>${d.slot}</td><td>${d.model}</td><td>${d.intf}</td><td>${d.size}</td><td><span class="badge ${d.state==='JBOD'||d.state==='Onln'?'b-ok':'b-warn'}">${d.state}</span></td><td>${d.sp==='U'?'运转':'停止'}</td></tr>`).join('');
+  let drives = r.drives.map(d=>`<tr><td>${d.slot}</td><td>${d.brand||'-'}</td><td>${d.model}${d.feature?` <span class="badge b-info">${d.feature}</span>`:''}</td><td>${d.intf} ${d.media}</td><td>${d.size}${d.size_note?`<br><span style="font-size:11px;color:var(--muted)">${d.size_note}</span>`:''}</td><td><span class="badge ${d.state==='JBOD'||d.state==='Onln'?'b-ok':'b-warn'}">${d.state}${d.sp==='D'?' · 已停转':''}</span></td><td>${d.rpm||'-'}</td></tr>`).join('');
   return `
   <div class="cards">
     <div class="card">
@@ -744,7 +1045,7 @@ function renderRaid(r, disks){
   </div>
   <div class="section-title">物理盘列表</div>
   <div class="card">
-    <table class="table"><thead><tr><th>槽位</th><th>型号</th><th>接口</th><th>容量</th><th>状态</th><th>转速</th></tr></thead><tbody>${drives||'<tr><td colspan=6>无</td></tr>'}</tbody></table>
+    <div style="overflow-x:auto"><table class="table"><thead><tr><th>槽位</th><th>品牌</th><th>型号</th><th>接口</th><th>容量</th><th>状态</th><th>转速</th></tr></thead><tbody>${drives||'<tr><td colspan=7>无</td></tr>'}</tbody></table></div>
   </div>`;
 }
 
@@ -779,8 +1080,9 @@ function renderDisks(disks){
         <span class="name">${d.dev}</span>
         ${healthBadge}
       </div>
-      <div class="kv"><span class="k">型号</span><span class="v">${d.vendor} ${d.model}</span></div>
-      <div class="kv"><span class="k">容量 / 类型</span><span class="v">${d.size} · ${isSAS?'SAS':'SATA'} · ${d.rota=='1'?'HDD':'SSD'}</span></div>
+      <div class="kv"><span class="k">型号</span><span class="v">${d.brand?d.brand+' ':''}${d.vendor?d.vendor+' ':''}${d.model}</span></div>
+      <div class="kv"><span class="k">容量 / 类型</span><span class="v">${d.size} · ${isSAS?'SAS':'SATA'} · ${d.rota=='1'?'HDD':'SSD'}${d.feature?' · '+d.feature:''}</span></div>
+      <div class="kv"><span class="k">转速</span><span class="v">${d.rpm||(d.rota=='1'||isSAS?'—':'固态(SSD)')}</span></div>
       <div class="kv"><span class="k">序列号</span><span class="v" style="font-size:12px">${d.serial}</span></div>
       <div style="margin-top:8px"><span style="font-size:13px;color:var(--muted)">温度 ${tempStr}</span><div class="temp-bar"><div class="temp-fill" style="width:${tempPct}%;background:${tempColor(d.temp,trip)}"></div></div></div>
       ${detail}
@@ -811,20 +1113,6 @@ function renderSystem(s){
   return `
   <div class="grid-2">
     <div class="card">
-      <h3>CPU</h3>
-      <div class="kv"><span class="k">型号</span><span class="v">${s.cpu_model}</span></div>
-      <div class="kv"><span class="k">核心/线程</span><span class="v">${s.cpu_cores}核 / ${s.cpu_threads}线程</span></div>
-      <div class="kv"><span class="k">最大频率</span><span class="v">${s.cpu_freq} MHz</span></div>
-      <div class="kv"><span class="k">CPU 温度</span><span class="v" style="color:${tempColor(s.cpu_temp,100)}">${s.cpu_temp!=null?s.cpu_temp+'°C':'N/A'}</span></div>
-      <div class="kv"><span class="k">运行时长</span><span class="v">${s.uptime}</span></div>
-    </div>
-    <div class="card">
-      <h3>显卡</h3>
-      ${(s.gpus||[]).map(g=>`<div class="kv"><span class="k">GPU</span><span class="v">${g}</span></div>`).join('')||'<div class="loading">未检测到</div>'}
-    </div>
-  </div>
-  <div class="grid-2" style="margin-top:14px">
-    <div class="card">
       <h3>负载</h3>
       <div class="kv"><span class="k">1 分钟</span><span class="v" style="color:${loadColor(s.load[0])}">${s.load[0]}</span></div>
       <div class="kv"><span class="k">5 分钟</span><span class="v" style="color:${loadColor(s.load[1])}">${s.load[1]}</span></div>
@@ -851,16 +1139,6 @@ function renderSystem(s){
     <div class="card">
       <h3>电压</h3>
       ${voltsHtml||'<div class="loading">无数据</div>'}
-    </div>
-    <div class="card">
-      <h3>系统信息</h3>
-      <div class="kv"><span class="k">主机名</span><span class="v">${s.hostname}</span></div>
-      <div class="kv"><span class="k">系统</span><span class="v">${s.os}</span></div>
-      <div class="kv"><span class="k">内核</span><span class="v">${s.kernel}</span></div>
-    </div>
-    <div class="card">
-      <h3>网卡</h3>
-      ${(s.nics||[]).map(n=>{let sc=n.state==='up'?'var(--green)':'var(--red)';let sp=n.speed?n.speed+' Mbps':'N/A';return `<div class="kv"><span class="k">${n.name}</span><span class="v">${n.ip||'无IP'} · ${sp} · <span style="color:${sc}">${n.state}</span></span></div>`;}).join('')||'<div class="loading">未检测到</div>'}
     </div>
   </div>`;
 }
@@ -919,6 +1197,19 @@ function renderDetect(D){
     <div class="kv"><span class="k">已用</span><span class="v">${(s.memory&&s.memory.used)||'-'}</span></div>
     <div class="kv"><span class="k">占用率</span><span class="v" style="color:${s.memory&&s.memory.percent>70?'var(--orange)':'var(--green)'}">${(s.memory&&s.memory.percent)||0}%</span></div>
   </div>`;
+  let sysInfoCard = `
+  <div class="card">
+    <h3>系统信息</h3>
+    <div class="kv"><span class="k">主机名</span><span class="v">${s.hostname||'-'}</span></div>
+    <div class="kv"><span class="k">系统</span><span class="v">${s.os||'-'}</span></div>
+    <div class="kv"><span class="k">内核</span><span class="v">${s.kernel||'-'}</span></div>
+    <div class="kv"><span class="k">运行时间</span><span class="v">${s.uptime||'-'}</span></div>
+  </div>`;
+  let netCard = `
+  <div class="card">
+    <h3>网络</h3>
+    ${(s.nics||[]).map(n=>{let sc=n.state==='up'?'var(--green)':'var(--red)';let sp=n.speed?n.speed+' Mbps':'N/A';return `<div class="kv"><span class="k">${n.name}</span><span class="v">${n.ip||'无IP'} · ${sp} · <span style="color:${sc}">${n.state}</span></span></div>`;}).join('')||'<div class="loading">未检测到</div>'}
+  </div>`;
   let sysConfig = `
   <div class="detect-cards">
     <div class="card">
@@ -927,8 +1218,11 @@ function renderDetect(D){
       <div class="kv"><span class="k">核心/线程</span><span class="v">${s.cpu_cores||0}核 / ${s.cpu_threads||0}线程</span></div>
       <div class="kv"><span class="k">CPU 温度</span><span class="v" style="color:${tempColor(s.cpu_temp,100)}">${s.cpu_temp!=null?s.cpu_temp+'°C':'N/A'}</span></div>
       <div class="kv"><span class="k">负载占用</span><span class="v">${cpuPct}%</span></div>
+      ${(s.gpus&&s.gpus.length)?s.gpus.map(g=>`<div class="kv"><span class="k">显卡</span><span class="v">${g}</span></div>`).join(''):''}
     </div>
     ${memCard}
+    ${sysInfoCard}
+    ${netCard}
   </div>`;
   // 阵列卡 & 磁盘
   let raidCard;
@@ -954,11 +1248,23 @@ function renderDetect(D){
   } else {
     raidCard = `<div class="card"><h3>阵列卡</h3><div class="loading">${r.note||'未检测到阵列卡'}</div></div>`;
   }
-  let diskMini = (disks&&disks.length) ? disks.map(d=>`
-    <div class="disk-mini">
-      <span>${d.dev} · ${d.vendor} ${d.model}</span>
+  let diskItem = d => {
+    let t = (d.type||'').toUpperCase();
+    let isSas = t==='SAS';
+    let typeBadge = `<span class="badge ${isSas?'b-sas':'b-sata'}">${isSas?'SAS':'SATA'}</span>`;
+    return `<div class="disk-mini">
+      <span>${typeBadge} ${d.dev} · ${d.brand?d.brand+' ':''}${d.vendor?d.vendor+' ':''}${d.model}${d.feature?` <span class="badge b-info">${d.feature}</span>`:''}</span>
       <span><span style="color:${tempColor(d.temp,d.temp_trip||60)};font-weight:600">${d.temp!=null?d.temp+'°C':'N/A'}</span> · <span class="badge ${d.health_ok?'b-ok':'b-bad'}">${d.health}</span></span>
-    </div>`).join('') : '<div class="loading">未检测到硬盘</div>';
+    </div>`;
+  };
+  let sasDisks = disks.filter(d=>(d.type||'').toUpperCase()==='SAS');
+  let sataDisks = disks.filter(d=>{let t=(d.type||'').toUpperCase(); return t==='SATA'||t==='ATA';});
+  let otherDisks = disks.filter(d=>{let t=(d.type||'').toUpperCase(); return t!=='SAS'&&t!=='SATA'&&t!=='ATA';});
+  let diskMini = '';
+  if(sasDisks.length) diskMini += `<div class="disk-group-title">SAS 硬盘 (${sasDisks.length})</div>` + sasDisks.map(diskItem).join('');
+  if(sataDisks.length) diskMini += `<div class="disk-group-title">SATA 硬盘 (${sataDisks.length})</div>` + sataDisks.map(diskItem).join('');
+  if(otherDisks.length) diskMini += `<div class="disk-group-title">其他硬盘 (${otherDisks.length})</div>` + otherDisks.map(diskItem).join('');
+  if(!disks.length) diskMini = '<div class="loading">未检测到硬盘</div>';
   let raidDisk = `
   <div class="detect-cards">
     ${raidCard}
@@ -967,17 +1273,7 @@ function renderDetect(D){
       ${diskMini}
     </div>
   </div>`;
-  // 存储卷
-  let vols = (st.volumes||[]).map(v=>{
-    let pct = parseInt(v.pcent);
-    let col = pct>85?'var(--red)':pct>70?'var(--orange)':'var(--green)';
-    return `<tr><td>${v.mount}</td><td>${v.fstype}</td><td>${v.size}</td><td>${v.used} / ${v.avail}</td><td style="min-width:120px"><div class="progress"><div class="progress-fill" style="width:${pct}%;background:${col}">${pct}%</div></div></td></tr>`;
-  }).join('');
-  let volTable = `
-  <div class="section-title">存储卷（mdadm）</div>
-  <div class="card">
-    <table class="table"><thead><tr><th>挂载点</th><th>文件系统</th><th>总容量</th><th>已用/可用</th><th>使用率</th></tr></thead><tbody>${vols||'<tr><td colspan=5>无</td></tr>'}</tbody></table>
-  </div>`;
+  // 存储卷、Docker 容器列表均已移至左侧独立标签页，硬件配置检测仅保留概览状态栏
   return `
   <div class="detect-title">硬件配置检测</div>
   <div class="detect-sub">实时监测设备健康状态与硬件详情 · v1.5.0 整合版</div>
@@ -986,8 +1282,43 @@ function renderDetect(D){
   ${sysConfig}
   <div class="detect-title" style="font-size:16px;margin:18px 0 10px">阵列卡 &amp; 磁盘</div>
   ${raidDisk}
-  ${volTable}
   `;
+}
+
+function renderDocker(dk){
+  if(!dk) dk={};
+  let head = `
+  <div class="grid-2">
+    <div class="card">
+      <h3>容器概览</h3>
+      <div class="kv"><span class="k">运行中</span><span class="v" style="color:var(--green)">${dk.running||0}</span></div>
+      <div class="kv"><span class="k">总数</span><span class="v">${dk.total||0}</span></div>
+      <div class="kv"><span class="k">状态</span><span class="v" style="color:${dk.ok?'var(--green)':'var(--red)'}">${dk.ok?'正常':'读取失败'}</span></div>
+    </div>
+    <div class="card">
+      <h3>说明</h3>
+      <div style="font-size:13px;color:var(--muted);line-height:1.7">列出所有容器及其运行状态、占用内存与端口映射。内存仅对运行中容器有效；停止的容器显示 N/A。</div>
+    </div>
+  </div>`;
+  let rows = (dk.containers&&dk.containers.length) ? dk.containers.map(c=>{
+    let badge = c.running?'b-ok':'b-warn';
+    let stateTxt = c.running?'运行':'停止';
+    let mem = c.mem||'N/A';
+    let ports = c.ports||'-';
+    return `<tr>
+      <td><span class="badge ${badge}">${stateTxt}</span></td>
+      <td><b>${c.name}</b><br><span style="font-size:12px;color:var(--muted)">${c.image}</span></td>
+      <td style="white-space:nowrap">${mem}</td>
+      <td style="font-size:12px">${ports}</td>
+      <td style="font-size:12px;color:var(--muted)">${c.runtime}</td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="5" class="loading">未检测到 Docker / 无容器</td></tr>';
+  let table = `
+  <div class="section-title" style="margin-top:14px">容器列表</div>
+  <div class="card">
+    <table class="table"><thead><tr><th>状态</th><th>名称 / 镜像</th><th>内存占用</th><th>端口映射</th><th>运行时长</th></tr></thead><tbody>${rows}</tbody></table>
+  </div>`;
+  return head + table;
 }
 
 function renderAll(){
@@ -1001,6 +1332,7 @@ function renderAll(){
   document.getElementById('disks').innerHTML = renderDisks(DATA.disks);
   document.getElementById('system').innerHTML = renderSystem(DATA.system);
   document.getElementById('storage').innerHTML = renderStorage(DATA.storage);
+  document.getElementById('docker').innerHTML = renderDocker(DATA.docker);
   document.getElementById('lastUpdate').textContent = '更新于 '+DATA.time+' ('+DATA.elapsed+'s)';
 }
 
