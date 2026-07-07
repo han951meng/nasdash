@@ -26,7 +26,7 @@
 ### 🃏 阵列卡（自动检测卡类型）
 通过 `lspci` 自动识别存储控制器类型，分三种情况展示，避免误报：
 - **MegaRAID 阵列卡**（如 LSI 9271-8i，IR/RAID 模式）：走 `storcli /c0 show` 显示完整信息——型号 / 序列号 / SAS 地址 / 固件版本 / BIOS 版本 / 驱动版本 / PCI 地址、CacheVault 缓存电池状态、**ROC 芯片温度**、JBOD 物理盘列表（槽位 / 品牌 / 型号(+特性徽章) / 接口 / 容量 / 状态 / 转速）。双磁臂（双执行器）盘显示整盘标称容量（如 14T）并标注每执行器容量
-- **HBA 直通卡**（如 LSI 9300-8E，IT 模式）：显示卡型号与「IT 直通模式」说明，并引导前往「硬盘 SMART」标签页查看每块盘的温度（直通卡的盘由系统直接识别为 `/dev/sdX`，storcli 查不到温度是正常现象）
+- **HBA 直通卡**（如 LSI 9300-8E，IT 模式）：显示卡型号与「IT 直通模式」说明，阵列卡页**额外显示 HBA 芯片温度**（通过 `storcli /c0 show temperature` 读取 ROC temperature，如 65°C）；每块盘温度仍前往「硬盘 SMART」标签页查看（直通卡盘由系统直接识别为 `/dev/sdX`，由 smartctl 直读）
 - **纯 SATA 主板**（无独立阵列卡）：提示无独立阵列卡，温度请见「硬盘 SMART」标签
 
 ### 💿 硬盘 SMART
@@ -68,13 +68,13 @@
 | lspci (pciutils) | 显卡 / 阵列卡识别 | ✅ | 系统自带 |
 | ip (iproute2) | 网卡 | ✅ | 系统自带 |
 
-**storcli** 不在标准软件源中，LSI/MegaRAID 阵列卡（IR/RAID 模式）用户需手动从 [Broadcom 官网](https://www.broadcom.com/support/download-search) 下载安装。**HBA 直通卡（IT 模式，如 9300-8E）无需 storcli**——此类卡不做 RAID，盘直接透传给系统，面板会自动识别为「IT 直通模式」并引导查看「硬盘 SMART」标签，storcli 查不到温度是正常现象。纯 SATA 主板用户可忽略此工具。
+**storcli** 不在标准软件源中，LSI 阵列卡（MegaRAID IR/RAID 模式与 HBA IT 模式）用户都需手动从 [Broadcom 官网](https://www.broadcom.com/support/download-search) 下载安装：MegaRAID 卡走 `storcli /c0 show` 读取完整信息（含 ROC 芯片温度），HBA 卡额外走 `storcli /c0 show temperature` 读取芯片温度（HBA 卡的 `/c0 show` 不含温度字段，这是正常现象，并非面板 bug）。纯 SATA 主板（无 LSI 卡）用户可忽略此工具。
 
 ## 数据来源
 
 | 数据 | 命令 |
 |------|------|
-| 阵列卡 | `lspci` 检测卡类型；MegaRAID 卡再 `storcli /c0 show` |
+| 阵列卡 | `lspci` 检测卡类型；MegaRAID 卡 `storcli /c0 show`，HBA 卡额外 `storcli /c0 show temperature` 取芯片温度 |
 | 硬盘 SMART / 转速 | `smartctl -a/-i /dev/sdX` |
 | 温度/风扇/电压 | `sensors -j`（JSON 输出分类解析） |
 | 风扇转速 | `sensors -j` + sysfs `pwmN_enable` / `pwmN` |

@@ -1,7 +1,7 @@
 appname               = com.dashboard.nasdash
 version               = 1.5.0
 display_name          = NAS硬件监控
-desc                  = <p>飞牛OS 硬件监控面板，可视化查看 NAS 硬件状态，免去 SSH 敲命令。</p><p>自动识别阵列卡类型：MegaRAID 卡显示型号 / 固件 / CacheVault / 物理盘列表及芯片温度（ROC Temperature）；HBA 直通卡（IT 模式）内联显示每块盘温度；纯 SATA 主板给出提示。阵列卡标签页统一显示「模式 / 状态 / 说明」，并新增「硬件配置检测」首页（单页仪表盘：顶部状态栏实时概览 + 系统配置(CPU/显卡/内存) + 阵列卡&磁盘）。</p><p>侧边栏模块：硬件配置检测 / 阵列卡 / 硬盘 SMART / 系统资源（负载·内存·温度·风扇·电压·网卡）/ 存储卷 / Docker（容器运行状态·占用内存·端口映射）。</p><p>安装时自动安装依赖（smartmontools、lm-sensors、mdadm、Flask）；LSI MegaRAID 卡需另装 storcli，HBA 直通卡与纯 SATA 主板无需 storcli。</p><p>细节增强：硬盘自动识别品牌与特性（如希捷双磁臂/双执行器），阵列卡物理盘列表显示真实转速(RPM)与整盘标称容量(双磁臂盘如14T)；硬盘 SMART 页机械盘新增「转速」项；Docker 容器端口自动探测(支持 host/bridge 模式)、运行时长中文显示、停止容器标注「容器停止不检测端口」。</p>
+desc                  = <p>飞牛OS 硬件监控面板，可视化查看 NAS 硬件状态，免去 SSH 敲命令。</p><p>自动识别阵列卡类型：MegaRAID 卡显示型号 / 固件 / CacheVault / 物理盘列表及芯片温度（ROC Temperature）；HBA 直通卡（IT 模式）显示卡型号与芯片温度(ROC Temperature，来自 `storcli /c0 show temperature`)；纯 SATA 主板给出提示。阵列卡标签页统一显示「模式 / 状态 / 说明」，并新增「硬件配置检测」首页（单页仪表盘：顶部状态栏实时概览 + 系统配置(CPU/显卡/内存) + 阵列卡&磁盘）。</p><p>侧边栏模块：硬件配置检测 / 阵列卡 / 硬盘 SMART / 系统资源（负载·内存·温度·风扇·电压·网卡）/ 存储卷 / Docker（容器运行状态·占用内存·端口映射）。</p><p>安装时自动安装依赖（smartmontools、lm-sensors、mdadm、Flask）；LSI MegaRAID 卡与 HBA 直通卡均需另装 storcli（HBA 卡的 `/c0 show` 本身不含温度，需额外 `show temperature` 子命令，属正常并非面板 bug），纯 SATA 主板无需 storcli。</p><p>细节增强：硬盘自动识别品牌与特性（如希捷双磁臂/双执行器），阵列卡物理盘列表显示真实转速(RPM)与整盘标称容量(双磁臂盘如14T)；硬盘 SMART 页机械盘新增「转速」项；HBA 直通卡（如 LSI 9300）阵列卡页新增芯片温度显示（通过 `storcli /c0 show temperature` 获取）；Docker 容器端口自动探测(支持 host/bridge 模式)、运行时长中文显示、停止容器标注「容器停止不检测端口」。</p>
 platform              = x86
 source                = thirdparty
 maintainer            = nasdash
