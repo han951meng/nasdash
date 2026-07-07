@@ -1,0 +1,13 @@
+{
+    ".url": {
+        "com.dashboard.nasdash.main": {
+            "title": "NAS硬件监控",
+            "icon": "images/icon-{0}.png",
+            "type": "url",
+            "protocol": "http",
+            "port": "9800",
+            "url": "/",
+            "allUsers": true
+        }
+    }
+}
