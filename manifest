@@ -1,7 +1,7 @@
 appname               = com.dashboard.nasdash
 version               = 1.5.0
 display_name          = NAS硬件监控
-desc                  = <p>飞牛OS 硬件监控面板，可视化查看 NAS 硬件状态，免去 SSH 敲命令。</p><p>自动识别阵列卡类型：MegaRAID 卡显示型号 / 固件 / CacheVault / 物理盘列表及芯片温度（ROC Temperature）；HBA 直通卡（IT 模式）显示卡型号与芯片温度(ROC Temperature，来自 `storcli /c0 show temperature`)；纯 SATA 主板给出提示。阵列卡标签页统一显示「模式 / 状态 / 说明」，并新增「硬件配置检测」首页（单页仪表盘：顶部状态栏实时概览 + 系统配置(CPU/显卡/内存) + 阵列卡&磁盘）。</p><p>侧边栏模块：硬件配置检测 / 阵列卡 / 硬盘 SMART / 系统资源（负载·内存·温度·风扇·电压·网卡）/ 存储卷 / Docker（容器运行状态·占用内存·端口映射）。</p><p>安装时自动安装依赖（smartmontools、lm-sensors、mdadm、Flask）；LSI MegaRAID 卡与 HBA 直通卡均需另装 storcli（HBA 卡的 `/c0 show` 本身不含温度，需额外 `show temperature` 子命令，属正常并非面板 bug），纯 SATA 主板无需 storcli。</p><p>细节增强：硬盘自动识别品牌与特性（如希捷双磁臂/双执行器），阵列卡物理盘列表显示真实转速(RPM)与整盘标称容量(双磁臂盘如14T)；硬盘 SMART 页机械盘新增「转速」项；HBA 直通卡（如 LSI 9300）阵列卡页新增芯片温度显示（通过 `storcli /c0 show temperature` 获取）；Docker 容器端口自动探测(支持 host/bridge 模式)、运行时长中文显示、停止容器标注「容器停止不检测端口」。</p>
+desc                  = <p><b>飞牛OS 硬件监控面板</b> —— 可视化查看 NAS 硬件状态，免去 SSH 敲命令。</p><p><b>功能模块</b></p><ul><li><b>硬件配置检测</b>：单页仪表盘，含顶部状态栏实时概览 + 系统配置（CPU / 显卡 / 内存 / 运行时间 / 网络）+ 阵列卡与磁盘概览</li><li><b>阵列卡</b>：自动识别卡类型，显示型号 / 模式 / 状态 / 芯片温度与物理盘列表</li><li><b>硬盘 SMART</b>：每块盘的健康、温度、转速、品牌、容量与型号</li><li><b>系统资源</b>：负载 / 内存 / 温度 / 风扇 / 电压</li><li><b>存储卷</b>：mdadm 软阵列（RAID 级别、成员、状态、容量）</li><li><b>Docker</b>：容器运行状态、占用内存、端口映射、运行时长</li></ul><p><b>阵列卡类型支持</b></p><ul><li><b>MegaRAID 卡</b>（如 9271-8i）：型号 / 固件 / CacheVault / 物理盘列表 / 芯片温度</li><li><b>HBA 直通卡</b>（如 LSI 9300，IT 模式）：卡型号 + 芯片温度（来自 <code>storcli /c0 show temperature</code>）；此类卡 <code>/c0 show</code> 本身不含温度属正常现象，并非面板 bug</li><li><b>纯 SATA 主板</b>：给出提示，无需额外工具</li></ul><p><b>v1.5.0 更新亮点</b></p><ul><li>修复 LSI-9300 等 HBA 卡芯片温度无法获取（改用 <code>storcli /c0 show temperature</code>，HBA 模式现已显示芯片温度）</li><li>硬盘自动识别品牌与特性（如希捷双磁臂 / 双执行器），物理盘列表显示真实转速(RPM)与整盘标称容量（双磁臂盘如 14T）</li><li>硬盘 SMART 页机械盘新增「转速」项（真实 RPM，SSD 显示固态）</li><li>Docker 容器端口自动探测（host / bridge 模式）、运行时长中文显示、停止容器标注「容器停止不检测端口」</li><li>系统信息 / 网卡移入硬件配置检测；显卡移至处理器卡片旁</li></ul><p><b>依赖说明</b></p><p>安装时自动安装：smartmontools、lm-sensors、mdadm、Flask。<br><b>storcli</b>：MegaRAID 卡与 HBA 直通卡均需另装（HBA 卡取温度需 <code>show temperature</code> 子命令）；纯 SATA 主板无需。</p>
 platform              = x86
 source                = thirdparty
 maintainer            = nasdash
@@ -14,4 +14,4 @@ desktop_applaunchname = com.dashboard.nasdash.main
 ctl_stop              = true
 install_type          = root
 changelog             = 1.5.0: 结构调整——Docker 移出硬件配置检测、独立为左侧边栏模块(容器列表含状态/镜像/占用内存/端口映射)；硬件配置检测移除重复的存储卷(mdadm)表格(保留左侧存储卷标签)；系统资源页移除与概述重复的CPU/显卡，显卡(GPU)移至硬件配置检测处理器卡片旁(有则显示)；系统资源页的「系统信息」「网卡」移至硬件配置检测「系统配置」(系统信息新增运行时间显示，网卡以「网络」卡片呈现)，系统资源页仅留实时传感器指标(负载/内存/温度/风扇/电压);硬盘 SMART 页机械盘新增「转速」项(ATA/SAS 真实 RPM，SSD 显示固态);阵列卡物理盘列表双磁臂盘容量改显整盘标称(如14T)并加每执行器小注;修复 LSI-9300 等 HBA 卡芯片温度无法获取的问题（新增 /c0 show temperature 显式子命令作为 fallback，HBA 模式阵列卡页同步显示芯片温度）
-checksum              = 55e079da793e11a38cc1ad2611d4a6e5
+checksum              = fb7d3fbdbbce2bcf7d638d36f009358b
