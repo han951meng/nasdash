@@ -122,6 +122,22 @@ def _smart_rpm_by_serial():
         rpm_map[sn_m.group(1).strip().upper()] = rpm
     return rpm_map
 
+def _parse_roc_temp(text):
+    """从 storcli 输出中解析阵列卡芯片温度(ROC Temperature)，兼容多种格式。
+
+    已验证兼容：
+      - MegaRAID /c0 show :  "ROC temperature = 56"  / "Controller Temperature = 56"
+      - HBA /c0 show temperature : "ROC temperature(Degree Celsius) 65" (无等号)
+    """
+    if not text:
+        return None
+    m = re.search(r"(?:Controller\s+Temperature|ROC\s+temperature\s*(?:\([^)]*\))?)\s*=?\s*(\d+)", text, re.I)
+    if m:
+        return int(m.group(1))
+    m = re.search(r"ROC\s+temperature.*?(\d+)", text, re.I)  # 兜底：极宽松匹配 ROC 后第一个数字
+    return int(m.group(1)) if m else None
+
+
 def get_raid_card():
     data = {"ok": False, "mode": "none", "model": "未检测到",
             "drives": [], "raw": "", "note": "", "controllers": []}
@@ -149,22 +165,14 @@ def get_raid_card():
             data["cachevault"] = f"{cv.group(0).strip()}"
         else:
             data["cachevault"] = "未检测到"
-        # 阵列卡芯片温度 (ROC Temperature)
-        # 匹配多种 storcli 版本/卡型的输出格式
-        temp_m = re.search(r"(?:Controller\s+Temperature|ROC\s+temperature[^=]*)\s*=\s*(\d+)", out, re.I)
-        if not temp_m:
-            # 备选1：从 /c0 show all 输出中解析（需用 show all 而非 show）
-            all_out = sudo(f"{STORCLI} /c0 show all", 15)
-            temp_m = re.search(r"ROC\s+temperature[^=]*\s*=\s*(\d+)", all_out, re.I)
-        if not temp_m:
-            # 备选2：LSI-9300 等 HBA 卡的 /c0 show 不含温度，
-            # 必须单独跑 /c0 show temperature 才能拿到 ROC 温度
-            tmp_out = sudo(f"{STORCLI} /c0 show temperature", 10)
-            temp_m = re.search(r"ROC\s+temperature[^=]*\s*=\s*(\d+)", tmp_out, re.I)
-        if temp_m:
-            data["controller_temp"] = int(temp_m.group(1))
-        else:
-            data["controller_temp"] = None
+        # 阵列卡芯片温度 (ROC Temperature)，兼容多种 storcli 输出格式
+        temp = _parse_roc_temp(out)
+        if temp is None:
+            temp = _parse_roc_temp(sudo(f"{STORCLI} /c0 show all", 15))
+        if temp is None:
+            # LSI-9300 等 HBA 卡 /c0 show 不含温度，必须单独跑 /c0 show temperature
+            temp = _parse_roc_temp(sudo(f"{STORCLI} /c0 show temperature", 10))
+        data["controller_temp"] = temp
         # 物理盘列表（用 split 解析表格行，更健壮）
         # 格式: 252:0 21 JBOD - 6.366 TB SAS HDD N N 4 KB ST14000NM0001 U -
         rpm_map = _smart_rpm_by_serial()
@@ -219,6 +227,12 @@ def get_raid_card():
         data["ok"] = True
         data["mode"] = "hba"
         data["model"] = hba[0]["model"]
+        # HBA 直通卡芯片温度：/c0 show 不含温度，需单独跑 /c0 show temperature
+        try:
+            data["controller_temp"] = _parse_roc_temp(sudo(f"{STORCLI} /c0 show temperature", 10)) \
+                or _parse_roc_temp(sudo(f"{STORCLI} /c0 show", 30))
+        except Exception:
+            data["controller_temp"] = None
         data["note"] = ("HBA 直通卡（IT 模式）：磁盘由系统内核直接管理，不经阵列卡固件。"
                         "每张盘的温度与 SMART 信息请见「硬盘 SMART」标签页。")
         return data
