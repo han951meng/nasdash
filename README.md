@@ -1,6 +1,6 @@
 # nasdash
 
-**当前版本：v1.6.3** · [下载最新 fpk](https://github.com/han951meng/nasdash/releases/latest)
+**当前版本：v1.6.4** · [下载最新 fpk](https://github.com/han951meng/nasdash/releases/latest)
 
 飞牛OS（fnOS）NAS 硬件监控面板 —— FPK 应用包
 
@@ -107,6 +107,9 @@
 - 双磁臂（双执行器）硬盘：LSI 阵列卡会将其每个执行器作为独立盘暴露给系统（如各 7T），面板在阵列卡页显示整盘标称容量（如 14T）并标注每执行器容量
 
 ## 更新日志
+
+### v1.6.4
+- HBA 直通卡页面说明优化：明确告知 HBA 芯片无独立温度传感器（不显示卡温属正常现象，并非面板 bug）；并在概览页 HBA 卡片新增「温度：卡无传感器 · 见硬盘 SMART」提示，避免用户误以为面板异常
 
 ### v1.6.3
 - 修复 SAS9300-8e 等卡（或 expander 下）物理盘品牌/型号显示为“-”的问题：当 `storcli /c0 show` 的 model 列不可靠时，自动从 `/c0/e{e}/s{s} show all` 的 Model Number / Inquiry Data 兜底取型号。

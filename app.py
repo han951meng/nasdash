@@ -292,7 +292,8 @@ def get_raid_card():
         except Exception:
             data["controller_temp"] = None
         data["note"] = ("HBA 直通卡（IT 模式）：磁盘由系统内核直接管理，不经阵列卡固件。"
-                        "每张盘的温度与 SMART 信息请见「硬盘 SMART」标签页。")
+                        "HBA 芯片本身无独立温度传感器，本页不显示阵列卡温度（属正常现象，并非面板异常）。"
+                        "每张物理盘的温度与 SMART 信息请见「硬盘 SMART」标签页。")
         return data
     if megaraid:
         data["ok"] = False
@@ -1895,6 +1896,7 @@ function renderDetect(D){
       <div class="kv"><span class="k">型号</span><span class="v">${r.model}</span></div>
       <div class="kv"><span class="k">模式</span><span class="v"><span class="badge b-info">IT 直通</span></span></div>
       <div class="kv"><span class="k">状态</span><span class="v" style="color:var(--green)">✓ 正常工作</span></div>
+      <div class="kv"><span class="k">温度</span><span class="v" style="color:var(--muted)">卡无传感器 · 见「硬盘 SMART」</span></div>
     </div>`;
   } else {
     raidCard = `<div class="card"><h3>阵列卡</h3><div class="loading">${r.note||'未检测到阵列卡'}</div></div>`;
