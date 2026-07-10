@@ -234,18 +234,26 @@ def get_raid_card():
                 if parts[0] in seen_slots:
                     continue
                 seen_slots.add(parts[0])
+                # 先从 /c0 show 行取 model（标准 MegaRAID 格式）
                 model = parts[12] if len(parts) > 12 else ""
-                brand, feature = disk_brand_and_feature(model)
                 # 用每张盘的序列号匹配 smartctl 真实转速（storcli 不提供 RPM）
                 e, s = parts[0].split(":")
                 sn = ""
+                inquiry_model = ""
                 try:
                     sn_out = sudo(f"{STORCLI} /c0 /e{e} /s{s} show all", 15)
                     sn_m = re.search(r"SN\s*=\s*(\S+)", sn_out)
                     if sn_m:
                         sn = sn_m.group(1).strip()
+                    # 某些卡/扩展器下 /c0 show 的 model 列显示 "-"，从 show all 取更准的型号兜底
+                    m = re.search(r"Model Number\s*=\s*(.+)", sn_out) or re.search(r"Inquiry Data\s*=\s*(.+)", sn_out)
+                    if m:
+                        inquiry_model = " ".join(m.group(1).strip().split())
                 except Exception:
                     pass
+                if (not model or model == "-") and inquiry_model and inquiry_model != "-":
+                    model = inquiry_model
+                brand, feature = disk_brand_and_feature(model)
                 rpm = rpm_map.get(sn.upper(), "")
                 if not rpm:
                     rpm = "固态(SSD)" if parts[7].upper() == "SSD" else "—"
