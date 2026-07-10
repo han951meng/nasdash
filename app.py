@@ -1407,7 +1407,7 @@ def api_fan_set():
         pct = int(pwm)
     except (TypeError, ValueError):
         return jsonify({"ok": False, "error": "invalid pwm"}), 400
-    FLOOR = 30  # 最低 30%，避免停转导致过热
+    FLOOR = 10  # 最低 10%（用户要求支持 10% 档位；此硬件风扇 10% 仍可运转）
     pct = max(FLOOR, min(100, pct))
     raw = round(pct / 100 * 255)
     # 仅设为目标值，由缓变线程平滑过渡（不再瞬间写 255，避免突然全速）
@@ -1616,6 +1616,28 @@ HTML = r"""<!DOCTYPE html>
   .edit-pencil{float:right;cursor:pointer;color:var(--blue);font-size:13px;font-weight:400}
   .edit-pencil:hover{opacity:.7}
   .inp{padding:6px 8px;font-size:13px;border:1px solid var(--border);border-radius:6px;background:#fff;color:var(--text)}
+  /* 风扇控制独立页面 */
+  .fan-page{display:flex;flex-direction:column;gap:16px}
+  .fan-presets{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:14px;background:var(--card);border:1px solid var(--border);border-radius:10px}
+  .fan-presets .label{font-size:13px;color:var(--muted);margin-right:2px}
+  .preset-btn{padding:8px 13px;font-size:13px;font-weight:600;border:1px solid var(--border);border-radius:8px;background:var(--bg);cursor:pointer;color:var(--text);transition:.15s}
+  .preset-btn:hover{border-color:var(--blue);color:var(--blue)}
+  .preset-btn.full{background:var(--red);color:#fff;border-color:var(--red)}
+  .preset-btn.full:hover{opacity:.85;color:#fff}
+  .fan-global-state{font-size:13px;color:var(--muted);margin-left:auto}
+  .fan-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px}
+  .fan-card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px}
+  .fan-card-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+  .fan-card-name{font-size:14px;font-weight:600}
+  .fan-rpm{font-size:26px;font-weight:700;color:var(--blue);line-height:1.1}
+  .fan-rpm small{font-size:12px;color:var(--muted);font-weight:400;margin-left:4px}
+  .fan-speed-bar{height:8px;background:var(--bg);border-radius:5px;overflow:hidden;margin:10px 0 4px}
+  .fan-speed-fill{height:100%;background:linear-gradient(90deg,var(--green),var(--blue));border-radius:5px;transition:width .4s}
+  .fan-pct-line{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-bottom:6px}
+  .fan-pct-line b{color:var(--text)}
+  .fan-card .fan-slider{margin-top:4px}
+  .fan-card-actions{display:flex;align-items:center;gap:10px;margin-top:8px}
+  .fan-card-state{font-size:12px;color:var(--muted)}
 </style>
 </head>
 <body>
@@ -1637,6 +1659,7 @@ HTML = r"""<!DOCTYPE html>
       <button class="tab" onclick="switchTab('raid',this)">💾 阵列卡</button>
       <button class="tab" onclick="switchTab('disks',this)">💿 硬盘 SMART</button>
       <button class="tab" onclick="switchTab('system',this)">📊 系统资源</button>
+      <button class="tab" onclick="switchTab('fan',this)">🌀 风扇控制</button>
       <button class="tab" onclick="switchTab('storage',this)">🗄️ 存储卷</button>
       <button class="tab" onclick="switchTab('docker',this)">🐳 Docker</button>
     </div>
@@ -1646,6 +1669,7 @@ HTML = r"""<!DOCTYPE html>
     <div id="raid" class="panel"><div class="loading">加载中…</div></div>
     <div id="disks" class="panel"><div class="loading">加载中…</div></div>
     <div id="system" class="panel"><div class="loading">加载中…</div></div>
+    <div id="fan" class="panel"><div class="loading">加载中…</div></div>
     <div id="storage" class="panel"><div class="loading">加载中…</div></div>
     <div id="docker" class="panel"><div class="loading">加载中…</div></div>
   </main>
@@ -1839,7 +1863,6 @@ function renderSystem(s){
     <div class="card">
       <h3>风扇转速</h3>
       ${fansHtml||'<div class="loading">无数据</div>'}
-      <div class="fan-ctrl-wrap">${renderFanControls(sens.fans)}</div>
     </div>
     <div class="card">
       <h3>电压</h3>
@@ -1865,6 +1888,59 @@ function renderFanControls(fans){
   if(!ctrls) return `<div class="loading">未检测到可调控风扇（部分 NAS 由系统固件统一控温，本工具不接管）</div>`;
   return `<div class="fan-ctrl-list">${ctrls}</div>`;
 }
+
+// ===== 风扇控制独立页面（预设档位 + 实时转速卡片）=====
+let FAN_LIST=[];
+function renderFanControl(){
+  let fans=(DATA.system&&DATA.system.sensors&&DATA.system.sensors.fans||[]).filter(f=>f.controllable);
+  FAN_LIST=fans;
+  if(!fans.length) return '<div class="card"><div class="loading">未检测到可调控风扇（部分 NAS 由系统固件统一控温，本工具不接管）</div></div>';
+  let presets=[['auto','默认'],['100','全速'],['10','10%'],['20','20%'],['30','30%'],['40','40%'],['50','50%'],['60','60%'],['70','70%'],['80','80%'],['90','90%']];
+  let presetHtml=presets.map(p=>`<button class="preset-btn ${p[0]==='100'?'full':''}" onclick="applyFanPreset('${p[0]}')">${p[1]}</button>`).join('');
+  let modeMap={'curve':'曲线温控','manual':'手动控制','auto':'自动温控','off':'关闭'};
+  let cards=fans.map(f=>{
+    let id='fan'+f.idx;
+    let pct=(f.pwm!=null)?f.pwm:50;
+    return `<div class="fan-card" id="${id}-box">
+      <div class="fan-card-head">
+        <span class="fan-card-name">${f.name}</span>
+        <span class="pill ${f.mode==='curve'||f.mode==='auto'?'b-info':'b-warn'}">${modeMap[f.mode]||f.mode||''}</span>
+      </div>
+      <div class="fan-rpm"><span id="${id}-rpm">${f.rpm||0}</span><small>RPM</small></div>
+      <div class="fan-speed-bar"><div class="fan-speed-fill" id="${id}-bar" style="width:${pct}%"></div></div>
+      <div class="fan-pct-line">
+        <span>当前 <b id="${id}-cur">${pct}</b>%</span>
+        <span>目标 <b id="${id}-tgt"></b></span>
+      </div>
+      <input type="range" min="10" max="100" value="${pct}" class="fan-slider" data-hwmon="${f.hwmon}" data-idx="${f.idx}" id="${id}-slider">
+      <div class="fan-card-actions">
+        <button class="btn-mini" onclick="setFanAuto('${f.hwmon}', ${f.idx})">恢复自动</button>
+        <span class="fan-card-state" id="${id}-state"></span>
+      </div>
+    </div>`;
+  }).join('');
+  return `<div class="fan-page">
+    <div class="fan-presets">
+      <span class="label">一键调速：</span>${presetHtml}
+      <span class="fan-global-state" id="fan-global-state"></span>
+    </div>
+    <div class="fan-grid">${cards}</div>
+  </div>`;
+}
+async function applyFanPreset(val){
+  let gs=document.getElementById('fan-global-state');
+  if(!FAN_LIST.length) return;
+  if(val==='auto'){
+    if(gs) gs.textContent='正在恢复自动控温…';
+    for(let f of FAN_LIST) await setFanAuto(f.hwmon, f.idx);
+    if(gs) gs.textContent='已全部交还自动控温';
+  }else{
+    let pwm=parseInt(val,10);
+    if(gs) gs.textContent='正在设为 '+pwm+'%…';
+    for(let f of FAN_LIST) await applyFan(f.hwmon, f.idx, pwm);
+    if(gs) gs.textContent='已全部设为 '+pwm+'%';
+  }
+}
 let fanTimer=null;
 async function fetchFanStatus(){
   try{
@@ -1879,6 +1955,8 @@ async function fetchFanStatus(){
       if(cur) cur.textContent=(f.pwm!=null?f.pwm:'--');
       if(tgt) tgt.textContent=(f.target_pct!=null && f.target_pct!==f.pwm)?('→ 目标 '+f.target_pct+'%'):(f.mode==='auto'?'· 自动控温':'');
       if(rpm) rpm.textContent=(f.rpm||0);
+      let bar=document.getElementById(id+'-bar');
+      if(bar) bar.style.width=(f.pwm!=null?f.pwm:50)+'%';
       if(sl && document.activeElement!==sl) sl.value=(f.pwm!=null?f.pwm:50);
     });
   }catch(e){}
@@ -2126,8 +2204,6 @@ function renderDetect(D){
   ${sysConfig}
   <div class="detect-title" style="font-size:16px;margin:18px 0 10px">阵列卡 &amp; 磁盘</div>
   ${raidDisk}
-  <div class="detect-title" style="font-size:16px;margin:18px 0 10px">风扇控制</div>
-  <div class="card">${renderFanControls(s.sensors.fans)}</div>
   `;
 }
 
@@ -2177,6 +2253,7 @@ function renderAll(){
   document.getElementById('raid').innerHTML = renderRaid(DATA.raid, DATA.disks);
   document.getElementById('disks').innerHTML = renderDisks(DATA.disks);
   document.getElementById('system').innerHTML = renderSystem(DATA.system);
+  document.getElementById('fan').innerHTML = renderFanControl();
   document.getElementById('storage').innerHTML = renderStorage(DATA.storage);
   document.getElementById('docker').innerHTML = renderDocker(DATA.docker);
   document.getElementById('lastUpdate').textContent = '更新于 '+DATA.time+' ('+DATA.elapsed+'s)';
