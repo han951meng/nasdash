@@ -1,5 +1,7 @@
 # nasdash
 
+**当前版本：v1.6.2** · [下载最新 fpk](https://github.com/han951meng/nasdash/releases/latest)
+
 飞牛OS（fnOS）NAS 硬件监控面板 —— FPK 应用包
 
 一个轻量级单文件 Flask Web 应用，通过 `storcli` / `smartctl` / `sensors` / `mdadm` / `lspci` / `ip` 等系统命令采集 NAS 硬件状态，以网页面板展示，免去每次 SSH 敲命令的麻烦。
@@ -103,3 +105,24 @@
 - smartctl / storcli 需要 sudo 权限（飞牛OS 应用框架默认提供）
 - 风扇 PWM 模式显示依赖 it87 / nct6775 等主板传感器驱动
 - 双磁臂（双执行器）硬盘：LSI 阵列卡会将其每个执行器作为独立盘暴露给系统（如各 7T），面板在阵列卡页显示整盘标称容量（如 14T）并标注每执行器容量
+
+## 更新日志
+
+### v1.6.2
+- 阵列卡温度兼容性修复：storcli 路径改为动态探测（兼容只装 `storcli64` 的环境，如部分 HBA 9300-8E 用户），不再写死 `/usr/local/bin/storcli`
+- 特权执行改为 root 直接运行 + sudo 兜底，不再因免密 sudo 未配置而静默失败（MegaRAID 与 HBA 卡芯片温度均可正常读取）
+- 启动自愈：`cmd/main` 的 start 自动重建 `/app/app.py` 软链（飞牛 uninstall 会删该软链而 install 不重建，不补则 start 必报 10500），重装无需手动干预
+- 命令执行失败记录 stderr 到 debug.log，便于排查；安装回调新增 `storcli64→storcli` 软链双保险
+- UI 版本号与主板芯片组显示：副标题版本号改为从 manifest 动态读取；主板检测新增芯片组显示（DMI 为空时回退 lspci 识别，如 Intel 300 系列）
+
+### v1.6.0
+- 主板检测优先读取 `/sys/class/dmi/id`（免 root）；DMI 为空时支持网页手动标注主板型号（如豆希 WB360，写入 `board_override.txt`）并回退 lspci 芯片组识别
+- 新增 BIOS 厂商 / 版本 / 日期显示
+- 内存品牌改为优先 `decode-dimms` 直读 SPD（区分模组厂与颗粒厂 DRAM，如影驰模组 + 镁光颗粒），识别不出时回退 dmidecode 厂商码映射
+- 安装依赖新增 dmidecode 与 i2c-tools
+
+### v1.5.0
+- 结构调整：Docker 独立为左侧边栏模块；硬件配置检测移除重复的存储卷表格；显卡移至处理器卡片旁；系统信息 / 网卡移至硬件配置检测
+- 硬盘 SMART 页机械盘新增「转速」（真实 RPM，SSD 显示固态）
+- 修复 LSI-9300 等 HBA 卡芯片温度无法获取（改用 `storcli /c0 show temperature`）
+- 追加主板与内存条品牌型号采集（dmidecode）、风扇网页手动调速与恢复自动控温
