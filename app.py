@@ -5,27 +5,65 @@
 单文件 Flask 应用：阵列卡状态 / 硬盘 SMART / 系统资源 / 存储卷
 部署目录: /opt/fnos-dash/
 """
-import subprocess, json, re, os, time, socket, platform
+import subprocess, json, re, os, time, socket, platform, shutil, sys
 from flask import Flask, jsonify, render_template_string, request
 
 app = Flask(__name__)
 
+# 应用根目录（用来存放手动标注等运行时配置）
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+BOARD_OVERRIDE_FILE = os.path.join(APP_DIR, "board_override.txt")
+
 # 命令全路径（admin 的 PATH 不含 /usr/sbin）
-STORCLI = "/usr/local/bin/storcli"
+def _find_storcli():
+    """动态探测 storcli 二进制：兼容只装了 storcli64 的环境（部分 fnOS 用户机器只有 storcli64）"""
+    candidates = [
+        "/usr/local/bin/storcli64",
+        "/usr/local/bin/storcli",
+        "/opt/MegaRAID/storcli/storcli64",
+        "/opt/MegaRAID/storcli/storcli",
+        "/usr/sbin/storcli64",
+        "/usr/sbin/storcli",
+    ]
+    for c in candidates:
+        if os.path.exists(c):
+            return c
+    return shutil.which("storcli64") or shutil.which("storcli") or ""
+
+STORCLI = _find_storcli()
 SMARTCTL = "/usr/sbin/smartctl"
 SENSORS = "/usr/bin/sensors"
+DMIDECODE = "/usr/sbin/dmidecode"
 
 # ---------- 基础执行 ----------
+def log(msg):
+    """轻量日志：追加到应用目录 debug.log，便于排查静默失败（如 storcli 命令执行失败）"""
+    try:
+        ts = time.strftime("%Y-%m-%d %H:%M:%S")
+        with open(os.path.join(APP_DIR, "debug.log"), "a") as f:
+            f.write(f"[{ts}] {msg}\n")
+    except Exception:
+        pass
+
 def run(cmd, timeout=30):
-    """执行 shell 命令，返回 stdout 字符串"""
+    """执行 shell 命令，返回 stdout 字符串；失败时记录 stderr 便于排查（不再静默吞掉）"""
     try:
         r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
+        if r.returncode != 0 and r.stderr.strip():
+            log(f"cmd failed (rc={r.returncode}): {cmd}\n{r.stderr.strip()}")
         return r.stdout
     except Exception as e:
+        log(f"cmd error: {cmd}\n{e}")
         return ""
 
 def sudo(cmd, timeout=30):
-    return run("sudo -n " + cmd, timeout)
+    # 已是 root 直接跑，省去 sudo（fnOS 应用常以 root 运行）
+    if os.geteuid() == 0:
+        return run(cmd, timeout)
+    out = run("sudo -n " + cmd, timeout)
+    if out.strip():
+        return out
+    return run(cmd, timeout)  # sudo -n 失败再裸跑兜底
 
 # ===================== 采集：阵列卡 =====================
 def detect_storage_controllers():
@@ -383,6 +421,328 @@ def get_disks():
     return disks
 
 # ===================== 采集：系统资源 =====================
+# ===================== 采集：主板 / 内存（dmidecode） =====================
+def _mem_brand_cn(manu):
+    """把内存条制造商英文字符串映射为中文品牌（未知原样返回）"""
+    if not manu:
+        return ""
+    m = manu.strip().upper()
+    table = [
+        ("SAMSUNG", "三星"), ("SK HYNIX", "海力士"), ("HYNIX", "海力士"),
+        ("KINGSTON", "金士顿"), ("MICRON", "美光"), ("CRUCIAL", "英睿达"),
+        ("CORSAIR", "海盗船"), ("G.SKILL", "芝奇"), ("G SKILL", "芝奇"),
+        ("KINGMAX", "宇瞻"), ("ADATA", "威刚"), ("APACER", "宇瞻"),
+        ("TRANSCEND", "创见"), ("TEAM", "十铨"), ("WESTERN", "西数"),
+        ("WD", "西数"), ("INTEL", "英特尔"), ("RAMAXEL", "记忆科技"),
+        ("ELPIDA", "尔必达"), ("NANYA", "南亚"),
+        ("GALAXY MICROSYSTEMS", "影驰"), ("GALAX", "影驰"),
+    ]
+    for key, cn in table:
+        if key in m:
+            return cn
+    # JEDEC 十六进制厂商码（SPD 仅含厂商码、无可读品牌名时 dmidecode 输出）
+    hex_table = {
+        "CE": "三星", "04E8": "三星",
+        "AD": "海力士", "04D5": "海力士",
+        "2C": "美光", "2D": "美光", "FF": "美光",
+        "98": "金士顿", "04": "金士顿",
+        "8892": "影驰(GALAX)", "8922": "影驰(GALAX)",
+    }
+    if re.fullmatch(r"[0-9A-Fa-f]+", manu.strip()):
+        code = manu.strip().upper()
+        return hex_table.get(code, f"未知(厂商码0x{code})")
+    return manu.strip()
+
+
+def get_chipset():
+    """用 lspci 的 Host bridge 设备 ID 推断 Intel 芯片组系列（飞牛未带 pciids 数据库时用 Device ID 匹配）"""
+    out = sudo("lspci 2>/dev/null", 5)
+    hid = ""
+    for line in out.splitlines():
+        if "Host bridge" in line:
+            m = re.search(r"Device ([0-9a-fA-F]{4})", line)
+            if m:
+                hid = m.group(1).lower()
+                break
+    if not hid:
+        return ""
+    table = {
+        "190f": "100/200 系列（6/7代酷睿）", "1910": "100 系列", "1900": "100 系列（如 H110/B150）",
+        "590f": "200 系列（7代）", "5910": "200 系列",
+        "3e0f": "300 系列（8/9代酷睿）", "3ec2": "300 系列", "3e30": "300 系列", "3e31": "300 系列", "3e35": "300 系列",
+        "9b00": "400 系列（10代）", "9b41": "400 系列",
+        "4600": "600 系列（12代）", "4601": "600 系列", "4610": "600 系列",
+        "7900": "700 系列（13代）", "7a00": "700 系列", "7d00": "700 系列",
+        "a700": "800 系列（14代）", "a780": "800 系列",
+    }
+    return "Intel " + table.get(hid, f"未知芯片组（Host bridge 0x{hid}）")
+
+
+def get_board():
+    """主板信息：优先 /sys/class/dmi/id（免 root），空则 dmidecode；
+    DMI 全空（准系统/工控白牌板常见）时尝试读取手动标注，最后回退芯片组识别。"""
+    def _read_dmi_sysfs(name):
+        v = run(f"cat /sys/class/dmi/id/{name} 2>/dev/null", 2).strip()
+        # fnOS 对这些字段固定返回 "Default string" / "To be filled by O.E.M." 等占位符
+        if v.lower() in ("", "default string", "to be filled by o.e.m.", "not specified", "unknown"):
+            return ""
+        return v
+
+    manufacturer = _read_dmi_sysfs("board_vendor")
+    product = _read_dmi_sysfs("board_name")
+    version = _read_dmi_sysfs("board_version")
+    bios_vendor = _read_dmi_sysfs("bios_vendor")
+    bios_version = _read_dmi_sysfs("bios_version")
+    bios_date = _read_dmi_sysfs("bios_date")
+
+    # sysfs 拿不到时再退 dmidecode（需 root）
+    if not manufacturer or not product:
+        out = sudo(f"{DMIDECODE} -t 2 2>/dev/null", 8)
+        if not out:
+            out = sudo(f"{DMIDECODE} -t 1 2>/dev/null", 8)
+        for line in out.splitlines():
+            s = line.strip()
+            if s.startswith("Manufacturer:") and not manufacturer:
+                manufacturer = s.split(":", 1)[1].strip()
+            elif s.startswith("Product Name:") and not product:
+                product = s.split(":", 1)[1].strip()
+            elif s.startswith("Version:") and not version:
+                version = s.split(":", 1)[1].strip()
+        if manufacturer.lower() in ("default string", "to be filled by o.e.m.", "not specified"):
+            manufacturer = ""
+        if product.lower() in ("default string", "to be filled by o.e.m.", "not specified"):
+            product = ""
+
+    b = {
+        "manufacturer": manufacturer,
+        "product": product,
+        "version": version,
+        "bios_vendor": bios_vendor,
+        "bios_version": bios_version,
+        "bios_date": bios_date,
+        "chipset": "",
+        "override": False,
+        "note": "",
+    }
+
+    # DMI 未写入厂商信息：先看手动标注文件，否则用 lspci 推断芯片组
+    if not b["manufacturer"] or not b["product"]:
+        override = ""
+        try:
+            with open(BOARD_OVERRIDE_FILE, "r", encoding="utf-8") as f:
+                override = f.read().strip()
+        except Exception:
+            override = ""
+        if override:
+            b["product"] = override
+            b["override"] = True
+            b["note"] = "手动标注（BIOS 未写入主板信息）"
+        else:
+            b["note"] = "BIOS 未写入主板厂商/型号（DMI 为空），以下为芯片组推断"
+    # 芯片组：始终用 lspci 推断（大牌主板也能显示，更准确）
+    b["chipset"] = get_chipset()
+    return b
+
+
+def _clean_mfr(s):
+    """清理 decode-dimms 的厂商名（去掉 '? (Invalid parity)' 等后缀）"""
+    s = s.strip()
+    s = re.sub(r"\?.*$", "", s).strip()      # 去掉问号及之后
+    s = re.sub(r"\(.*?\)", "", s).strip()     # 去掉括号内容
+    return s
+
+
+def get_memory_from_decodedimms():
+    """用 decode-dimms 直读 SPD（JEP106 解码），拿到权威的模组厂/颗粒厂/型号/频率。
+    仅在 i2c-tools 已安装且 SPD 可读时返回非空列表。"""
+    dd = run("command -v decode-dimms 2>/dev/null", 5).strip()
+    if not dd:
+        return []
+    out = sudo(f"{dd} 2>/dev/null", 15)
+    if not out:
+        return []
+    mods = []
+    cur = {}
+    def flush(c):
+        if c.get("size_gb"):
+            mods.append(c)
+    for line in out.splitlines():
+        s = line.strip()
+        if s.startswith("Guessing DIMM") or s.startswith("Decoding EEPROM") or s.startswith("Memory Serial Presence Detect"):
+            flush(cur)
+            cur = {}
+            continue
+        # decode-dimms 用「字段名<多个空格>值」的固定列格式，按 2+ 空格切分
+        parts = re.split(r"\s{2,}", s, 1)
+        if len(parts) != 2:
+            continue
+        k, v = parts[0].strip(), parts[1].strip()
+        if k == "Fundamental Memory type":
+            cur["type"] = v
+        elif k == "Module Type":
+            cur["module_type"] = v
+        elif k == "Maximum module speed":
+            cur["speed"] = v.split("(")[0].strip()
+        elif k == "Size":
+            mb = re.search(r"(\d+)\s*MB", v, re.I)
+            if mb:
+                cur["size"] = v
+                cur["size_gb"] = int(mb.group(1)) / 1024
+            else:
+                gb = re.search(r"(\d+)\s*GB", v, re.I)
+                if gb:
+                    cur["size"] = v
+                    cur["size_gb"] = int(gb.group(1))
+        elif k == "Module Manufacturer":
+            cur["module_mfr"] = _clean_mfr(v)
+        elif k == "DRAM Manufacturer":
+            cur["dram_mfr"] = _clean_mfr(v)
+        elif k == "Part Number":
+            cur["part"] = "" if v.lower() in ("undefined", "none", "-") else v
+    flush(cur)
+    # 编号 + 品牌中文
+    for i, m in enumerate(mods, 1):
+        m["locator"] = f"DIMM{i}"
+        mod_cn = _mem_brand_cn(m.get("module_mfr", ""))
+        dram_cn = _mem_brand_cn(m.get("dram_mfr", ""))
+        m["brand"] = mod_cn or dram_cn
+        m["manufacturer"] = m.get("module_mfr", "")
+        m["dram_manufacturer"] = dram_cn
+    return mods
+
+
+def get_memory_modules():
+    """内存插槽信息：用 dmidecode -t 17 枚举所有物理插槽（含空），
+    已安装槽再用 decode-dimms（SPD 直读）补权威品牌/颗粒厂。
+    返回 slots(总插槽数)/installed(已装数)/empty(空槽数)/modules(含空槽)。"""
+    def _size_gb(sz):
+        mb = re.search(r"(\d+)\s*MB", sz, re.I)
+        if mb:
+            return int(mb.group(1)) / 1024
+        gb = re.search(r"(\d+)\s*GB", sz, re.I)
+        if gb:
+            return int(gb.group(1))
+        return 0
+
+    # 1) decode-dimms 先拿已安装槽的权威 SPD 品牌（按 DIMM 顺序）
+    spd_mods = get_memory_from_decodedimms()
+    spd_by_idx = {i: m for i, m in enumerate(spd_mods)}
+
+    # 2) dmidecode -t 17 枚举全部物理插槽（含空）
+    out = sudo(f"{DMIDECODE} -t 17 2>/dev/null", 12)
+    slots_raw = []
+    cur = {}
+    for line in out.splitlines():
+        s = line.strip()
+        if s.startswith("Memory Device"):
+            if cur:
+                slots_raw.append(cur)
+            cur = {}
+            continue
+        if ":" not in s:
+            continue
+        k, v = s.split(":", 1)
+        k, v = k.strip(), v.strip()
+        if k == "Locator":
+            cur["locator"] = v
+        elif k == "Bank Locator":
+            cur["bank"] = v
+        elif k == "Manufacturer":
+            cur["manufacturer"] = v
+        elif k == "Part Number":
+            cur["part"] = v
+        elif k == "Size":
+            cur["size"] = v
+        elif k == "Type":
+            cur["type"] = v
+        elif k == "Serial Number":
+            cur["serial"] = v
+        elif k == "Speed":
+            cur["speed"] = v
+        elif k == "Configured Memory Speed":
+            cur["cfg_speed"] = v
+    if cur:
+        slots_raw.append(cur)
+
+    # 3) 组装：空槽标记 installed=False；已安装槽优先用 SPD 品牌
+    modules = []
+    spd_i = 0
+    total_gb = 0
+    if slots_raw:
+        for idx, slot in enumerate(slots_raw):
+            sz = (slot.get("size") or "").strip()
+            installed = _size_gb(sz) > 0
+            if installed:
+                spd = spd_by_idx.get(spd_i)
+                spd_i += 1
+                mgb = _size_gb(sz)
+                total_gb += mgb
+                modules.append({
+                    "locator": slot.get("locator") or slot.get("bank", f"DIMM{idx}"),
+                    "installed": True,
+                    "brand": (spd.get("brand") if spd else "") or _mem_brand_cn(slot.get("manufacturer", "")),
+                    "manufacturer": (spd.get("manufacturer") if spd else slot.get("manufacturer", "")),
+                    "dram_manufacturer": (spd.get("dram_manufacturer") if spd else ""),
+                    "part": spd.get("part") if spd else slot.get("part", ""),
+                    "size": sz,
+                    "size_gb": mgb,
+                    "type": (spd.get("type") if spd else slot.get("type", "")),
+                    "speed": (spd.get("speed") if spd else (slot.get("cfg_speed") or slot.get("speed", ""))),
+                    "serial": slot.get("serial", ""),
+                    "source": "spd" if spd else "dmidecode",
+                })
+            else:
+                modules.append({
+                    "locator": slot.get("locator") or slot.get("bank", f"DIMM{idx}"),
+                    "installed": False,
+                    "brand": "",
+                    "manufacturer": "",
+                    "dram_manufacturer": "",
+                    "part": "",
+                    "size": "空",
+                    "size_gb": 0,
+                    "type": "",
+                    "speed": "",
+                    "serial": "",
+                    "source": "empty",
+                })
+    else:
+        # dmidecode 不可用：仅 SPD 已安装槽（无法枚举空槽）
+        for idx, m in enumerate(spd_mods):
+            mgb = m.get("size_gb", 0)
+            total_gb += mgb
+            modules.append({
+                "locator": m.get("locator", f"DIMM{idx}"),
+                "installed": True,
+                "brand": m.get("brand", ""),
+                "manufacturer": m.get("manufacturer", ""),
+                "dram_manufacturer": m.get("dram_manufacturer", ""),
+                "part": m.get("part", ""),
+                "size": m.get("size", ""),
+                "size_gb": mgb,
+                "type": m.get("type", ""),
+                "speed": m.get("speed", ""),
+                "serial": "",
+                "source": "spd",
+            })
+
+    slots = len(modules)
+    installed_n = sum(1 for m in modules if m["installed"])
+    empty_n = slots - installed_n
+    brands = {}
+    for m in modules:
+        if m["brand"]:
+            brands[m["brand"]] = brands.get(m["brand"], 0) + 1
+    return {
+        "modules": modules,
+        "total_gb": total_gb,
+        "slots": slots,
+        "installed": installed_n,
+        "empty": empty_n,
+        "brand_summary": ", ".join(f"{k}×{v}" for k, v in brands.items()) or "未知",
+    }
+
+
 def get_system():
     d = {}
     d["hostname"] = socket.gethostname()
@@ -429,18 +789,28 @@ def get_system():
     cpu_temp = None
     # 风扇控制信息：优先 FanControlServer 配置，其次 sysfs（不依赖任何外部应用）
     fan_info = {}
-    # 1) FanControlServer 配置（可选）—— 提供风扇名称和曲线/手动/关闭模式
+    # 1) FanControlServer 配置（可选）—— 提供风扇名称/模式，并借 pwm_path 推断可写路径
     fc_raw = run("cat /vol2/@appconf/FanControlServer/config.json 2>/dev/null", 3)
     if fc_raw:
         try:
             fc = json.loads(fc_raw)
             for fan in fc.get("fans", []):
                 idx = fan.get("pwm_index")
-                if idx:
-                    fan_info[f"fan{idx}"] = {
-                        "name": fan.get("name", f"风扇{idx}"),
-                        "mode": fan.get("mode", ""),
-                    }
+                if not idx:
+                    continue
+                _hw = ""
+                _ix = idx
+                m = re.search(r"(/sys/class/hwmon/hwmon\d+)/pwm(\d+)", fan.get("pwm_path") or "")
+                if m:
+                    _hw = m.group(1)
+                    _ix = int(m.group(2))
+                fan_info[f"fan{idx}"] = {
+                    "name": fan.get("name", f"风扇{idx}"),
+                    "mode": fan.get("mode", ""),
+                    "hwmon": _hw,
+                    "idx": _ix,
+                    "controllable": bool(_hw),
+                }
         except (json.JSONDecodeError, ValueError):
             pass
     # 2) sysfs hwmon —— 不需要 FanControlServer，直接读 it87/nct 芯片的 PWM
@@ -452,10 +822,18 @@ def get_system():
                 _fk = f"fan{_fi}"
                 _pe = run(f"cat {_hp}/pwm{_fi}_enable 2>/dev/null", 2).strip()
                 _pv = run(f"cat {_hp}/pwm{_fi} 2>/dev/null", 2).strip()
-                # FanControlServer 没覆盖的风扇，用 sysfs 模式兜底
-                if _fk not in fan_info and _pe:
+                _controllable = bool(_pe)
+                if _fk in fan_info:
+                    # FanControlServer 已知的风扇：优先用配置里的 pwm_path，兜底用当前 hwmon
+                    if not fan_info[_fk].get("hwmon"):
+                        fan_info[_fk]["hwmon"] = _hp
+                        fan_info[_fk]["idx"] = _fi
+                    fan_info[_fk]["controllable"] = fan_info[_fk].get("controllable") or _controllable
+                elif _pe:
+                    # 仅 sysfs 暴露的风扇，用 sysfs 模式兜底
                     _mm = {"0": "off", "1": "manual", "2": "auto"}
-                    fan_info[_fk] = {"name": f"风扇{_fi}", "mode": _mm.get(_pe, "")}
+                    fan_info[_fk] = {"name": f"风扇{_fi}", "mode": _mm.get(_pe, ""),
+                                     "hwmon": _hp, "idx": _fi, "controllable": _controllable}
                 # PWM 占空比（0-255 → 百分比），不管装没装 FanControlServer 都读
                 if _pv and _fk in fan_info:
                     try:
@@ -512,6 +890,9 @@ def get_system():
                                 "stopped": fv < 1,
                                 "mode": mode,
                                 "pwm": pwm,
+                                "controllable": fi.get("controllable", False),
+                                "hwmon": fi.get("hwmon", ""),
+                                "idx": fi.get("idx", 0),
                             })
                             break
                         elif fn.startswith("in"):
@@ -562,6 +943,15 @@ def get_system():
                     ip = im.group(1).split("/")[0]
         nics.append({"name": name, "state": state, "mac": mac, "speed": speed, "ip": ip})
     d["nics"] = nics
+    # 主板 / 内存品牌型号（dmidecode），失败不影响其它采集
+    try:
+        d["board"] = get_board()
+    except Exception:
+        d["board"] = {"manufacturer": "", "product": "", "version": ""}
+    try:
+        d["memory_modules"] = get_memory_modules()
+    except Exception:
+        d["memory_modules"] = {"modules": [], "total_gb": 0, "slots": 0, "brand_summary": ""}
     return d
 
 def format_uptime(s):
@@ -834,10 +1224,18 @@ def index():
 def api_all():
     t0 = time.time()
     try:
+        try:
+            board = get_board()
+        except Exception:
+            board = {"manufacturer": "", "product": "", "version": ""}
+        try:
+            memory_modules = get_memory_modules()
+        except Exception:
+            memory_modules = {"modules": [], "total_gb": 0, "slots": 0, "brand_summary": ""}
         result = {
             "raid": get_raid_card(),
             "disks": get_disks(),
-            "system": get_system(),
+            "system": {**get_system(), "board": board, "memory_modules": memory_modules},
             "storage": get_storage(),
             "docker": get_docker(),
             "time": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -846,6 +1244,67 @@ def api_all():
     except Exception as e:
         result = {"error": str(e), "time": time.strftime("%Y-%m-%d %H:%M:%S")}
     return jsonify(result)
+
+@app.route("/api/fan/set", methods=["POST"])
+def api_fan_set():
+    """设置风扇转速：手动 PWM（带安全下限）或恢复自动控温"""
+    try:
+        data = request.get_json(force=True) or {}
+    except Exception:
+        return jsonify({"ok": False, "error": "bad json"}), 400
+    hwmon = data.get("hwmon")
+    idx = data.get("idx")
+    mode = data.get("mode")
+    pwm = data.get("pwm")
+    # 安全：仅允许本机 hwmon 路径，防止路径注入
+    if not isinstance(hwmon, str) or not hwmon.startswith("/sys/class/hwmon/hwmon"):
+        return jsonify({"ok": False, "error": "invalid hwmon"}), 400
+    try:
+        idx = int(idx)
+        if idx < 1 or idx > 9:
+            raise ValueError()
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "invalid idx"}), 400
+    FLOOR = 30  # 最低 30%，避免停转导致过热
+    if mode == "auto":
+        sudo(f"bash -c 'echo 2 > {hwmon}/pwm{idx}_enable'")
+        return jsonify({"ok": True, "mode": "auto"})
+    try:
+        pct = int(pwm)
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "invalid pwm"}), 400
+    pct = max(FLOOR, min(100, pct))
+    raw = round(pct / 100 * 255)
+    sudo(f"bash -c 'echo 1 > {hwmon}/pwm{idx}_enable; echo {raw} > {hwmon}/pwm{idx}'")
+    return jsonify({"ok": True, "mode": "manual", "pwm": pct, "raw": raw})
+
+
+@app.route("/api/board/set", methods=["POST"])
+def api_board_set():
+    """保存/清除主板型号手动标注（白牌板 DMI 为空时由用户填写）"""
+    try:
+        data = request.get_json(force=True) or {}
+    except Exception:
+        return jsonify({"ok": False, "error": "bad json"}), 400
+    model = (data.get("model") or "").strip()
+    if model:
+        # 安全：限制长度、过滤换行与路径字符
+        if len(model) > 60 or re.search(r"[\r\n/\\]", model):
+            return jsonify({"ok": False, "error": "invalid model"}), 400
+        try:
+            with open(BOARD_OVERRIDE_FILE, "w", encoding="utf-8") as f:
+                f.write(model)
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e)}), 500
+    else:
+        # 清空标注
+        try:
+            if os.path.exists(BOARD_OVERRIDE_FILE):
+                os.remove(BOARD_OVERRIDE_FILE)
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e)}), 500
+    return jsonify({"ok": True, "model": model or ""})
+
 
 # ===================== 前端 =====================
 HTML = r"""<!DOCTYPE html>
@@ -931,7 +1390,41 @@ HTML = r"""<!DOCTYPE html>
   .disk-group-title:first-child{margin-top:0}
   .b-sas{background:#1e40af;color:#fff}
   .b-sata{background:#15803d;color:#fff}
-  @media(max-width:700px){.grid-2,.grid-auto{grid-template-columns:1fr}.header{flex-direction:column;gap:10px}.container{flex-direction:column}.sidebar{width:100%;flex:auto;position:static}.status-right{gap:14px}.detect-cards{grid-template-columns:1fr}}
+  @media(max-width:768px){
+    .header{flex-direction:column;align-items:flex-start;gap:10px;padding:14px 16px}
+    .header h1{font-size:18px}
+    .meta{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+    .container{flex-direction:column;padding:12px 14px 20px;gap:14px}
+    .sidebar{width:100%;flex:auto;position:static}
+    .content{min-width:0}
+    .statusbar{flex-direction:column;align-items:stretch;gap:10px;padding:12px 14px;margin-bottom:14px}
+    .status-right{flex-wrap:wrap;width:100%;gap:12px 18px}
+    .status-item{min-width:42%}
+    .detect-cards,.cards{grid-template-columns:1fr;gap:12px}
+    .detect-cards>*,.cards>*{grid-column:auto!important}
+    .grid-2,.grid-auto{grid-template-columns:1fr}
+    .card{padding:14px}
+    .kv{gap:8px}
+    .kv .v{word-break:break-word;overflow-wrap:anywhere}
+    .detect-title{font-size:18px}
+    .detect-sub{margin-bottom:12px}
+    .table{font-size:12px}
+    .table th,.table td{padding:7px 8px}
+  }
+  .fan-ctrl-wrap{margin-top:10px;border-top:1px dashed var(--border);padding-top:10px}
+  .fan-ctrl-list{display:flex;flex-direction:column;gap:14px}
+  .fan-ctrl-head{display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px}
+  .fan-ctrl-val{font-weight:600;color:var(--blue)}
+  .fan-slider{width:100%;accent-color:var(--blue)}
+  .fan-ctrl-actions{display:flex;align-items:center;gap:10px;margin-top:6px}
+  .fan-ctrl-state{font-size:12px;color:var(--muted)}
+  .btn-mini{padding:3px 10px;font-size:12px;border:1px solid var(--border);border-radius:6px;background:var(--card);cursor:pointer;color:var(--text)}
+  .btn-mini:hover{background:var(--bg)}
+  .btn-mini.b-ok{background:var(--green);color:#fff;border-color:var(--green)}
+  .btn-mini.b-bad{background:var(--red);color:#fff;border-color:var(--red)}
+  .edit-pencil{float:right;cursor:pointer;color:var(--blue);font-size:13px;font-weight:400}
+  .edit-pencil:hover{opacity:.7}
+  .inp{padding:6px 8px;font-size:13px;border:1px solid var(--border);border-radius:6px;background:#fff;color:var(--text)}
 </style>
 </head>
 <body>
@@ -1155,12 +1648,80 @@ function renderSystem(s){
     <div class="card">
       <h3>风扇转速</h3>
       ${fansHtml||'<div class="loading">无数据</div>'}
+      <div class="fan-ctrl-wrap">${renderFanControls(sens.fans)}</div>
     </div>
     <div class="card">
       <h3>电压</h3>
       ${voltsHtml||'<div class="loading">无数据</div>'}
     </div>
   </div>`;
+}
+
+function renderFanControls(fans){
+  let ctrls = (fans||[]).filter(f=>f.controllable).map(f=>{
+    let pct = (f.pwm!=null) ? f.pwm : 50;
+    let id = 'fan'+f.idx;
+    return `<div class="fan-ctrl">
+      <div class="fan-ctrl-head"><span>${f.name}</span><span class="fan-ctrl-val" id="${id}-val">${pct}%</span></div>
+      <input type="range" min="30" max="100" value="${pct}" class="fan-slider" data-hwmon="${f.hwmon}" data-idx="${f.idx}" id="${id}-slider">
+      <div class="fan-ctrl-actions">
+        <button class="btn-mini" onclick="setFanAuto('${f.hwmon}', ${f.idx})">恢复自动</button>
+        <span class="fan-ctrl-state" id="${id}-state"></span>
+      </div>
+    </div>`;
+  }).join('');
+  if(!ctrls) return `<div class="loading">未检测到可调控风扇（部分 NAS 由系统固件统一控温，本工具不接管）</div>`;
+  return `<div class="fan-ctrl-list">${ctrls}</div>`;
+}
+async function applyFan(hwmon, idx, pwm){
+  let id='fan'+idx, st=document.getElementById(id+'-state');
+  if(st) st.textContent='设置中…';
+  try{
+    let r=await fetch('/api/fan/set',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({hwmon:hwmon,idx:idx,pwm:pwm})});
+    let j=await r.json();
+    if(st) st.textContent = j.ok ? ('已设为 '+pwm+'%') : ('失败：'+(j.error||''));
+    if(j.ok){ let v=document.getElementById(id+'-val'); if(v) v.textContent=pwm+'%'; }
+  }catch(e){ if(st) st.textContent='请求失败'; }
+}
+async function setFanAuto(hwmon, idx){
+  let id='fan'+idx, st=document.getElementById(id+'-state');
+  if(st) st.textContent='恢复中…';
+  try{
+    let r=await fetch('/api/fan/set',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({hwmon:hwmon,idx:idx,mode:'auto'})});
+    let j=await r.json();
+    if(st) st.textContent = j.ok ? '已恢复自动控温' : ('失败：'+(j.error||''));
+    if(j.ok) setTimeout(loadData, 800);
+  }catch(e){ if(st) st.textContent='请求失败'; }
+}
+function bindFanSliders(){
+  document.querySelectorAll('.fan-slider').forEach(sl=>{
+    sl.addEventListener('input', ()=>{
+      let v=sl.value, id='fan'+sl.dataset.idx, val=document.getElementById(id+'-val');
+      if(val) val.textContent=v+'%';
+    });
+    sl.addEventListener('change', ()=>{
+      applyFan(sl.dataset.hwmon, parseInt(sl.dataset.idx), parseInt(sl.value));
+    });
+  });
+}
+
+function showBoardEdit(){ let b=document.getElementById('boardEditBox'); if(b) b.style.display='block'; }
+function hideBoardEdit(){ let b=document.getElementById('boardEditBox'); if(b) b.style.display='none'; }
+async function saveBoardModel(){
+  let inp=document.getElementById('boardModelInput'); if(!inp) return;
+  let model=inp.value.trim();
+  try{
+    let r=await fetch('/api/board/set',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:model})});
+    let j=await r.json();
+    if(j.ok){ hideBoardEdit(); loadData(); } else { alert('保存失败：'+(j.error||'')); }
+  }catch(e){ alert('请求失败'); }
+}
+async function clearBoardModel(){
+  try{
+    let r=await fetch('/api/board/set',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:''})});
+    let j=await r.json();
+    if(j.ok){ hideBoardEdit(); loadData(); } else { alert('清除失败：'+(j.error||'')); }
+  }catch(e){ alert('请求失败'); }
 }
 
 function renderStorage(st){
@@ -1195,8 +1756,10 @@ function renderDetect(D){
   let fanStr = fans.length===0 ? 'N/A' : (fanOk?'正常':'异常');
   let raidOk = r.mode==='mega'||r.mode==='hba';
   let raidStr = r.mode==='mega' ? '正常' : r.mode==='hba' ? '正常' : (r.mode==='mega_error'?'读取失败':'未配置');
-  let healthy = disks.filter(d=>d.health_ok).length;
-  let diskStr = disks.length ? healthy+'/'+disks.length+' 健康' : '无';
+  let sasDisks = disks.filter(d=>(d.type||'').toUpperCase()==='SAS');
+  let sataDisks = disks.filter(d=>{let t=(d.type||'').toUpperCase(); return t==='SATA'||t==='ATA';});
+  let sasHealthy = sasDisks.filter(d=>d.health_ok).length;
+  let sataHealthy = sataDisks.filter(d=>d.health_ok).length;
   let dockerStr = (dk.running||0)+' 运行中';
   let statusBar = `
   <div class="statusbar">
@@ -1204,18 +1767,65 @@ function renderDetect(D){
     <div class="status-right">
       <div class="status-item"><span class="k">散热风扇</span><span class="v" style="color:${fanOk?'var(--green)':'var(--red)'}">${fanStr}</span></div>
       <div class="status-item"><span class="k">阵列卡</span><span class="v" style="color:${raidOk?'var(--green)':'var(--yellow)'}">${raidStr}</span></div>
-      <div class="status-item"><span class="k">SAS硬盘</span><span class="v" style="color:${disks.length&&healthy===disks.length?'var(--green)':'var(--orange)'}">${diskStr}</span></div>
+      ${sasDisks.length?`<div class="status-item"><span class="k">SAS硬盘</span><span class="v" style="color:${sasHealthy===sasDisks.length?'var(--green)':'var(--orange)'}">${sasHealthy+'/'+sasDisks.length} 健康</span></div>`:''}
+      ${sataDisks.length?`<div class="status-item"><span class="k">SATA硬盘</span><span class="v" style="color:${sataHealthy===sataDisks.length?'var(--green)':'var(--orange)'}">${sataHealthy+'/'+sataDisks.length} 健康</span></div>`:''}
       <div class="status-item"><span class="k">Docker</span><span class="v" style="color:var(--blue)">${dockerStr}</span></div>
     </div>
   </div>`;
   // 系统配置
   let cpuPct = s.cpu_threads ? Math.min(Math.round(parseFloat((s.load&&s.load[0])||0)/s.cpu_threads*100),100) : 0;
+  let memMods = (s.memory_modules && s.memory_modules.modules) || [];
+  let memModRows = memMods.length ? memMods.map(m=>{
+    let stBadge = m.installed ? '<span class="badge b-ok">已用</span>' : '<span class="badge b-warn">空</span>';
+    return `<tr style="${m.installed?'':'opacity:.45'}">
+      <td>${m.locator||'-'}</td>
+      <td>${stBadge}</td>
+      <td>${m.brand||m.manufacturer||'-'}</td>
+      <td>${m.dram_manufacturer?('颗粒: '+m.dram_manufacturer):'-'}</td>
+      <td>${m.part||'-'}</td>
+      <td>${m.size||'-'}</td>
+      <td>${m.speed||'-'}</td>
+    </tr>`;
+  }).join('') : '<tr><td colspan=7>无 / 未安装 i2c-tools 或 dmidecode</td></tr>';
+  let mm = s.memory_modules;
+  let memSummary = mm ? (`插槽 ${mm.installed}/${mm.slots}` + (mm.brand_summary && mm.brand_summary!=='未知' ? ` · ${mm.brand_summary}` : '') + (mm.empty>0 ? ` · ${mm.empty} 空槽` : '')) : '';
   let memCard = `
-  <div class="card">
+  <div class="card" style="grid-column:1/-1">
     <h3>内存</h3>
     <div class="kv"><span class="k">总量</span><span class="v">${(s.memory&&s.memory.total)||'-'}</span></div>
     <div class="kv"><span class="k">已用</span><span class="v">${(s.memory&&s.memory.used)||'-'}</span></div>
     <div class="kv"><span class="k">占用率</span><span class="v" style="color:${s.memory&&s.memory.percent>70?'var(--orange)':'var(--green)'}">${(s.memory&&s.memory.percent)||0}%</span></div>
+    <div class="kv"><span class="k">内存插槽</span><span class="v">${memSummary||'-'}</span></div>
+    <div style="margin-top:8px;font-size:12px;color:var(--muted)">插槽含空槽；品牌取自 SPD 直读</div>
+    <div style="overflow-x:auto"><table class="table" style="font-size:12px"><thead><tr><th>插槽</th><th>状态</th><th>模组厂</th><th>颗粒厂</th><th>型号</th><th>容量</th><th>频率</th></tr></thead><tbody>${memModRows}</tbody></table></div>
+  </div>`;
+  let bm = (s.board && s.board.manufacturer) || "";
+  let boardOverride = s.board && s.board.override;
+  let boardHasDMI = bm && bm.toLowerCase() !== "default string" && bm.toLowerCase() !== "to be filled by o.e.m.";
+  let boardEdit = `
+    <span class="edit-pencil" title="标注/修改主板型号" onclick="showBoardEdit()">✎</span>`;
+  let boardCard = `
+  <div class="card">
+    <h3>主板 ${boardEdit}</h3>
+    ${boardHasDMI || boardOverride ? `
+    ${boardOverride ? '<div style="margin-bottom:6px"><span class="badge b-info">手动标注</span></div>' : ''}
+    <div class="kv"><span class="k">品牌</span><span class="v">${(s.board&&s.board.manufacturer)||'-'}</span></div>
+    <div class="kv"><span class="k">型号</span><span class="v">${(s.board&&s.board.product)||'-'}</span></div>
+    <div class="kv"><span class="k">版本</span><span class="v">${(s.board&&s.board.version)||'-'}</span></div>
+    <div class="kv"><span class="k">BIOS</span><span class="v">${(s.board&&s.board.bios_vendor)||'-'} ${(s.board&&s.board.bios_version)||''} (${(s.board&&s.board.bios_date)||''})</span></div>
+    <div class="kv"><span class="k">芯片组</span><span class="v">${(s.board&&s.board.chipset)||'未知'}</span></div>
+    ` : `
+    <div class="kv"><span class="k">芯片组</span><span class="v">${(s.board&&s.board.chipset)||'未知'}</span></div>
+    <div class="kv"><span class="k">说明</span><span class="v" style="font-size:12px;color:var(--orange)">${(s.board&&s.board.note)||'BIOS 未写入主板信息'}</span></div>
+    `}
+    <div id="boardEditBox" style="display:none;margin-top:10px">
+      <input id="boardModelInput" class="inp" placeholder="如 豆希 WB360" value="${(s.board&&s.board.product)||''}" style="width:100%;margin-bottom:6px">
+      <div style="display:flex;gap:8px">
+        <button class="btn-mini b-ok" onclick="saveBoardModel()">保存</button>
+        <button class="btn-mini" onclick="hideBoardEdit()">取消</button>
+        ${boardOverride ? '<button class="btn-mini b-bad" onclick="clearBoardModel()">清除标注</button>' : ''}
+      </div>
+    </div>
   </div>`;
   let sysInfoCard = `
   <div class="card">
@@ -1240,9 +1850,10 @@ function renderDetect(D){
       <div class="kv"><span class="k">负载占用</span><span class="v">${cpuPct}%</span></div>
       ${(s.gpus&&s.gpus.length)?s.gpus.map(g=>`<div class="kv"><span class="k">显卡</span><span class="v">${g}</span></div>`).join(''):''}
     </div>
+    ${boardCard}
     ${memCard}
-    ${sysInfoCard}
     ${netCard}
+    ${sysInfoCard}
   </div>`;
   // 阵列卡 & 磁盘
   let raidCard;
@@ -1277,8 +1888,9 @@ function renderDetect(D){
       <span><span style="color:${tempColor(d.temp,d.temp_trip||60)};font-weight:600">${d.temp!=null?d.temp+'°C':'N/A'}</span> · <span class="badge ${d.health_ok?'b-ok':'b-bad'}">${d.health}</span></span>
     </div>`;
   };
-  let sasDisks = disks.filter(d=>(d.type||'').toUpperCase()==='SAS');
-  let sataDisks = disks.filter(d=>{let t=(d.type||'').toUpperCase(); return t==='SATA'||t==='ATA';});
+  // 复用上方状态栏已声明的 sasDisks/sataDisks（同 filter 逻辑），避免 let 重复声明致 JS 解析崩溃
+  sasDisks = disks.filter(d=>(d.type||'').toUpperCase()==='SAS');
+  sataDisks = disks.filter(d=>{let t=(d.type||'').toUpperCase(); return t==='SATA'||t==='ATA';});
   let otherDisks = disks.filter(d=>{let t=(d.type||'').toUpperCase(); return t!=='SAS'&&t!=='SATA'&&t!=='ATA';});
   let diskMini = '';
   if(sasDisks.length) diskMini += `<div class="disk-group-title">SAS 硬盘 (${sasDisks.length})</div>` + sasDisks.map(diskItem).join('');
@@ -1296,12 +1908,14 @@ function renderDetect(D){
   // 存储卷、Docker 容器列表均已移至左侧独立标签页，硬件配置检测仅保留概览状态栏
   return `
   <div class="detect-title">硬件配置检测</div>
-  <div class="detect-sub">实时监测设备健康状态与硬件详情 · v1.5.0 整合版</div>
+  <div class="detect-sub">实时监测设备健康状态与硬件详情 · v1.6.0</div>
   ${statusBar}
   <div class="detect-title" style="font-size:16px;margin-bottom:10px">系统配置</div>
   ${sysConfig}
   <div class="detect-title" style="font-size:16px;margin:18px 0 10px">阵列卡 &amp; 磁盘</div>
   ${raidDisk}
+  <div class="detect-title" style="font-size:16px;margin:18px 0 10px">风扇控制</div>
+  <div class="card">${renderFanControls(s.sensors.fans)}</div>
   `;
 }
 
@@ -1354,6 +1968,7 @@ function renderAll(){
   document.getElementById('storage').innerHTML = renderStorage(DATA.storage);
   document.getElementById('docker').innerHTML = renderDocker(DATA.docker);
   document.getElementById('lastUpdate').textContent = '更新于 '+DATA.time+' ('+DATA.elapsed+'s)';
+  bindFanSliders();
 }
 
 async function loadData(){
@@ -1388,5 +2003,6 @@ loadData();
 """
 
 if __name__ == "__main__":
-    port = int(os.environ.get("TRIM_SERVICE_PORT", "9800"))
-    app.run(host="0.0.0.0", port=port, debug=False)
+    _env_port = (os.environ.get("TRIM_SERVICE_PORT") or "").strip()
+    port = int(_env_port) if _env_port else 9800
+    app.run(host="0.0.0.0", port=port, debug=False, threaded=True)

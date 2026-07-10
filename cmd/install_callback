@@ -5,12 +5,20 @@ LOG="${TRIM_TEMP_LOGFILE}"
 
 PYTHON=$(which python3 2>/dev/null || echo "/usr/bin/python3")
 
+# 0. 兼容只装了 storcli64 的机器（动态探测已兜底，这里再建软链双保险）
+if command -v storcli64 >/dev/null 2>&1; then
+    [ -e /usr/local/bin/storcli64 ] || ln -sf "$(command -v storcli64)" /usr/local/bin/storcli64 2>/dev/null
+    [ -e /usr/local/bin/storcli ] || ln -sf "$(command -v storcli64)" /usr/local/bin/storcli 2>/dev/null
+fi
+
 # 1. 工具检测
 need_install=()
 command -v storcli >/dev/null 2>&1 || need_install+=("storcli")
 command -v smartctl >/dev/null 2>&1 || need_install+=("smartctl")
 command -v sensors >/dev/null 2>&1 || need_install+=("sensors")
 command -v mdadm >/dev/null 2>&1 || need_install+=("mdadm")
+command -v dmidecode >/dev/null 2>&1 || need_install+=("dmidecode")
+command -v decode-dimms >/dev/null 2>&1 || need_install+=("i2c-tools")
 $PYTHON -c "import flask" 2>/dev/null || need_install+=("flask")
 
 if [ ${#need_install[@]} -gt 0 ]; then
@@ -69,6 +77,20 @@ if [ ${#need_install[@]} -gt 0 ]; then
                     apt) $APT_INSTALL mdadm >>"$LOG" 2>&1 ;;
                     yum|dnf) $PM install -y mdadm >>"$LOG" 2>&1 ;;
                     apk) apk add mdadm >>"$LOG" 2>&1 ;;
+                esac
+                ;;
+            dmidecode)
+                case "$PM" in
+                    apt) $APT_INSTALL dmidecode >>"$LOG" 2>&1 ;;
+                    yum|dnf) $PM install -y dmidecode >>"$LOG" 2>&1 ;;
+                    apk) apk add dmidecode >>"$LOG" 2>&1 ;;
+                esac
+                ;;
+            i2c-tools)
+                case "$PM" in
+                    apt) $APT_INSTALL i2c-tools >>"$LOG" 2>&1 ;;
+                    yum|dnf) $PM install -y i2c-tools >>"$LOG" 2>&1 ;;
+                    apk) apk add i2c-tools >>"$LOG" 2>&1 ;;
                 esac
                 ;;
             storcli)

@@ -14,6 +14,12 @@ start)
         fi
         rm -f "$PID_FILE"
     fi
+    # 自愈：飞牛靠 /app/app.py 软链做启动/健康检；uninstall 会删掉它而 install 不重建，
+    # 不补则 start 必报 10500。cmd/main 以 root 运行，此处自动重建软链。
+    if [ -f "$APP_DIR/app.py" ]; then
+        mkdir -p /app 2>/dev/null
+        ln -sf "$APP_DIR/app.py" /app/app.py 2>/dev/null
+    fi
     cd "$APP_DIR"
     PORT="${TRIM_SERVICE_PORT:-9800}"
     $PYTHON "$APP_DIR/app.py" > "$LOG_FILE" 2>&1 &
