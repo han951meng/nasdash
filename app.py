@@ -14,6 +14,18 @@ app = Flask(__name__)
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 BOARD_OVERRIDE_FILE = os.path.join(APP_DIR, "board_override.txt")
 
+# 版本号单一来源：从同目录 manifest 读取，避免 UI 与 manifest 不同步（曾出现 UI 仍显示 v1.6.0）
+def _app_version():
+    try:
+        with open(os.path.join(APP_DIR, "manifest")) as f:
+            m = re.search(r"^version\s*=\s*(\S+)", f.read(), re.M)
+            if m:
+                return "v" + m.group(1).strip()
+    except Exception:
+        pass
+    return "v1.6.2"
+APP_VERSION = _app_version()
+
 # 命令全路径（admin 的 PATH 不含 /usr/sbin）
 def _find_storcli():
     """动态探测 storcli 二进制：兼容只装了 storcli64 的环境（部分 fnOS 用户机器只有 storcli64）"""
@@ -1218,7 +1230,7 @@ def get_docker():
 # ===================== 路由 =====================
 @app.route("/")
 def index():
-    return render_template_string(HTML)
+    return render_template_string(HTML, APP_VERSION=APP_VERSION)
 
 @app.route("/api/all")
 def api_all():
@@ -1908,7 +1920,7 @@ function renderDetect(D){
   // 存储卷、Docker 容器列表均已移至左侧独立标签页，硬件配置检测仅保留概览状态栏
   return `
   <div class="detect-title">硬件配置检测</div>
-  <div class="detect-sub">实时监测设备健康状态与硬件详情 · v1.6.0</div>
+  <div class="detect-sub">实时监测设备健康状态与硬件详情 · {{ APP_VERSION }}</div>
   ${statusBar}
   <div class="detect-title" style="font-size:16px;margin-bottom:10px">系统配置</div>
   ${sysConfig}
