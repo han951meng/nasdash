@@ -2401,12 +2401,15 @@ async function checkUpdate(force){
   try{
     const r = await fetch('/api/version' + (force ? '?force=1' : ''));
     const d = await r.json();
+    const link = document.getElementById('updateLink');
     if(d.update_available && d.latest){
       document.getElementById('updateText').innerHTML = '发现新版本 <b>'+d.latest+'</b>（当前 '+d.current+'）';
-      document.getElementById('updateLink').href = d.url || 'https://github.com/han951meng/nasdash/releases';
+      link.href = d.url || 'https://github.com/han951meng/nasdash/releases';
+      link.style.display = '';
       banner.classList.add('show');
     } else {
       banner.classList.remove('show');
+      link.style.display = 'none';
       if(force){
         if(d.error){
           document.getElementById('updateText').textContent = '检查更新失败：' + d.error;
