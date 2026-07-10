@@ -5,7 +5,7 @@
 单文件 Flask 应用：阵列卡状态 / 硬盘 SMART / 系统资源 / 存储卷
 部署目录: /opt/fnos-dash/
 """
-import subprocess, json, re, os, time, socket, platform, shutil, sys
+import subprocess, json, re, os, time, socket, platform, shutil, sys, urllib.request, urllib.error
 from flask import Flask, jsonify, render_template_string, request
 
 app = Flask(__name__)
@@ -25,6 +25,38 @@ def _app_version():
         pass
     return "v1.6.2"
 APP_VERSION = _app_version()
+
+# ---------- 检测新版本（GitHub latest release，带缓存/超时/静默失败，绝不阻塞页面） ----------
+_VERSION_CHECK = {"cached_result": None, "checked_at": 0}
+_VERSION_CHECK_TTL = 6 * 3600  # 6 小时缓存，避免频繁打 GitHub API
+_VERSION_REPO_URL = "https://api.github.com/repos/han951meng/nasdash/releases/latest"
+
+def _parse_ver(v):
+    """'v1.6.7' / '1.6.7' -> (1,6,7)"""
+    v = (v or "").lstrip("vV").strip()
+    parts = re.findall(r"\d+", v)
+    return tuple(int(p) for p in parts[:3]) if parts else (0, 0, 0)
+
+def _check_latest_version():
+    """查询 GitHub latest release；带缓存、5s 超时、异常静默返回。"""
+    now = time.time()
+    if _VERSION_CHECK["cached_result"] is not None and now - _VERSION_CHECK["checked_at"] < _VERSION_CHECK_TTL:
+        return _VERSION_CHECK["cached_result"]
+    result = {"current": APP_VERSION, "latest": None, "update_available": False, "url": None, "error": None}
+    try:
+        req = urllib.request.Request(_VERSION_REPO_URL, headers={"User-Agent": "nasdash-version-check"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        tag = (data.get("tag_name") or "").strip()
+        latest = ("v" + tag.lstrip("vV")) if tag else ""
+        result["latest"] = latest
+        result["url"] = data.get("html_url") or "https://github.com/han951meng/nasdash/releases"
+        result["update_available"] = _parse_ver(latest) > _parse_ver(APP_VERSION)
+    except Exception as e:
+        result["error"] = str(e)[:160]
+    _VERSION_CHECK["cached_result"] = result
+    _VERSION_CHECK["checked_at"] = now
+    return result
 
 # 命令全路径（admin 的 PATH 不含 /usr/sbin）
 def _find_storcli():
@@ -1470,6 +1502,13 @@ def api_fan_status():
     return jsonify({"fans": fans})
 
 
+@app.route("/api/version")
+def api_version():
+    """检测新版本：返回 {current, latest, update_available, url, error}。force=1 强制刷新缓存。"""
+    if request.args.get("force") == "1":
+        _VERSION_CHECK["checked_at"] = 0  # 使缓存失效，触发重查
+    return jsonify(_check_latest_version())
+
 @app.route("/api/board/set", methods=["POST"])
 def api_board_set():
     """保存/清除主板型号手动标注（白牌板 DMI 为空时由用户填写）"""
@@ -1643,6 +1682,12 @@ HTML = r"""<!DOCTYPE html>
   .fan-custom-input{width:56px;padding:5px 6px;font-size:13px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text)}
   .fan-custom-input:focus{outline:none;border-color:var(--blue)}
   .fan-card-state{font-size:12px;color:var(--muted)}
+  /* 检测新版本横幅 */
+  .update-banner{display:none;align-items:center;justify-content:space-between;gap:14px;background:linear-gradient(135deg,#ea580c,#f59e0b);color:#fff;padding:11px 18px;border-radius:10px;margin-bottom:16px;box-shadow:0 2px 10px rgba(234,88,12,.28);font-size:14px}
+  .update-banner.show{display:flex}
+  .update-banner a{color:#fff;text-decoration:underline;font-weight:700;white-space:nowrap}
+  .update-banner .ub-close{background:rgba(255,255,255,.22);border:none;color:#fff;cursor:pointer;border-radius:6px;padding:3px 11px;font-size:13px}
+  .update-banner .ub-close:hover{background:rgba(255,255,255,.35)}
 </style>
 </head>
 <body>
@@ -1653,6 +1698,7 @@ HTML = r"""<!DOCTYPE html>
     <span><span class="spinner" id="spin"></span></span>
     <label class="switch"><input type="checkbox" id="autoRefresh"><span class="slider"></span>自动刷新</label>
     <button class="btn" onclick="loadData()">🔄 刷新</button>
+    <button class="btn" id="checkUpdateBtn" onclick="checkUpdate(true)">🔔 检查更新</button>
   </div>
 </div>
 
@@ -1670,6 +1716,13 @@ HTML = r"""<!DOCTYPE html>
     </div>
   </aside>
   <main class="content">
+    <div id="updateBanner" class="update-banner">
+      <div>🔔 <span id="updateText"></span></div>
+      <div style="display:flex;gap:12px;align-items:center">
+        <a id="updateLink" href="https://github.com/han951meng/nasdash/releases" target="_blank" rel="noopener">前往下载 →</a>
+        <button class="ub-close" onclick="dismissUpdate()">✕</button>
+      </div>
+    </div>
     <div id="detect" class="panel active"><div class="loading">加载中…</div></div>
     <div id="raid" class="panel"><div class="loading">加载中…</div></div>
     <div id="disks" class="panel"><div class="loading">加载中…</div></div>
@@ -2335,6 +2388,50 @@ try{
 }catch(e){}
 
 loadData();
+
+// ---------- 检测新版本 ----------
+let updateDismissed = false;
+async function checkUpdate(force){
+  const banner = document.getElementById('updateBanner');
+  if(!force && updateDismissed) return;
+  if(force){
+    const btn = document.getElementById('checkUpdateBtn');
+    if(btn){ btn.disabled = true; btn.textContent = '🔔 检查中…'; }
+  }
+  try{
+    const r = await fetch('/api/version' + (force ? '?force=1' : ''));
+    const d = await r.json();
+    if(d.update_available && d.latest){
+      document.getElementById('updateText').innerHTML = '发现新版本 <b>'+d.latest+'</b>（当前 '+d.current+'）';
+      document.getElementById('updateLink').href = d.url || 'https://github.com/han951meng/nasdash/releases';
+      banner.classList.add('show');
+    } else {
+      banner.classList.remove('show');
+      if(force){
+        if(d.error){
+          document.getElementById('updateText').textContent = '检查更新失败：' + d.error;
+        } else {
+          document.getElementById('updateText').textContent = '已是最新版本（'+d.current+'）';
+        }
+        banner.classList.add('show');
+        if(!d.error){ setTimeout(()=>banner.classList.remove('show'), 3500); }
+      }
+    }
+  }catch(e){
+    if(force){
+      document.getElementById('updateText').textContent = '检查更新出错：' + e;
+      banner.classList.add('show');
+    }
+  }finally{
+    if(force){
+      const btn = document.getElementById('checkUpdateBtn');
+      if(btn){ btn.disabled = false; btn.textContent = '🔔 检查更新'; }
+    }
+  }
+}
+function dismissUpdate(){ document.getElementById('updateBanner').classList.remove('show'); updateDismissed = true; }
+
+checkUpdate(false);
 </script>
 </body>
 </html>
