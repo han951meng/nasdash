@@ -77,7 +77,7 @@ def sudo(cmd, timeout=30):
         return out
     return run(cmd, timeout)  # sudo -n 失败再裸跑兜底
 
-# ===================== 风扇缓变控制（参考 FanControlServer：常驻线程平滑过渡，避免瞬间全速）=====================
+# ===================== 风扇缓变控制（常驻线程平滑过渡，避免瞬间全速）=====================
 import threading as _threading
 
 # 全局风扇目标状态：key=(hwmon, idx) -> {"mode":"manual"|"auto", "target":0-255}
@@ -103,8 +103,8 @@ def _fan_write_raw(hwmon, idx, raw):
     except Exception:
         return False
 
-def _fan_fcs_running():
-    # 检测 FanControlServer 是否在跑（恢复自动时优先交还它）
+def _fan_ext_service_running():
+    # 检测系统风扇服务是否在跑（恢复自动时优先交还）
     return bool(run("pgrep -f fancontrolserver 2>/dev/null", 2).strip())
 
 def _fan_read_cpu_temp():
@@ -128,7 +128,7 @@ def _fan_cpu_temp_cached():
     return _FAN_LAST_CPU_TEMP["v"]
 
 def _fan_auto_pwm(cpu_temp):
-    # nasdash 自带保守温控曲线（FanControlServer 不在时接管）
+    # nasdash 自带保守温控曲线（系统风扇服务不在时接管）
     pts = [(45, 90), (60, 140), (75, 204), (80, 255)]
     if cpu_temp is None:
         return pts[0][1]
@@ -157,7 +157,7 @@ def _fan_smooth_step(hwmon, idx, target):
     _fan_write_raw(hwmon, idx, cur + (step if diff > 0 else -step))
 
 def fan_smooth_loop():
-    # daemon 线程：每 ~0.6s 把风扇当前 pwm 朝目标平滑过渡（参考 FanControlServer 的 2s tick + 缓变）
+    # daemon 线程：每 ~0.6s 把风扇当前 pwm 朝目标平滑过渡（常驻线程 tick + 缓变）
     while True:
         try:
             with FAN_LOCK:
@@ -909,9 +909,9 @@ def get_system():
     sens_j = run(f"{SENSORS} -j 2>/dev/null", 8)
     d["sensors"] = {"temps": [], "fans": [], "voltages": []}
     cpu_temp = None
-    # 风扇控制信息：优先 FanControlServer 配置，其次 sysfs（不依赖任何外部应用）
+    # 风扇控制信息：优先系统风扇服务配置，其次 sysfs（不依赖任何外部应用）
     fan_info = {}
-    # 1) FanControlServer 配置（可选）—— 提供风扇名称/模式，并借 pwm_path 推断可写路径
+    # 1) 系统风扇服务配置（可选）—— 提供风扇名称/模式，并借 pwm_path 推断可写路径
     fc_raw = run("cat /vol2/@appconf/FanControlServer/config.json 2>/dev/null", 3)
     if fc_raw:
         try:
@@ -935,7 +935,7 @@ def get_system():
                 }
         except (json.JSONDecodeError, ValueError):
             pass
-    # 2) sysfs hwmon —— 不需要 FanControlServer，直接读 it87/nct 芯片的 PWM
+    # 2) sysfs hwmon —— 不依赖外部风扇服务，直接读 it87/nct 芯片的 PWM
     import glob as _glob
     for _hp in sorted(_glob.glob("/sys/class/hwmon/hwmon*")):
         _cn = run(f"cat {_hp}/name 2>/dev/null", 2).strip()
@@ -946,7 +946,7 @@ def get_system():
                 _pv = run(f"cat {_hp}/pwm{_fi} 2>/dev/null", 2).strip()
                 _controllable = bool(_pe)
                 if _fk in fan_info:
-                    # FanControlServer 已知的风扇：优先用配置里的 pwm_path，兜底用当前 hwmon
+                    # 已知的风扇：优先用配置里的 pwm_path，兜底用当前 hwmon
                     if not fan_info[_fk].get("hwmon"):
                         fan_info[_fk]["hwmon"] = _hp
                         fan_info[_fk]["idx"] = _fi
@@ -956,7 +956,7 @@ def get_system():
                     _mm = {"0": "off", "1": "manual", "2": "auto"}
                     fan_info[_fk] = {"name": f"风扇{_fi}", "mode": _mm.get(_pe, ""),
                                      "hwmon": _hp, "idx": _fi, "controllable": _controllable}
-                # PWM 占空比（0-255 → 百分比），不管装没装 FanControlServer 都读
+                # PWM 占空比（0-255 → 百分比），不管装没装外部风扇服务都读
                 if _pv and _fk in fan_info:
                     try:
                         fan_info[_fk]["pwm"] = round(int(_pv) / 255 * 100)
@@ -1389,8 +1389,8 @@ def api_fan_set():
         return jsonify({"ok": False, "error": "invalid idx"}), 400
     key = (hwmon, idx)
     if mode == "auto":
-        if _fan_fcs_running():
-            # FanControlServer 在跑：交还它接管（写 enable=2）
+        if _fan_ext_service_running():
+            # 系统风扇服务在跑：交还它接管（写 enable=2）
             try:
                 with open(f"{hwmon}/pwm{idx}_enable", "w") as f:
                     f.write("2")
@@ -1398,8 +1398,8 @@ def api_fan_set():
                 pass
             with FAN_LOCK:
                 FAN_TARGETS.pop(key, None)
-            return jsonify({"ok": True, "mode": "auto", "owner": "fancontrolserver"})
-        # FanControlServer 未运行：nasdash 自带保守温控曲线接管
+            return jsonify({"ok": True, "mode": "auto", "owner": "ext_service"})
+        # 系统风扇服务未运行：nasdash 自带保守温控曲线接管
         with FAN_LOCK:
             FAN_TARGETS[key] = {"mode": "auto", "target": None}
         return jsonify({"ok": True, "mode": "auto", "owner": "nasdash"})
@@ -1418,7 +1418,7 @@ def api_fan_set():
 
 @app.route("/api/fan/status")
 def api_fan_status():
-    """轻量风扇状态：供前端高频轮询，实时显示转速/当前占空比/目标（参考 FanControlServer 的 2s tick）"""
+    """轻量风扇状态：供前端高频轮询，实时显示转速/当前占空比/目标（常驻线程 2s tick）"""
     import glob as _glob
     fans = []
     fc_raw = run("cat /vol2/@appconf/FanControlServer/config.json 2>/dev/null", 3)
@@ -1898,7 +1898,7 @@ async function setFanAuto(hwmon, idx){
   try{
     let r=await fetch('/api/fan/set',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({hwmon:hwmon,idx:idx,mode:'auto'})});
     let j=await r.json();
-    let owner=j.owner==='fancontrolserver'?'（已交还 FanControlServer）':'（nasdash 接管温控）';
+    let owner=j.owner==='ext_service'?'（已交还系统风扇服务）':'（nasdash 接管温控）';
     if(st) st.textContent=j.ok?('已恢复自动 '+owner):('失败：'+(j.error||''));
   }catch(e){ if(st) st.textContent='请求失败'; }
 }
