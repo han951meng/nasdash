@@ -1624,6 +1624,8 @@ HTML = r"""<!DOCTYPE html>
   .preset-btn:hover{border-color:var(--blue);color:var(--blue)}
   .preset-btn.full{background:var(--red);color:#fff;border-color:var(--red)}
   .preset-btn.full:hover{opacity:.85;color:#fff}
+  .preset-btn.active{background:var(--blue);color:#fff;border-color:var(--blue);box-shadow:0 0 0 2px rgba(57,125,255,.25)}
+  .preset-btn.full.active{background:var(--red);border-color:var(--red);box-shadow:0 0 0 2px rgba(220,53,69,.25)}
   .fan-global-state{font-size:13px;color:var(--muted);margin-left:auto}
   .fan-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px}
   .fan-card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px}
@@ -1636,7 +1638,10 @@ HTML = r"""<!DOCTYPE html>
   .fan-pct-line{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-bottom:6px}
   .fan-pct-line b{color:var(--text)}
   .fan-card .fan-slider{margin-top:4px}
-  .fan-card-actions{display:flex;align-items:center;gap:10px;margin-top:8px}
+  .fan-card-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px 10px;margin-top:8px}
+  .fan-custom{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--muted)}
+  .fan-custom-input{width:56px;padding:5px 6px;font-size:13px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text)}
+  .fan-custom-input:focus{outline:none;border-color:var(--blue)}
   .fan-card-state{font-size:12px;color:var(--muted)}
 </style>
 </head>
@@ -1896,7 +1901,7 @@ function renderFanControl(){
   FAN_LIST=fans;
   if(!fans.length) return '<div class="card"><div class="loading">未检测到可调控风扇（部分 NAS 由系统固件统一控温，本工具不接管）</div></div>';
   let presets=[['auto','默认'],['100','全速'],['10','10%'],['20','20%'],['30','30%'],['40','40%'],['50','50%'],['60','60%'],['70','70%'],['80','80%'],['90','90%']];
-  let presetHtml=presets.map(p=>`<button class="preset-btn ${p[0]==='100'?'full':''}" onclick="applyFanPreset('${p[0]}')">${p[1]}</button>`).join('');
+  let presetHtml=presets.map(p=>`<button class="preset-btn ${p[0]==='100'?'full':''}" data-preset="${p[0]}" onclick="applyFanPreset('${p[0]}')">${p[1]}</button>`).join('');
   let modeMap={'curve':'曲线温控','manual':'手动控制','auto':'自动温控','off':'关闭'};
   let cards=fans.map(f=>{
     let id='fan'+f.idx;
@@ -1915,6 +1920,10 @@ function renderFanControl(){
       <input type="range" min="10" max="100" value="${pct}" class="fan-slider" data-hwmon="${f.hwmon}" data-idx="${f.idx}" id="${id}-slider">
       <div class="fan-card-actions">
         <button class="btn-mini" onclick="setFanAuto('${f.hwmon}', ${f.idx})">恢复自动</button>
+        <span class="fan-custom">
+          <input type="number" min="10" max="100" step="1" value="${pct}" class="fan-custom-input" id="${id}-custom" data-hwmon="${f.hwmon}" data-idx="${f.idx}" title="自定义该风扇占空比"> %
+          <button class="btn-mini" onclick="applyFanCustom('${f.hwmon}', ${f.idx})">应用</button>
+        </span>
         <span class="fan-card-state" id="${id}-state"></span>
       </div>
     </div>`;
@@ -1940,8 +1949,43 @@ async function applyFanPreset(val){
     for(let f of FAN_LIST) await applyFan(f.hwmon, f.idx, pwm);
     if(gs) gs.textContent='已全部设为 '+pwm+'%';
   }
+  highlightPreset(val);
 }
 let fanTimer=null;
+function clearPresetHighlight(){
+  document.querySelectorAll('.preset-btn[data-preset]').forEach(b=>b.classList.remove('active'));
+}
+function highlightPreset(val){
+  clearPresetHighlight();
+  let b=document.querySelector('.preset-btn[data-preset="'+val+'"]');
+  if(b) b.classList.add('active');
+}
+// 根据各卡真实目标/模式，高亮当前统一生效的档位（无统一档位则不高亮）
+function updatePresetHighlight(fans){
+  clearPresetHighlight();
+  if(!fans || !fans.length) return;
+  let manualFans=fans.filter(f=>f.mode!=='auto' && f.mode!=='off');
+  if(manualFans.length===0){
+    let b=document.querySelector('.preset-btn[data-preset="auto"]');
+    if(b) b.classList.add('active');
+    return;
+  }
+  let targets=manualFans.map(f=>(f.target_pct!=null?f.target_pct:f.pwm)).filter(p=>p!=null);
+  if(targets.length===manualFans.length && targets.every(t=>t===targets[0])){
+    let b=document.querySelector('.preset-btn[data-preset="'+targets[0]+'"]');
+    if(b) b.classList.add('active');
+  }
+}
+async function applyFanCustom(hwmon, idx){
+  let id='fan'+idx;
+  let inp=document.getElementById(id+'-custom');
+  if(!inp) return;
+  let v=parseInt(inp.value,10);
+  if(isNaN(v)) return;
+  v=Math.max(10,Math.min(100,v));
+  inp.value=v;
+  await applyFan(hwmon, idx, v);
+}
 async function fetchFanStatus(){
   try{
     let r=await fetch('/api/fan/status?_='+Date.now());
@@ -1959,6 +2003,7 @@ async function fetchFanStatus(){
       if(bar) bar.style.width=(f.pwm!=null?f.pwm:50)+'%';
       if(sl && document.activeElement!==sl) sl.value=(f.pwm!=null?f.pwm:50);
     });
+    updatePresetHighlight(j.fans);
   }catch(e){}
 }
 async function applyFan(hwmon, idx, pwm){
@@ -1983,6 +2028,7 @@ async function setFanAuto(hwmon, idx){
 function bindFanSliders(){
   document.querySelectorAll('.fan-slider').forEach(sl=>{
     sl.addEventListener('input', ()=>{
+      clearPresetHighlight();
       let id='fan'+sl.dataset.idx;
       let v=sl.value;
       let cur=document.getElementById(id+'-cur'); if(cur) cur.textContent=v;
@@ -1990,6 +2036,9 @@ function bindFanSliders(){
       clearTimeout(sl._t);
       sl._t=setTimeout(()=>applyFan(sl.dataset.hwmon, parseInt(sl.dataset.idx), parseInt(sl.value)), 120);
     });
+  });
+  document.querySelectorAll('.fan-custom-input').forEach(inp=>{
+    inp.addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); applyFanCustom(inp.dataset.hwmon, parseInt(inp.dataset.idx)); } });
   });
   if(!fanTimer){ fetchFanStatus(); fanTimer=setInterval(fetchFanStatus, 2000); }
 }
