@@ -77,6 +77,107 @@ def sudo(cmd, timeout=30):
         return out
     return run(cmd, timeout)  # sudo -n 失败再裸跑兜底
 
+# ===================== 风扇缓变控制（参考 FanControlServer：常驻线程平滑过渡，避免瞬间全速）=====================
+import threading as _threading
+
+# 全局风扇目标状态：key=(hwmon, idx) -> {"mode":"manual"|"auto", "target":0-255}
+FAN_LOCK = _threading.Lock()
+FAN_TARGETS = {}
+_FAN_LAST_CPU_TEMP = {"t": 0.0, "v": None}
+
+def _fan_read_raw(hwmon, idx):
+    try:
+        with open(f"{hwmon}/pwm{idx}") as f:
+            return int(f.read().strip())
+    except Exception:
+        return None
+
+def _fan_write_raw(hwmon, idx, raw):
+    raw = max(0, min(255, int(raw)))
+    try:
+        with open(f"{hwmon}/pwm{idx}_enable", "w") as f:
+            f.write("1")
+        with open(f"{hwmon}/pwm{idx}", "w") as f:
+            f.write(str(raw))
+        return True
+    except Exception:
+        return False
+
+def _fan_fcs_running():
+    # 检测 FanControlServer 是否在跑（恢复自动时优先交还它）
+    return bool(run("pgrep -f fancontrolserver 2>/dev/null", 2).strip())
+
+def _fan_read_cpu_temp():
+    try:
+        out = run("sensors -j 2>/dev/null", 5)
+        j = json.loads(out)
+        for chip, entries in j.items():
+            if chip.startswith("coretemp"):
+                for ename, fields in entries.items():
+                    if "Package" in ename and isinstance(fields, dict) and "temp_input" in fields:
+                        return float(fields["temp_input"])
+    except Exception:
+        pass
+    return None
+
+def _fan_cpu_temp_cached():
+    now = time.time()
+    if now - _FAN_LAST_CPU_TEMP["t"] > 2:
+        _FAN_LAST_CPU_TEMP["v"] = _fan_read_cpu_temp()
+        _FAN_LAST_CPU_TEMP["t"] = now
+    return _FAN_LAST_CPU_TEMP["v"]
+
+def _fan_auto_pwm(cpu_temp):
+    # nasdash 自带保守温控曲线（FanControlServer 不在时接管）
+    pts = [(45, 90), (60, 140), (75, 204), (80, 255)]
+    if cpu_temp is None:
+        return pts[0][1]
+    if cpu_temp <= pts[0][0]:
+        return pts[0][1]
+    if cpu_temp >= pts[-1][0]:
+        return pts[-1][1]
+    for i in range(len(pts) - 1):
+        t0, p0 = pts[i]
+        t1, p1 = pts[i + 1]
+        if cpu_temp <= t1:
+            r = (cpu_temp - t0) / (t1 - t0)
+            return int(p0 + r * (p1 - p0))
+    return pts[-1][1]
+
+def _fan_smooth_step(hwmon, idx, target):
+    cur = _fan_read_raw(hwmon, idx)
+    if cur is None:
+        return
+    diff = target - cur
+    if abs(diff) <= 2:  # deadzone，避免抖动
+        if cur != target:
+            _fan_write_raw(hwmon, idx, target)
+        return
+    step = 6 if abs(diff) > 6 else abs(diff)
+    _fan_write_raw(hwmon, idx, cur + (step if diff > 0 else -step))
+
+def fan_smooth_loop():
+    # daemon 线程：每 ~0.6s 把风扇当前 pwm 朝目标平滑过渡（参考 FanControlServer 的 2s tick + 缓变）
+    while True:
+        try:
+            with FAN_LOCK:
+                items = list(FAN_TARGETS.items())
+            for (hwmon, idx), cfg in items:
+                if cfg.get("mode") == "auto":
+                    ct = _fan_cpu_temp_cached()
+                    _fan_smooth_step(hwmon, idx, _fan_auto_pwm(ct))
+                else:
+                    tgt = cfg.get("target")
+                    if tgt is None:
+                        continue
+                    _fan_smooth_step(hwmon, idx, tgt)
+        except Exception:
+            pass
+        time.sleep(0.6)
+
+_fan_thread = _threading.Thread(target=fan_smooth_loop, daemon=True, name="fan-smooth")
+_fan_thread.start()
+
 # ===================== 采集：阵列卡 =====================
 def detect_storage_controllers():
     """用 lspci 检测存储控制器，区分 MegaRAID(IR) 与 HBA(IT) 直通卡"""
@@ -1268,7 +1369,7 @@ def api_all():
 
 @app.route("/api/fan/set", methods=["POST"])
 def api_fan_set():
-    """设置风扇转速：手动 PWM（带安全下限）或恢复自动控温"""
+    """设置风扇转速：设目标 PWM（后台缓变线程平滑过渡）或恢复自动控温"""
     try:
         data = request.get_json(force=True) or {}
     except Exception:
@@ -1286,18 +1387,87 @@ def api_fan_set():
             raise ValueError()
     except (TypeError, ValueError):
         return jsonify({"ok": False, "error": "invalid idx"}), 400
-    FLOOR = 30  # 最低 30%，避免停转导致过热
+    key = (hwmon, idx)
     if mode == "auto":
-        sudo(f"bash -c 'echo 2 > {hwmon}/pwm{idx}_enable'")
-        return jsonify({"ok": True, "mode": "auto"})
+        if _fan_fcs_running():
+            # FanControlServer 在跑：交还它接管（写 enable=2）
+            try:
+                with open(f"{hwmon}/pwm{idx}_enable", "w") as f:
+                    f.write("2")
+            except Exception:
+                pass
+            with FAN_LOCK:
+                FAN_TARGETS.pop(key, None)
+            return jsonify({"ok": True, "mode": "auto", "owner": "fancontrolserver"})
+        # FanControlServer 未运行：nasdash 自带保守温控曲线接管
+        with FAN_LOCK:
+            FAN_TARGETS[key] = {"mode": "auto", "target": None}
+        return jsonify({"ok": True, "mode": "auto", "owner": "nasdash"})
     try:
         pct = int(pwm)
     except (TypeError, ValueError):
         return jsonify({"ok": False, "error": "invalid pwm"}), 400
+    FLOOR = 30  # 最低 30%，避免停转导致过热
     pct = max(FLOOR, min(100, pct))
     raw = round(pct / 100 * 255)
-    sudo(f"bash -c 'echo 1 > {hwmon}/pwm{idx}_enable; echo {raw} > {hwmon}/pwm{idx}'")
+    # 仅设为目标值，由缓变线程平滑过渡（不再瞬间写 255，避免突然全速）
+    with FAN_LOCK:
+        FAN_TARGETS[key] = {"mode": "manual", "target": raw}
     return jsonify({"ok": True, "mode": "manual", "pwm": pct, "raw": raw})
+
+
+@app.route("/api/fan/status")
+def api_fan_status():
+    """轻量风扇状态：供前端高频轮询，实时显示转速/当前占空比/目标（参考 FanControlServer 的 2s tick）"""
+    import glob as _glob
+    fans = []
+    fc_raw = run("cat /vol2/@appconf/FanControlServer/config.json 2>/dev/null", 3)
+    names = {}
+    if fc_raw:
+        try:
+            fc = json.loads(fc_raw)
+            for fan in fc.get("fans", []):
+                fi = fan.get("pwm_index")
+                if fi:
+                    names[fi] = fan.get("name", f"风扇{fi}")
+        except Exception:
+            pass
+    for _hp in sorted(_glob.glob("/sys/class/hwmon/hwmon*")):
+        _cn = run(f"cat {_hp}/name 2>/dev/null", 2).strip()
+        if not _cn.startswith(("it87", "nct")):
+            continue
+        for _fi in range(1, 6):
+            _pe = run(f"cat {_hp}/pwm{_fi}_enable 2>/dev/null", 2).strip()
+            if not _pe:
+                continue
+            _pv = run(f"cat {_hp}/pwm{_fi} 2>/dev/null", 2).strip()
+            _fv = run(f"cat {_hp}/fan{_fi}_input 2>/dev/null", 2).strip()
+            try:
+                rpm = int(_fv)
+            except Exception:
+                rpm = 0
+            try:
+                pwm_raw = int(_pv)
+            except Exception:
+                pwm_raw = None
+            pwm_pct = round(pwm_raw / 255 * 100) if pwm_raw is not None else None
+            cur_mode = "manual" if _pe == "1" else "auto" if _pe == "2" else "off"
+            key = (_hp, _fi)
+            target_pct = None
+            with FAN_LOCK:
+                tcfg = FAN_TARGETS.get(key)
+            if tcfg and tcfg.get("mode") == "manual":
+                target_pct = round(tcfg["target"] / 255 * 100)
+            fans.append({
+                "name": names.get(_fi, f"风扇{_fi}"),
+                "idx": _fi, "hwmon": _hp,
+                "rpm": rpm, "pwm": pwm_pct,
+                "mode": cur_mode,
+                "target_pct": target_pct,
+                "controllable": True,
+            })
+        break
+    return jsonify({"fans": fans})
 
 
 @app.route("/api/board/set", methods=["POST"])
@@ -1680,12 +1850,13 @@ function renderSystem(s){
 
 function renderFanControls(fans){
   let ctrls = (fans||[]).filter(f=>f.controllable).map(f=>{
-    let pct = (f.pwm!=null) ? f.pwm : 50;
-    let id = 'fan'+f.idx;
-    return `<div class="fan-ctrl">
-      <div class="fan-ctrl-head"><span>${f.name}</span><span class="fan-ctrl-val" id="${id}-val">${pct}%</span></div>
+    let id='fan'+f.idx;
+    let pct=(f.pwm!=null)?f.pwm:50;
+    return `<div class="fan-ctrl" id="${id}-box">
+      <div class="fan-ctrl-head"><span>${f.name}</span><span class="fan-ctrl-val"><span id="${id}-cur">${pct}</span>% <span class="fan-ctrl-tgt" id="${id}-tgt"></span></span></div>
       <input type="range" min="30" max="100" value="${pct}" class="fan-slider" data-hwmon="${f.hwmon}" data-idx="${f.idx}" id="${id}-slider">
       <div class="fan-ctrl-actions">
+        <span class="fan-ctrl-rpm">转速 <b id="${id}-rpm">${f.rpm||0}</b> RPM</span>
         <button class="btn-mini" onclick="setFanAuto('${f.hwmon}', ${f.idx})">恢复自动</button>
         <span class="fan-ctrl-state" id="${id}-state"></span>
       </div>
@@ -1694,14 +1865,31 @@ function renderFanControls(fans){
   if(!ctrls) return `<div class="loading">未检测到可调控风扇（部分 NAS 由系统固件统一控温，本工具不接管）</div>`;
   return `<div class="fan-ctrl-list">${ctrls}</div>`;
 }
+let fanTimer=null;
+async function fetchFanStatus(){
+  try{
+    let r=await fetch('/api/fan/status?_='+Date.now());
+    let j=await r.json();
+    (j.fans||[]).forEach(f=>{
+      let id='fan'+f.idx;
+      let cur=document.getElementById(id+'-cur');
+      let tgt=document.getElementById(id+'-tgt');
+      let rpm=document.getElementById(id+'-rpm');
+      let sl=document.getElementById(id+'-slider');
+      if(cur) cur.textContent=(f.pwm!=null?f.pwm:'--');
+      if(tgt) tgt.textContent=(f.target_pct!=null && f.target_pct!==f.pwm)?('→ 目标 '+f.target_pct+'%'):(f.mode==='auto'?'· 自动控温':'');
+      if(rpm) rpm.textContent=(f.rpm||0);
+      if(sl && document.activeElement!==sl) sl.value=(f.pwm!=null?f.pwm:50);
+    });
+  }catch(e){}
+}
 async function applyFan(hwmon, idx, pwm){
   let id='fan'+idx, st=document.getElementById(id+'-state');
-  if(st) st.textContent='设置中…';
+  if(st) st.textContent='目标 '+pwm+'%，平滑过渡中…';
   try{
     let r=await fetch('/api/fan/set',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({hwmon:hwmon,idx:idx,pwm:pwm})});
     let j=await r.json();
-    if(st) st.textContent = j.ok ? ('已设为 '+pwm+'%') : ('失败：'+(j.error||''));
-    if(j.ok){ let v=document.getElementById(id+'-val'); if(v) v.textContent=pwm+'%'; }
+    if(st) st.textContent=j.ok?('目标 '+pwm+'%，平滑过渡中'):('失败：'+(j.error||''));
   }catch(e){ if(st) st.textContent='请求失败'; }
 }
 async function setFanAuto(hwmon, idx){
@@ -1710,20 +1898,22 @@ async function setFanAuto(hwmon, idx){
   try{
     let r=await fetch('/api/fan/set',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({hwmon:hwmon,idx:idx,mode:'auto'})});
     let j=await r.json();
-    if(st) st.textContent = j.ok ? '已恢复自动控温' : ('失败：'+(j.error||''));
-    if(j.ok) setTimeout(loadData, 800);
+    let owner=j.owner==='fancontrolserver'?'（已交还 FanControlServer）':'（nasdash 接管温控）';
+    if(st) st.textContent=j.ok?('已恢复自动 '+owner):('失败：'+(j.error||''));
   }catch(e){ if(st) st.textContent='请求失败'; }
 }
 function bindFanSliders(){
   document.querySelectorAll('.fan-slider').forEach(sl=>{
     sl.addEventListener('input', ()=>{
-      let v=sl.value, id='fan'+sl.dataset.idx, val=document.getElementById(id+'-val');
-      if(val) val.textContent=v+'%';
-    });
-    sl.addEventListener('change', ()=>{
-      applyFan(sl.dataset.hwmon, parseInt(sl.dataset.idx), parseInt(sl.value));
+      let id='fan'+sl.dataset.idx;
+      let v=sl.value;
+      let cur=document.getElementById(id+'-cur'); if(cur) cur.textContent=v;
+      let tgt=document.getElementById(id+'-tgt'); if(tgt) tgt.textContent='→ 目标 '+v+'%';
+      clearTimeout(sl._t);
+      sl._t=setTimeout(()=>applyFan(sl.dataset.hwmon, parseInt(sl.dataset.idx), parseInt(sl.value)), 120);
     });
   });
+  if(!fanTimer){ fetchFanStatus(); fanTimer=setInterval(fetchFanStatus, 2000); }
 }
 
 function showBoardEdit(){ let b=document.getElementById('boardEditBox'); if(b) b.style.display='block'; }

@@ -1,6 +1,6 @@
 # nasdash
 
-**当前版本：v1.6.4** · [下载最新 fpk](https://github.com/han951meng/nasdash/releases/latest)
+**当前版本：v1.6.5** · [下载最新 fpk](https://github.com/han951meng/nasdash/releases/latest)
 
 飞牛OS（fnOS）NAS 硬件监控面板 —— FPK 应用包
 
@@ -107,6 +107,9 @@
 - 双磁臂（双执行器）硬盘：LSI 阵列卡会将其每个执行器作为独立盘暴露给系统（如各 7T），面板在阵列卡页显示整盘标称容量（如 14T）并标注每执行器容量
 
 ## 更新日志
+
+### v1.6.5
+- 风扇控制大改（参考 FanControlServer 体验）：后端常驻缓变线程，调转速改为「设目标 + 平滑过渡」，不再瞬间拉满导致突然全速；新增轻量 `/api/fan/status` 接口，风扇面板独立 2 秒实时轮询，拖动后能实时看到转速数字慢慢下降；恢复自动时若 FanControlServer 在运行则交还它，否则由 nasdash 自带保守温控曲线接管。
 
 ### v1.6.4
 - HBA 直通卡页面说明优化：明确告知 HBA 芯片无独立温度传感器（不显示卡温属正常现象，并非面板 bug）；并在概览页 HBA 卡片新增「温度：卡无传感器 · 见硬盘 SMART」提示，避免用户误以为面板异常
