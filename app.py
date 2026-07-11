@@ -210,6 +210,32 @@ def fan_smooth_loop():
 _fan_thread = _threading.Thread(target=fan_smooth_loop, daemon=True, name="fan-smooth")
 _fan_thread.start()
 
+# ===================== 风扇标注（用户可编辑名称/电压，按安装实例持久化）=====================
+# 标注与硬件无关：只存 (hwmon, idx) -> {name, voltage}，不写死任何机型，对所有用户（含 IT87）安全。
+FAN_LABELS_FILE = os.path.join(APP_DIR, "fan_labels.json")
+_FAN_VOLT_ALLOWED = ("12V", "5V", "未知", "")
+
+def _load_fan_labels():
+    try:
+        with open(FAN_LABELS_FILE, "r", encoding="utf-8") as f:
+            d = json.load(f)
+            if isinstance(d, dict):
+                return d
+    except Exception:
+        pass
+    return {}
+
+def _save_fan_labels(d):
+    try:
+        with open(FAN_LABELS_FILE, "w", encoding="utf-8") as f:
+            json.dump(d, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception:
+        return False
+
+def _fan_label_for(hwmon, idx):
+    return _load_fan_labels().get(f"{hwmon}::{idx}", {})
+
 # ===================== 采集：阵列卡 =====================
 def detect_storage_controllers():
     """用 lspci 检测存储控制器，区分 MegaRAID(IR) 与 HBA(IT) 直通卡"""
@@ -1045,8 +1071,11 @@ def get_system():
                             display_name = fi.get("name", default_name)
                             mode = fi.get("mode", "")
                             pwm = fi.get("pwm")
+                            _lab = _fan_label_for(fi.get("hwmon", ""), fi.get("idx", 0))
                             d["sensors"]["fans"].append({
                                 "name": display_name,
+                                "label": _lab.get("name", ""),
+                                "voltage": _lab.get("voltage", ""),
                                 "rpm": int(fv),
                                 "stopped": fv < 1,
                                 "mode": mode,
@@ -1460,6 +1489,7 @@ def api_fan_status():
     """轻量风扇状态：供前端高频轮询，实时显示转速/当前占空比/目标（常驻线程 2s tick）"""
     import glob as _glob
     fans = []
+    labels = _load_fan_labels()
     fc_raw = run("cat /vol2/@appconf/FanControlServer/config.json 2>/dev/null", 3)
     names = {}
     if fc_raw:
@@ -1499,6 +1529,8 @@ def api_fan_status():
                 target_pct = round(tcfg["target"] / 255 * 100)
             fans.append({
                 "name": names.get(_fi, f"风扇{_fi}"),
+                "label": labels.get(f"{_hp}::{_fi}", {}).get("name", ""),
+                "voltage": labels.get(f"{_hp}::{_fi}", {}).get("voltage", ""),
                 "idx": _fi, "hwmon": _hp,
                 "rpm": rpm, "pwm": pwm_pct,
                 "mode": cur_mode,
@@ -1507,6 +1539,43 @@ def api_fan_status():
             })
         break
     return jsonify({"fans": fans})
+
+
+@app.route("/api/fan/labels", methods=["GET"])
+def api_fan_labels_get():
+    """返回用户标注的风扇名称/电压：key="hwmon::idx" -> {"name","voltage"}"""
+    return jsonify(_load_fan_labels())
+
+
+@app.route("/api/fan/labels", methods=["POST"])
+def api_fan_labels_post():
+    """保存风扇标注（整体覆盖）。body: {"hwmon::idx": {"name":"...","voltage":"12V"}, ...}"""
+    try:
+        data = request.get_json(force=True) or {}
+    except Exception:
+        return jsonify({"ok": False, "error": "bad json"}), 400
+    clean = {}
+    for k, v in data.items():
+        if not isinstance(k, str) or "::" not in k:
+            continue
+        hwmon, idx = k.split("::", 1)
+        # 安全：仅允许本机 hwmon 路径 + 合法 idx，防止注入
+        if not hwmon.startswith("/sys/class/hwmon/hwmon"):
+            continue
+        try:
+            int(idx)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(v, dict):
+            continue
+        name = str(v.get("name", ""))[:40]
+        volt = v.get("voltage", "")
+        if volt not in _FAN_VOLT_ALLOWED:
+            volt = "未知"
+        clean[k] = {"name": name, "voltage": volt}
+    if _save_fan_labels(clean):
+        return jsonify({"ok": True})
+    return jsonify({"ok": False, "error": "save failed"}), 500
 
 
 @app.route("/api/version")
@@ -1675,8 +1744,15 @@ HTML = r"""<!DOCTYPE html>
   .fan-global-state{font-size:13px;color:var(--muted);margin-left:auto}
   .fan-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px}
   .fan-card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px}
-  .fan-card-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+  .fan-card-head{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:6px}
   .fan-card-name{font-size:14px;font-weight:600}
+  .fan-label-input{flex:1 1 140px;min-width:120px;padding:5px 8px;font-size:13px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text)}
+  .fan-label-input:focus{outline:none;border-color:var(--blue)}
+  .fan-label-save{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap}
+  .fan-volt-select{padding:4px 6px;font-size:12px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text)}
+  .fan-volt-select:focus{outline:none;border-color:var(--blue)}
+  .fan-label-state{font-size:12px;color:var(--green)}
+  .volt-badge{display:inline-block;font-size:11px;font-weight:600;padding:1px 7px;border-radius:10px;background:var(--bg);color:var(--muted);border:1px solid var(--border);margin-left:4px}
   .fan-rpm{font-size:26px;font-weight:700;color:var(--blue);line-height:1.1}
   .fan-rpm small{font-size:12px;color:var(--muted);font-weight:400;margin-left:4px}
   .fan-speed-bar{height:8px;background:var(--bg);border-radius:5px;overflow:hidden;margin:10px 0 4px}
@@ -1883,6 +1959,8 @@ function renderDisks(disks){
   }).join('')+'</div>';
 }
 
+function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
 function renderSystem(s){
   let memPct = s.memory.percent;
   let memColor = memPct>85?'var(--red)':memPct>70?'var(--orange)':'var(--green)';
@@ -1898,8 +1976,10 @@ function renderSystem(s){
     let rpmStr = stopped ? '0 RPM (停转)' : f.rpm + ' RPM';
     let modeMap = {'curve':'曲线温控','manual':'手动控制','auto':'自动温控','off':'关闭'};
     let modeStr = f.mode ? ` <span class="pill ${f.mode==='curve'||f.mode==='auto'?'b-info':'b-warn'}">${modeMap[f.mode]||f.mode}</span>` : '';
+    let voltBadge = f.voltage ? ` <span class="volt-badge">${esc(f.voltage)}</span>` : '';
     let pwmStr = (f.pwm!=null) ? ` · PWM ${f.pwm}%` : '';
-    return `<div class="kv"><span class="k">${f.name}${modeStr}</span><span class="v" style="color:${color}">${rpmStr}${pwmStr}</span></div>`;
+    let fanName = esc(f.label || f.name);
+    return `<div class="kv"><span class="k">${fanName}${voltBadge}${modeStr}</span><span class="v" style="color:${color}">${rpmStr}${pwmStr}</span></div>`;
   }).join('');
   let voltsHtml = (sens.voltages||[]).map(v=>`<div class="kv"><span class="k">${v.name}</span><span class="v">${v.value} V</span></div>`).join('');
   let loadColor = (l)=>parseFloat(l)>s.cpu_threads?'var(--red)':parseFloat(l)>s.cpu_threads*0.7?'var(--orange)':'var(--green)';
@@ -1968,8 +2048,17 @@ function renderFanControl(){
     let pct=(f.pwm!=null)?f.pwm:50;
     return `<div class="fan-card" id="${id}-box">
       <div class="fan-card-head">
-        <span class="fan-card-name">${f.name}</span>
+        <input class="fan-label-input" id="${id}-label" value="${esc(f.label||f.name||'')}" placeholder="自定义名称（如 CPU 风扇）" maxlength="40">
         <span class="pill ${f.mode==='curve'||f.mode==='auto'?'b-info':'b-warn'}">${modeMap[f.mode]||f.mode||''}</span>
+        <span class="fan-label-save">
+          <select class="fan-volt-select" id="${id}-volt" title="风扇供电电压">
+            <option value="12V" ${f.voltage==='12V'?'selected':''}>12V</option>
+            <option value="5V" ${f.voltage==='5V'?'selected':''}>5V</option>
+            <option value="未知" ${(!f.voltage||f.voltage==='未知')?'selected':''}>未知</option>
+          </select>
+          <button class="btn-mini" onclick="saveFanLabel('${f.hwmon}', ${f.idx})">保存标注</button>
+          <span id="${id}-label-state" class="fan-label-state"></span>
+        </span>
       </div>
       <div class="fan-rpm"><span id="${id}-rpm">${f.rpm||0}</span><small>RPM</small></div>
       <div class="fan-speed-bar"><div class="fan-speed-fill" id="${id}-bar" style="width:${pct}%"></div></div>
@@ -2083,6 +2172,21 @@ async function setFanAuto(hwmon, idx){
     let j=await r.json();
     let owner=j.owner==='ext_service'?'（已交还系统风扇服务）':'（nasdash 接管温控）';
     if(st) st.textContent=j.ok?('已恢复自动 '+owner):('失败：'+(j.error||''));
+  }catch(e){ if(st) st.textContent='请求失败'; }
+}
+async function saveFanLabel(hwmon, idx){
+  let id='fan'+idx;
+  let labInp=document.getElementById(id+'-label');
+  let voltSel=document.getElementById(id+'-volt');
+  let st=document.getElementById(id+'-label-state');
+  if(!labInp||!voltSel) return;
+  try{
+    let r=await fetch('/api/fan/labels'); let cur=await r.json();
+    cur[hwmon+'::'+idx]={name:labInp.value.trim(), voltage:voltSel.value};
+    let r2=await fetch('/api/fan/labels',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cur)});
+    let j=await r2.json();
+    if(st) st.textContent=j.ok?'已保存 ✓':'失败';
+    if(j.ok){ loadData(); }
   }catch(e){ if(st) st.textContent='请求失败'; }
 }
 function bindFanSliders(){
