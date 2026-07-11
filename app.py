@@ -550,12 +550,6 @@ def get_disks():
                 disk["model"] = m.group(1).strip() if m else ""
                 m = re.search(r"Serial number:\s*(\S+)", smart_out)
                 disk["serial"] = m.group(1) if m else ""
-                # SAS 盘从 smartctl 拿容量（lsblk 对阵列卡后的盘可能返回 0）
-                m = re.search(r"User Capacity:\s*([\d,]+)\s*bytes", smart_out)
-                if m:
-                    cap = int(m.group(1).replace(",", ""))
-                    gb = cap / 1e9
-                    disk["size"] = f"{gb/1000:.1f}T" if gb >= 1000 else f"{gb:.0f}G"
             elif "overall-health" in smart_out:
                 disk["type"] = "ata"
                 disk.update(parse_ata_smart(smart_out))
@@ -566,10 +560,23 @@ def get_disks():
                 m = re.search(r"Serial Number:\s*(\S+)", smart_out)
                 disk["serial"] = m.group(1) if m else ""
                 disk["vendor"] = disk["model"].split()[0] if disk["model"] else ""
+        # 容量兜底：lsblk 返回 0 / 缺失 / 解析失败时，从 smartctl 取 User Capacity（SAS/ATA 通用）
+        if smart_out and (disk["size"] in ("0G", "0.0G", "?", "0") or info.get("size_b") in ("0", "")):
+            m = re.search(r"User Capacity:\s*([\d,]+)\s*bytes", smart_out)
+            if m:
+                cap = int(m.group(1).replace(",", ""))
+                gb = cap / 1e9
+                disk["size"] = f"{gb/1000:.1f}T" if gb >= 1000 else f"{gb:.0f}G"
         b, f = disk_brand_and_feature(disk["model"])
         disk["brand"] = b
         disk["feature"] = f
         disk["rpm"] = rpm_map.get(disk.get("serial", "").upper(), "") if disk.get("serial") else ""
+        # 类型兜底：lsblk ROTA 不可靠时，用 smartctl Rotation Rate 覆盖 HDD/SSD
+        if disk.get("rpm"):
+            if disk["rpm"] == "固态(SSD)":
+                disk["rota"] = "0"
+            elif "rpm" in disk["rpm"].lower():
+                disk["rota"] = "1"
         disk["health_ok"] = disk["health"].upper() in ("OK", "PASSED")
         disks.append(disk)
     return disks
