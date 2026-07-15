@@ -14,15 +14,22 @@ app = Flask(__name__)
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 BOARD_OVERRIDE_FILE = os.path.join(APP_DIR, "board_override.txt")
 
-# 版本号单一来源：从同目录 manifest 读取，避免 UI 与 manifest 不同步（曾出现 UI 仍显示 v1.6.0）
+# 版本号单一来源：fnOS 标准安装时 manifest 不在 APP_DIR（APP_DIR 只有 app.tgz 内容），
+# 而是在 /var/apps/<appid>/manifest。两个位置都查，最后才回退硬编码值（曾因只查 APP_DIR 导致所有标准安装都显示 v1.6.2）。
 def _app_version():
-    try:
-        with open(os.path.join(APP_DIR, "manifest")) as f:
-            m = re.search(r"^version\s*=\s*(\S+)", f.read(), re.M)
-            if m:
-                return "v" + m.group(1).strip()
-    except Exception:
-        pass
+    appid = os.path.basename(APP_DIR)  # 如 com.dashboard.nasdash
+    candidates = [
+        os.path.join("/var/apps", appid, "manifest"),
+        os.path.join(APP_DIR, "manifest"),
+    ]
+    for path in candidates:
+        try:
+            with open(path) as f:
+                m = re.search(r"^version\s*=\s*(\S+)", f.read(), re.M)
+                if m:
+                    return "v" + m.group(1).strip()
+        except Exception:
+            pass
     return "v1.6.2"
 APP_VERSION = _app_version()
 
@@ -136,8 +143,11 @@ def _fan_write_raw(hwmon, idx, raw):
         return False
 
 def _fan_ext_service_running():
-    # 检测系统风扇服务是否在跑（恢复自动时优先交还）
-    return bool(run("pgrep -f fancontrolserver 2>/dev/null", 2).strip())
+    # 检测系统风扇服务（FanControlServer）是否在跑（恢复自动时优先交还）。
+    # 注意：pgrep -f 会把「模式串出现在自身命令行」也匹配上 → 永远返回 True（假阳性），
+    # 导致没装 FCS 的机器也误判为已安装、把风扇错误交还给主板原生自动（SYS_FAN2 等口曲线偏激进会狂转）。
+    # 用 [f]an... 括号技巧避免自匹配。
+    return bool(run("pgrep -f '[f]ancontrolserver' 2>/dev/null", 2).strip())
 
 def _fan_read_cpu_temp():
     try:
@@ -146,8 +156,10 @@ def _fan_read_cpu_temp():
         for chip, entries in j.items():
             if chip.startswith("coretemp"):
                 for ename, fields in entries.items():
-                    if "Package" in ename and isinstance(fields, dict) and "temp_input" in fields:
-                        return float(fields["temp_input"])
+                    if isinstance(fields, dict) and "Package" in ename:
+                        for k, v in fields.items():
+                            if k.startswith("temp") and k.endswith("_input"):
+                                return float(v)
     except Exception:
         pass
     return None
@@ -163,18 +175,22 @@ def _fan_auto_pwm(cpu_temp):
     # nasdash 自带保守温控曲线（系统风扇服务不在时接管）
     pts = [(45, 90), (60, 140), (75, 204), (80, 255)]
     if cpu_temp is None:
-        return pts[0][1]
-    if cpu_temp <= pts[0][0]:
-        return pts[0][1]
-    if cpu_temp >= pts[-1][0]:
-        return pts[-1][1]
-    for i in range(len(pts) - 1):
-        t0, p0 = pts[i]
-        t1, p1 = pts[i + 1]
-        if cpu_temp <= t1:
-            r = (cpu_temp - t0) / (t1 - t0)
-            return int(p0 + r * (p1 - p0))
-    return pts[-1][1]
+        raw = pts[0][1]
+    elif cpu_temp <= pts[0][0]:
+        raw = pts[0][1]
+    elif cpu_temp >= pts[-1][0]:
+        raw = pts[-1][1]
+    else:
+        raw = pts[0][1]
+        for i in range(len(pts) - 1):
+            t0, p0 = pts[i]
+            t1, p1 = pts[i + 1]
+            if cpu_temp <= t1:
+                r = (cpu_temp - t0) / (t1 - t0)
+                raw = int(p0 + r * (p1 - p0))
+                break
+    # clamp 30%~70%（raw 76~178），防止 auto 狂转（旧机 IT87 曾因此满速）
+    return max(76, min(178, raw))
 
 def _fan_smooth_step(hwmon, idx, target):
     cur = _fan_read_raw(hwmon, idx)
@@ -194,7 +210,43 @@ def fan_smooth_loop():
         try:
             with FAN_LOCK:
                 items = list(FAN_TARGETS.items())
+            # 受温控接管的风扇集合（sys_temp 与 disk_temp 共用，避免重复控）
+            controlled = set()
+            # 主板/CPU 温控（sys_temp）：优先级最高，先接管
+            st = _load_fan_sys_temp()
+            if st.get("enabled"):
+                T = _fan_read_sys_temp(st.get("source", "cpu"))
+                action, target = _fan_sys_temp_decision(T, st)
+                cf = st.get("controlled_fans", "all")
+                for (hwmon, idx), cfg in items:
+                    if cf != "all" and [hwmon, idx] not in cf:
+                        continue
+                    controlled.add((hwmon, idx))
+                    if action == "control" and target is not None:
+                        _fan_smooth_step(hwmon, idx, target)
+                    elif action == "release":
+                        _fan_release_auto(hwmon, idx)
+                    # "hold" → 已交还自动，不再写入（避免与主板/内核抢控）
+            # 硬盘温度控制（disk_temp）：接管未被 sys_temp 占用的受控风扇
+            dt = _load_fan_disk_temp()
+            if dt.get("enabled") and dt.get("disks"):
+                states = get_disk_temps(dt["disks"])
+                action, target = _fan_disk_temp_decision(states, dt)
+                cf = dt.get("controlled_fans", "all")
+                for (hwmon, idx), cfg in items:
+                    if (hwmon, idx) in controlled:
+                        continue  # 已被 sys_temp 接管
+                    if cf != "all" and [hwmon, idx] not in cf:
+                        continue
+                    controlled.add((hwmon, idx))
+                    if action == "control" and target is not None:
+                        _fan_smooth_step(hwmon, idx, target)
+                    elif action == "release":
+                        _fan_release_auto(hwmon, idx)
+                    # "hold" → 已交还自动，不再写入
             for (hwmon, idx), cfg in items:
+                if (hwmon, idx) in controlled:
+                    continue  # 已被温控接管
                 if cfg.get("mode") == "auto":
                     ct = _fan_cpu_temp_cached()
                     _fan_smooth_step(hwmon, idx, _fan_auto_pwm(ct))
@@ -235,6 +287,277 @@ def _save_fan_labels(d):
 
 def _fan_label_for(hwmon, idx):
     return _load_fan_labels().get(f"{hwmon}::{idx}", {})
+
+# ===================== 风扇：硬盘温度控制（disk_temp）=====================
+# 论坛需求（服务器/硬盘多/风扇多场景）：用指定硬盘温度驱动风扇——
+# 如设置若干硬盘，40°C 开转、60°C 全速、硬盘休眠则停转。nasdash 增量支持，不替换现有 IT87/NCT 温控。
+FAN_DISK_TEMP_FILE = os.path.join(APP_DIR, "fan_disk_temp.json")
+
+def _load_fan_disk_temp():
+    """读取硬盘温度控风扇配置（缺省关闭）。"""
+    defaults = {
+        "enabled": False,
+        "disks": [],                 # 监控的硬盘 device，如 ["/dev/sda","/dev/sdb"]
+        "start_temp": 40,            # 低于此温度 → 停转（开转阈值）；盘温重新 ≥ 此值才重新接管
+        "full_temp": 60,             # 达到此温度 → 全速（max_pwm，默认 100=满转）
+        "min_pwm": 30,               # 开转时最低占空比（%）
+        "max_pwm": 100,              # 全速占空比（%）；full_temp 档即此值，默认 100=全速
+        "recover_temp": 35,          # 盘温低于此值 → 受控风扇交还主板/内核自动控速（滞回，须 < start_temp）
+        "sleep_stop": True,          # 所有监控盘休眠 → 风扇停转
+        "controlled_fans": "all",    # "all" 或 [[hwmon,idx],...]
+    }
+    try:
+        with open(FAN_DISK_TEMP_FILE, "r", encoding="utf-8") as f:
+            d = json.load(f)
+        if isinstance(d, dict):
+            for k in defaults:
+                if k in d:
+                    defaults[k] = d[k]
+    except Exception:
+        pass
+    return defaults
+
+def _save_fan_disk_temp(cfg):
+    try:
+        with open(FAN_DISK_TEMP_FILE, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception:
+        return False
+
+# ===================== 风扇：主板/CPU 温度控制（sys_temp）=====================
+# 与 disk_temp 对称的另一套「温度曲线控速」：温度源来自 CPU 封装温度或主板温度，
+# 同样用 start/full/recover/min/max + 受控风扇 的滞回曲线。两套互不干扰，可分别接管不同风扇
+# （如 CPU 风扇交给 sys_temp 按 CPU 温度控，机箱风扇交给 disk_temp 按硬盘温度控）。
+FAN_SYS_TEMP_FILE = os.path.join(APP_DIR, "fan_sys_temp.json")
+
+def _load_fan_sys_temp():
+    """读取主板/CPU 温度控风扇配置（缺省关闭）。"""
+    defaults = {
+        "enabled": False,
+        "source": "cpu",             # cpu=CPU 封装温度(coretemp Package)；mb=主板温度(it87/nct systin)
+        "start_temp": 45,            # 低于此温度 → 停转（开转阈值）；温度重新 ≥ 此值才重新接管
+        "full_temp": 70,             # 达到此温度 → 全速（max_pwm，默认 100=满转）
+        "min_pwm": 30,               # 开转时最低占空比（%）
+        "max_pwm": 100,              # 全速占空比（%）；full_temp 档即此值，默认 100=全速
+        "recover_temp": 40,          # 温度低于此值 → 受控风扇交还主板/内核自动控速（滞回，须 < start_temp）
+        "controlled_fans": "all",    # "all" 或 [[hwmon,idx],...]
+    }
+    try:
+        with open(FAN_SYS_TEMP_FILE, "r", encoding="utf-8") as f:
+            d = json.load(f)
+        if isinstance(d, dict):
+            for k in defaults:
+                if k in d:
+                    defaults[k] = d[k]
+    except Exception:
+        pass
+    return defaults
+
+def _save_fan_sys_temp(cfg):
+    try:
+        with open(FAN_SYS_TEMP_FILE, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception:
+        return False
+
+def _fan_read_sys_temp(source):
+    """读取主板/CPU 温控的温度源单值（°C）。
+    source='cpu' → CPU 封装温度（coretemp Package）；
+    source='mb'  → 主板温度（it87/nct 芯片 systin 等，排除 coretemp 后取最高，回落取所有传感器最高）。
+    读不到返回 None。"""
+    source = (source or "cpu").lower()
+    try:
+        out = run("sensors -j 2>/dev/null", 5)
+        j = json.loads(out)
+        temps = []
+        for chip, entries in j.items():
+            if not isinstance(entries, dict):
+                continue
+            for _ename, fields in entries.items():
+                if isinstance(fields, dict):
+                    for k, v in fields.items():
+                        if k.startswith("temp") and k.endswith("_input"):
+                            try:
+                                temps.append((chip, float(v)))
+                            except (TypeError, ValueError):
+                                pass
+        if temps:
+            if source == "mb":
+                mb = [t for t in temps if not t[0].startswith("coretemp")]
+                if mb:
+                    return max(t[1] for t in mb)
+                return max(t[1] for t in temps)  # 回落
+            else:
+                cpu = [t for t in temps if t[0].startswith("coretemp")]
+                if cpu:
+                    return max(t[1] for t in cpu)
+                return max(t[1] for t in temps)  # 回落
+    except Exception:
+        pass
+    return None
+
+def _fan_sys_temp_pwm(T, cfg):
+    """按单值温度 T 算目标 raw(0~255)。T<start→0；start≤T<full→min~max 线性；T≥full→max。"""
+    start = float(cfg.get("start_temp", 45))
+    full = float(cfg.get("full_temp", 70))
+    minp = float(cfg.get("min_pwm", 30))
+    maxp = float(cfg.get("max_pwm", 100))
+    if T is None:
+        return None
+    if T < start:
+        return 0
+    if T >= full:
+        return round(maxp / 100 * 255)
+    r = (T - start) / (full - start)
+    raw = minp + r * (maxp - minp)
+    return round(raw / 100 * 255)
+
+# 主板/CPU 温控滞回状态：None=未初始化, True=nasdash 接管控速, False=已交还主板自动
+_st_engaged = {"v": None}
+
+def _fan_sys_temp_decision(T, cfg):
+    """主板/CPU 温控滞回状态机。返回 (action, pwm)：
+      "control" → 按曲线接管，pwm 为目标 raw
+      "release" → 温度低于 recover_temp（或读不到温度）→ 交还自动
+      "hold"    → 已交还且温度仍在滞回区(recover≤T<start)→ 保持释放、不写
+    滞回：接管后须 T<recover 才释放；释放后须 T≥start 才重新接管（避免临界抖动）。"""
+    global _st_engaged
+    start = float(cfg.get("start_temp", 45))
+    recover = float(cfg.get("recover_temp", start - 5))
+    if recover >= start:
+        recover = start - 5  # 安全约束：recover 必须 < start
+    if T is None:
+        _st_engaged["v"] = False
+        return ("release", None)
+    if _st_engaged["v"] is None:
+        _st_engaged["v"] = (T >= start)
+    if _st_engaged["v"]:
+        if T < recover:
+            _st_engaged["v"] = False
+            return ("release", None)
+        return ("control", _fan_sys_temp_pwm(T, cfg))
+    else:
+        if T >= start:
+            _st_engaged["v"] = True
+            return ("control", _fan_sys_temp_pwm(T, cfg))
+        return ("hold", None)
+
+def get_disk_temps(devs):
+    """读指定硬盘温度。sdX 用 smartctl -n standby（不唤醒休眠盘）；
+    NVMe 不支持 -n standby，直接读温度（NVMe 一般不停机休眠）。
+    返回 {dev: {"temp":int|None, "asleep":bool|None}}。"""
+    states = {}
+    for dev in devs or []:
+        try:
+            if dev.startswith("/dev/nvme"):
+                out = sudo(f"{SMARTCTL} -A {dev} 2>/dev/null", 8)
+                asleep = False
+            else:
+                out = sudo(f"{SMARTCTL} -n standby -A {dev} 2>/dev/null", 8)
+                asleep = False
+                if out and "STANDBY" in out.upper():
+                    states[dev] = {"temp": None, "asleep": True}
+                    continue
+            if not out:
+                states[dev] = {"temp": None, "asleep": None}
+                continue
+            temp = None
+            for line in out.splitlines():
+                if "Temperature_Celsius" in line or "Airflow_Temperature" in line:
+                    m = re.search(r"-\s*(\d+)", line)
+                    if m:
+                        temp = int(m.group(1))
+                        break
+                elif "Temperature:" in line:
+                    m = re.search(r"Temperature:\s*(\d+)", line)
+                    if m:
+                        t = int(m.group(1))
+                        if t > 200:  # NVMe 偶报 Kelvin，转 Celsius
+                            t = t - 273
+                        temp = t
+                        break
+            states[dev] = {"temp": temp, "asleep": asleep}
+        except Exception:
+            states[dev] = {"temp": None, "asleep": None}
+    return states
+
+def _fan_disk_temp_pwm(states, cfg):
+    """按硬盘温度算目标 raw(0~255)。
+    - 所有监控盘休眠且 sleep_stop → 0（停转）
+    - 取最热盘温度 T：T<start → 0；start≤T<full → min~max 线性；T≥full → max
+    """
+    start = float(cfg.get("start_temp", 40))
+    full = float(cfg.get("full_temp", 60))
+    minp = float(cfg.get("min_pwm", 30))
+    maxp = float(cfg.get("max_pwm", 70))
+    sleep_stop = bool(cfg.get("sleep_stop", True))
+    valid = [s for s in (states or {}).values() if isinstance(s, dict)]
+    if not valid:
+        return None
+    if sleep_stop and all(s.get("asleep") for s in valid):
+        return 0
+    temps = [s["temp"] for s in valid if isinstance(s.get("temp"), (int, float))]
+    if not temps:
+        return round(minp / 100 * 255)
+    T = max(temps)
+    if T < start:
+        return 0
+    if T >= full:
+        return round(maxp / 100 * 255)
+    r = (T - start) / (full - start)
+    raw = minp + r * (maxp - minp)
+    return round(raw / 100 * 255)
+
+# 硬盘温控滞回状态：None=未初始化, True=nasdash 接管控速, False=已交还主板自动
+_dt_engaged = {"v": None}
+
+def _fan_release_auto(hwmon, idx):
+    """把风扇交还主板/内核自动控速（pwm_enable=2）。FCS 若存在会重新接管。"""
+    try:
+        with open(f"{hwmon}/pwm{idx}_enable", "w") as f:
+            f.write("2")
+        return True
+    except Exception:
+        return False
+
+def _fan_disk_temp_decision(states, cfg):
+    """硬盘温控滞回状态机。返回 (action, pwm)：
+      "control" → 按曲线接管，pwm 为目标 raw
+      "release" → 盘温低于 recover_temp（或休眠/读不到温度）→ 交还自动
+      "hold"    → 已交还且盘温仍在滞回区(recover≤T<start)→ 保持释放、不写
+    滞回：接管后须 T<recover 才释放；释放后须 T≥start 才重新接管（避免临界抖动）。"""
+    global _dt_engaged
+    start = float(cfg.get("start_temp", 40))
+    recover = float(cfg.get("recover_temp", start - 5))
+    if recover >= start:
+        recover = start - 5  # 安全约束：recover 必须 < start
+    valid = [s for s in (states or {}).values() if isinstance(s, dict)]
+    if not valid:
+        _dt_engaged["v"] = False
+        return ("release", None)
+    sleep_stop = bool(cfg.get("sleep_stop", True))
+    if sleep_stop and all(s.get("asleep") for s in valid):
+        _dt_engaged["v"] = False
+        return ("release", None)
+    temps = [s["temp"] for s in valid if isinstance(s.get("temp"), (int, float))]
+    if not temps:
+        _dt_engaged["v"] = False
+        return ("release", None)
+    T = max(temps)
+    if _dt_engaged["v"] is None:
+        _dt_engaged["v"] = (T >= start)
+    if _dt_engaged["v"]:
+        if T < recover:
+            _dt_engaged["v"] = False
+            return ("release", None)
+        return ("control", _fan_disk_temp_pwm(states, cfg))
+    else:
+        if T >= start:
+            _dt_engaged["v"] = True
+            return ("control", _fan_disk_temp_pwm(states, cfg))
+        return ("hold", None)
 
 # ===================== 采集：阵列卡 =====================
 def detect_storage_controllers():
@@ -513,9 +836,9 @@ def parse_ata_smart(text):
             aid, name = m.group(1), m.group(2)
             val, worst, thresh = m.group(3), m.group(4), m.group(5)
             raw_str = m.group(6)
-            # raw_value 取第一个数字（温度等可能是 "41 (Min/Max -1/56)"）
-            num_m = re.match(r"\s*(\d+)", raw_str)
-            raw_num = int(num_m.group(1)) if num_m else 0
+            # raw_value 取第一个数字（温度等可能是 "41 (Min/Max -1/56)"；某些版本 smartctl 会对大数加逗号）
+            num_m = re.match(r"\s*([\d,]+)", raw_str)
+            raw_num = int(num_m.group(1).replace(",", "")) if num_m else 0
             attrs[aid] = {"name": name, "value": val, "worst": worst, "thresh": thresh, "raw": raw_str.strip()}
             if aid == "9":
                 d["power_on_hours"] = raw_num
@@ -534,17 +857,60 @@ def parse_ata_smart(text):
     d["attrs"] = attrs
     return d
 
+def parse_nvme_smart(text):
+    """解析 NVMe 盘 SMART（smartctl -a /dev/nvmeXnY）"""
+    d = {}
+    m = re.search(r"SMART overall-health self-assessment test result:\s*(\w+)", text)
+    d["health"] = m.group(1) if m else "UNKNOWN"
+    d["temp"] = None
+    d["power_on_hours"] = None
+    d["percentage_used"] = None
+    d["available_spare"] = None
+    d["critical_warning"] = "0"
+    d["data_units_read"] = None
+    d["data_units_written"] = None
+    # 温度：NVMe 可能报 Kelvin（>200 视为开尔文转摄氏）或 Celsius
+    m = re.search(r"Temperature:\s*(\d+)\s*Kelvin", text)
+    if m:
+        d["temp"] = int(m.group(1)) - 273
+    else:
+        m = re.search(r"Temperature:\s*(\d+)\s*Celsius", text)
+        if m:
+            d["temp"] = int(m.group(1))
+    m = re.search(r"Power On Hours:\s*([\d,]+)", text)
+    d["power_on_hours"] = int(m.group(1).replace(",", "")) if m else None
+    m = re.search(r"Percentage Used:\s*(\d+)%", text)
+    d["percentage_used"] = int(m.group(1)) if m else None
+    m = re.search(r"Available Spare:\s*(\d+)%", text)
+    d["available_spare"] = int(m.group(1)) if m else None
+    m = re.search(r"Critical Warning:\s*0x([0-9a-fA-F]+)", text)
+    d["critical_warning"] = m.group(1) if m else "0"
+    m = re.search(r"Data Units Read:\s*([\d,]+)(\s*\[[^\]]*\])?", text)
+    d["data_units_read"] = (m.group(1) + (m.group(2) or "")).strip() if m else None
+    m = re.search(r"Data Units Written:\s*([\d,]+)(\s*\[[^\]]*\])?", text)
+    d["data_units_written"] = (m.group(1) + (m.group(2) or "")).strip() if m else None
+    return d
+
 def get_disks():
-    """采集所有块设备 + SMART（以 ls /dev/sd? 拿盘名，smartctl 拿详情，不依赖 lsblk 字段对齐）"""
+    """采集所有块设备 + SMART（SD/SAS 用 ls /dev/sd?，NVMe 用 ls /dev/nvme?n?；smartctl 拿详情，不依赖 lsblk 字段对齐）"""
     disks = []
     out = run("ls /dev/sd? 2>/dev/null", 5)
     devnames = sorted(set(l.strip().split('/')[-1] for l in out.split()
                           if l.strip() and re.match(r"^sd[a-z]+$", l.strip().split('/')[-1])))
-    # lsblk 补充容量/rota/tran
+    # NVMe 命名空间（如 /dev/nvme0n1；控制器 /dev/nvme0 不匹配 n\d+，不会误纳入）
+    nvme_out = run("ls /dev/nvme?n? 2>/dev/null", 5)
+    for l in nvme_out.split():
+        n = l.strip().split('/')[-1]
+        if re.match(r"^nvme\d+n\d+$", n):
+            devnames.append(n)
+    devnames = sorted(set(devnames))
+    # lsblk 补充容量/rota/tran（-n 不打印表头，但仍防御性跳过首行若为表头）
     lsblk = run("lsblk -dn -b -o NAME,SIZE,ROTA,TRAN 2>/dev/null", 5)
     linfo = {}
-    for line in lsblk.strip().splitlines()[1:]:
+    for line in lsblk.strip().splitlines():
         p = line.split()
+        if not p or p[0].upper() == "NAME":
+            continue
         if len(p) >= 2:
             linfo[p[0]] = {"size_b": p[1], "rota": p[2] if len(p) > 2 else "?",
                            "tran": p[3] if len(p) > 3 else ""}
@@ -576,6 +942,15 @@ def get_disks():
                 disk["model"] = m.group(1).strip() if m else ""
                 m = re.search(r"Serial number:\s*(\S+)", smart_out)
                 disk["serial"] = m.group(1) if m else ""
+            elif "SMART/Health Information" in smart_out or ("Model Number:" in smart_out and "Namespace" in smart_out):
+                disk["type"] = "nvme"
+                disk["tran"] = "nvme"
+                disk["rota"] = "0"
+                disk.update(parse_nvme_smart(smart_out))
+                m = re.search(r"Model Number:\s*(.+)", smart_out)
+                disk["model"] = m.group(1).strip() if m else ""
+                m = re.search(r"Serial Number:\s*(\S+)", smart_out)
+                disk["serial"] = m.group(1) if m else ""
             elif "overall-health" in smart_out:
                 disk["type"] = "ata"
                 disk.update(parse_ata_smart(smart_out))
@@ -585,10 +960,14 @@ def get_disks():
                 disk["model"] = m.group(1).strip() if m else ""
                 m = re.search(r"Serial Number:\s*(\S+)", smart_out)
                 disk["serial"] = m.group(1) if m else ""
-                disk["vendor"] = disk["model"].split()[0] if disk["model"] else ""
-        # 容量兜底：lsblk 返回 0 / 缺失 / 解析失败时，从 smartctl 取 User Capacity（SAS/ATA 通用）
+        # 容量兜底：lsblk 返回 0 / 缺失 / 解析失败时，从 smartctl 取容量
+        # ATA/SAS 用 "User Capacity"，NVMe 用 "Namespace 1 Size/Capacity" / "Total NVM Capacity"
         if smart_out and (disk["size"] in ("0G", "0.0G", "?", "0") or info.get("size_b") in ("0", "")):
             m = re.search(r"User Capacity:\s*([\d,]+)\s*bytes", smart_out)
+            if not m:
+                m = re.search(r"Namespace 1 Size/Capacity:\s*([\d,]+)", smart_out)
+            if not m:
+                m = re.search(r"Total NVM Capacity:\s*([\d,]+)", smart_out)
             if m:
                 cap = int(m.group(1).replace(",", ""))
                 gb = cap / 1e9
@@ -1490,6 +1869,12 @@ def api_fan_status():
     import glob as _glob
     fans = []
     labels = _load_fan_labels()
+    _dt = _load_fan_disk_temp()
+    _dt_active = bool(_dt.get("enabled")) and bool(_dt.get("disks"))
+    _dt_cf = _dt.get("controlled_fans", "all")
+    _st = _load_fan_sys_temp()
+    _st_active = bool(_st.get("enabled"))
+    _st_cf = _st.get("controlled_fans", "all")
     fc_raw = run("cat /vol2/@appconf/FanControlServer/config.json 2>/dev/null", 3)
     names = {}
     if fc_raw:
@@ -1521,6 +1906,9 @@ def api_fan_status():
                 pwm_raw = None
             pwm_pct = round(pwm_raw / 255 * 100) if pwm_raw is not None else None
             cur_mode = "manual" if _pe == "1" else "auto" if _pe == "2" else "off"
+            _is_st = bool(_st_active) and (_st_cf == "all" or [_hp, _fi] in _st_cf)
+            _is_dt = (not _is_st) and bool(_dt_active) and (_dt_cf == "all" or [_hp, _fi] in _dt_cf)
+            mode = "sys_temp" if _is_st else ("disk_temp" if _is_dt else cur_mode)
             key = (_hp, _fi)
             target_pct = None
             with FAN_LOCK:
@@ -1533,12 +1921,164 @@ def api_fan_status():
                 "voltage": labels.get(f"{_hp}::{_fi}", {}).get("voltage", ""),
                 "idx": _fi, "hwmon": _hp,
                 "rpm": rpm, "pwm": pwm_pct,
-                "mode": cur_mode,
+                "mode": mode,
                 "target_pct": target_pct,
                 "controllable": True,
             })
         break
     return jsonify({"fans": fans})
+
+
+@app.route("/api/fan/disk_temp")
+def api_fan_disk_temp_get():
+    """读取硬盘温度控风扇配置 + 实时监控盘温度/休眠 + 计算所得目标PWM"""
+    cfg = _load_fan_disk_temp()
+    devs = cfg.get("disks", [])
+    states = get_disk_temps(devs) if devs else {}
+    disks_out = [{
+        "dev": dev,
+        "temp": states.get(dev, {}).get("temp"),
+        "asleep": states.get(dev, {}).get("asleep"),
+    } for dev in devs]
+    target = _fan_disk_temp_pwm(states, cfg)
+    return jsonify({
+        "config": cfg,
+        "disks": disks_out,
+        "computed_pwm": round(target / 255 * 100) if target is not None else None,
+        "computed_raw": target,
+    })
+
+
+@app.route("/api/fan/disk_temp", methods=["POST"])
+def api_fan_disk_temp_set():
+    data = request.get_json(force=True, silent=True) or {}
+    cfg = _load_fan_disk_temp()
+    if "enabled" in data:
+        cfg["enabled"] = bool(data["enabled"])
+    if "disks" in data:
+        if not isinstance(data["disks"], list):
+            return jsonify({"ok": False, "error": "disks 需为数组"}), 400
+        norm = []
+        for d in data["disks"]:
+            # 前端勾选值可能是短名（sda / nvme0n1），也可能是已带 /dev/ 的全路径
+            devname = str(d["dev"] if isinstance(d, dict) and "dev" in d else d)
+            dd = devname if devname.startswith("/dev/") else "/dev/" + devname
+            if not os.path.exists(dd):
+                return jsonify({"ok": False, "error": "设备不存在: " + dd}), 400
+            norm.append(dd)
+        cfg["disks"] = norm
+    for k in ("start_temp", "full_temp", "min_pwm", "max_pwm"):
+        if k in data:
+            try:
+                v = float(data[k])
+            except (TypeError, ValueError):
+                return jsonify({"ok": False, "error": k + " 需为数字"}), 400
+            if k in ("min_pwm", "max_pwm") and (v < 0 or v > 100):
+                return jsonify({"ok": False, "error": k + " 需在 0~100"}), 400
+            cfg[k] = v
+    if "recover_temp" in data:
+        try:
+            rv = float(data["recover_temp"])
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "recover_temp 需为数字"}), 400
+        if rv < 0 or rv > 100:
+            return jsonify({"ok": False, "error": "recover_temp 需在 0~100"}), 400
+        cfg["recover_temp"] = rv
+    if "sleep_stop" in data:
+        cfg["sleep_stop"] = bool(data["sleep_stop"])
+    if "controlled_fans" in data:
+        cf = data["controlled_fans"]
+        if cf == "all":
+            cfg["controlled_fans"] = "all"
+        elif isinstance(cf, list):
+            norm = []
+            for pair in cf:
+                if isinstance(pair, (list, tuple)) and len(pair) == 2:
+                    try:
+                        norm.append([str(pair[0]), int(pair[1])])
+                    except (TypeError, ValueError):
+                        return jsonify({"ok": False, "error": "controlled_fans 每项需为 [hwmon, idx]"}), 400
+                else:
+                    return jsonify({"ok": False, "error": "controlled_fans 每项需为 [hwmon, idx]"}), 400
+            cfg["controlled_fans"] = norm
+        else:
+            return jsonify({"ok": False, "error": "controlled_fans 需为 'all' 或 [[hwmon,idx],...]"}), 400
+    if cfg.get("full_temp", 60) <= cfg.get("start_temp", 40):
+        return jsonify({"ok": False, "error": "full_temp 必须大于 start_temp"}), 400
+    if cfg.get("recover_temp", 35) >= cfg.get("start_temp", 40):
+        return jsonify({"ok": False, "error": "recover_temp 必须小于 start_temp"}), 400
+    if _save_fan_disk_temp(cfg):
+        return jsonify({"ok": True, "config": cfg})
+    return jsonify({"ok": False, "error": "写配置失败"}), 500
+
+
+@app.route("/api/fan/sys_temp")
+def api_fan_sys_temp_get():
+    """读取主板/CPU 温度控风扇配置 + 当前温度源读数 + 计算所得目标PWM"""
+    cfg = _load_fan_sys_temp()
+    T = _fan_read_sys_temp(cfg.get("source", "cpu"))
+    target = _fan_sys_temp_pwm(T, cfg) if T is not None else None
+    return jsonify({
+        "config": cfg,
+        "source_temp": round(T, 1) if T is not None else None,
+        "computed_pwm": round(target / 255 * 100) if target is not None else None,
+        "computed_raw": target,
+    })
+
+
+@app.route("/api/fan/sys_temp", methods=["POST"])
+def api_fan_sys_temp_set():
+    data = request.get_json(force=True, silent=True) or {}
+    cfg = _load_fan_sys_temp()
+    if "enabled" in data:
+        cfg["enabled"] = bool(data["enabled"])
+    if "source" in data:
+        if data["source"] not in ("cpu", "mb"):
+            return jsonify({"ok": False, "error": "source 需为 cpu 或 mb"}), 400
+        cfg["source"] = data["source"]
+    for k in ("start_temp", "full_temp", "min_pwm", "max_pwm"):
+        if k in data:
+            try:
+                v = float(data[k])
+            except (TypeError, ValueError):
+                return jsonify({"ok": False, "error": k + " 需为数字"}), 400
+            if k in ("min_pwm", "max_pwm") and (v < 0 or v > 100):
+                return jsonify({"ok": False, "error": k + " 需在 0~100"}), 400
+            cfg[k] = v
+    if "recover_temp" in data:
+        try:
+            rv = float(data["recover_temp"])
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "recover_temp 需为数字"}), 400
+        if rv < 0 or rv > 120:
+            return jsonify({"ok": False, "error": "recover_temp 需在 0~120"}), 400
+        cfg["recover_temp"] = rv
+    if "controlled_fans" in data:
+        cf = data["controlled_fans"]
+        if cf == "all":
+            cfg["controlled_fans"] = "all"
+        elif isinstance(cf, list):
+            norm = []
+            for pair in cf:
+                if isinstance(pair, (list, tuple)) and len(pair) == 2:
+                    try:
+                        norm.append([str(pair[0]), int(pair[1])])
+                    except (TypeError, ValueError):
+                        return jsonify({"ok": False, "error": "controlled_fans 每项需为 [hwmon, idx]"}), 400
+                else:
+                    return jsonify({"ok": False, "error": "controlled_fans 每项需为 [hwmon, idx]"}), 400
+            cfg["controlled_fans"] = norm
+        else:
+            return jsonify({"ok": False, "error": "controlled_fans 需为 'all' 或 [[hwmon,idx],...]"}), 400
+    if cfg.get("full_temp", 70) <= cfg.get("start_temp", 45):
+        return jsonify({"ok": False, "error": "full_temp 必须大于 start_temp"}), 400
+    if cfg.get("recover_temp", 40) >= cfg.get("start_temp", 45):
+        return jsonify({"ok": False, "error": "recover_temp 必须小于 start_temp"}), 400
+    if _save_fan_sys_temp(cfg):
+        return jsonify({"ok": True, "config": cfg})
+    return jsonify({"ok": False, "error": "写配置失败"}), 500
+
+
 
 
 @app.route("/api/fan/labels", methods=["GET"])
@@ -1765,6 +2305,33 @@ HTML = r"""<!DOCTYPE html>
   .fan-custom-input{width:56px;padding:5px 6px;font-size:13px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text)}
   .fan-custom-input:focus{outline:none;border-color:var(--blue)}
   .fan-card-state{font-size:12px;color:var(--muted)}
+  /* 硬盘温度控制风扇面板 */
+  .dt-panel{--dt-gap:16px;padding:18px}
+  .dt-panel h3{display:flex;align-items:center;gap:10px;margin:0 0 16px;font-size:16px}
+  .dt-section{margin-bottom:18px}
+  .dt-section-title{font-size:13px;font-weight:600;color:var(--muted);margin-bottom:10px;display:flex;align-items:center;gap:8px}
+  .dt-section-title .count{font-size:11px;color:var(--blue);background:var(--bg);padding:2px 8px;border-radius:10px;border:1px solid var(--border)}
+  .dt-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px}
+  .dt-opt{display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--bg);border:1px solid var(--border);border-radius:8px;cursor:pointer;transition:.15s}
+  .dt-opt:hover{border-color:var(--blue)}
+  .dt-opt input[type=checkbox]{margin:0;accent-color:var(--blue);flex-shrink:0}
+  .dt-opt .dt-name{font-size:13px;font-weight:500;color:var(--text);flex:1}
+  .dt-opt .dt-meta{font-size:11px;color:var(--muted);white-space:nowrap}
+  .dt-empty{padding:18px;text-align:center;color:var(--muted);font-size:13px;background:var(--bg);border:1px dashed var(--border);border-radius:8px}
+  .dt-thresholds{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px}
+  .dt-field{display:flex;align-items:center;gap:8px;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 12px}
+  .dt-field label{font-size:13px;color:var(--muted);margin:0;min-width:64px}
+  .dt-field input[type=number]{width:64px;padding:5px 7px;font-size:14px;text-align:center;border:1px solid var(--border);border-radius:6px;background:#fff;color:var(--text)}
+  .dt-field input[type=number]:focus{outline:none;border-color:var(--blue)}
+  .dt-field .unit{font-size:12px;color:var(--muted)}
+  .dt-options{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+  .dt-actions{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:8px}
+  .dt-save-state{font-size:13px;color:var(--muted)}
+  .dt-save-state.ok{color:var(--green)}
+  .dt-live{display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--bg);border:1px solid var(--border);border-radius:8px;font-size:13px}
+  .dt-live b{font-size:16px;color:var(--green)}
+  .dt-toggle{display:inline-flex;align-items:center;gap:8px;font-size:14px;font-weight:500;cursor:pointer}
+  .dt-toggle input{accent-color:var(--blue);flex-shrink:0}
   /* 检测新版本横幅 */
   .update-banner{display:none;align-items:center;justify-content:space-between;gap:14px;background:linear-gradient(135deg,#ea580c,#f59e0b);color:#fff;padding:11px 18px;border-radius:10px;margin-bottom:16px;box-shadow:0 2px 10px rgba(234,88,12,.28);font-size:14px}
   .update-banner.show{display:flex}
@@ -1856,7 +2423,7 @@ function renderRaid(r, disks){
       let tstr = d.temp != null ? d.temp + '°C' : 'N/A';
       let tcol = tempColor(d.temp, trip);
       let mdl = (d.vendor ? d.vendor + ' ' : '') + (d.model || '');
-      let typ = d.type === 'sas' ? 'SAS' : (d.rota === '1' ? 'SATA HDD' : 'SATA SSD');
+      let typ = d.type === 'nvme' ? 'NVMe' : (d.type === 'sas' ? 'SAS' : (d.rota === '1' ? 'SATA HDD' : 'SATA SSD'));
       return `<tr><td>${d.dev}</td><td>${mdl}</td><td>${typ}</td><td style="color:${tcol};font-weight:600">${tstr}</td></tr>`;
     }).join('') : '<tr><td colspan=4>未检测到磁盘（请用 smartctl 确认盘已被系统识别）</td></tr>';
     return `
@@ -1922,6 +2489,7 @@ function renderDisks(disks){
   if(!disks||!disks.length) return '<div class="card"><div class="loading">未检测到硬盘</div></div>';
   return '<div class="cards">'+disks.map(d=>{
     let isSAS = d.type==='sas';
+    let isNVMe = d.type==='nvme';
     let healthBadge = d.health_ok ? '<span class="badge b-ok">'+d.health+'</span>' : '<span class="badge b-bad">'+d.health+'</span>';
     let cls = d.health_ok ? '' : 'bad';
     let trip = d.temp_trip||60;
@@ -1936,6 +2504,14 @@ function renderDisks(disks){
         <div class="kv"><span class="k">非介质错误</span><span class="v">${d.non_medium_errors||0}</span></div>
         <div class="kv"><span class="k">读错误(不可纠正)</span><span class="v">${d.read_errors}</span></div>
         <div class="kv"><span class="k">写错误(不可纠正)</span><span class="v">${d.write_errors}</span></div>`;
+    } else if(isNVMe) {
+      detail = `
+        <div class="kv"><span class="k">已用时长</span><span class="v">${fmtHours(d.power_on_hours)}</span></div>
+        <div class="kv"><span class="k">已用寿命</span><span class="v" style="color:${d.percentage_used>0?'var(--orange)':'var(--text)'}">${d.percentage_used!=null?d.percentage_used+'%':'N/A'}</span></div>
+        <div class="kv"><span class="k">剩余备用</span><span class="v">${d.available_spare!=null?d.available_spare+'%':'N/A'}</span></div>
+        <div class="kv"><span class="k">临界告警</span><span class="v" style="color:${d.critical_warning&&d.critical_warning!=='0'?'var(--red)':'var(--text)'}">0x${d.critical_warning||'0'}</span></div>
+        <div class="kv"><span class="k">读取量</span><span class="v">${d.data_units_read||'N/A'}</span></div>
+        <div class="kv"><span class="k">写入量</span><span class="v">${d.data_units_written||'N/A'}</span></div>`;
     } else {
       detail = `
         <div class="kv"><span class="k">已用时长</span><span class="v">${fmtHours(d.power_on_hours)}</span></div>
@@ -1950,7 +2526,7 @@ function renderDisks(disks){
         ${healthBadge}
       </div>
       <div class="kv"><span class="k">型号</span><span class="v">${d.brand?d.brand+' ':''}${d.vendor?d.vendor+' ':''}${d.model}</span></div>
-      <div class="kv"><span class="k">容量 / 类型</span><span class="v">${d.size} · ${isSAS?'SAS':'SATA'} · ${d.rota=='1'?'HDD':'SSD'}${d.feature?' · '+d.feature:''}</span></div>
+      <div class="kv"><span class="k">容量 / 类型</span><span class="v">${d.size} · ${isNVMe?'NVMe':(isSAS?'SAS':'SATA')} · ${d.rota=='1'?'HDD':'SSD'}${d.feature?' · '+d.feature:''}</span></div>
       <div class="kv"><span class="k">转速</span><span class="v">${d.rpm||(d.rota=='1'||isSAS?'—':'固态(SSD)')}</span></div>
       <div class="kv"><span class="k">序列号</span><span class="v" style="font-size:12px">${d.serial}</span></div>
       <div style="margin-top:8px"><span style="font-size:13px;color:var(--muted)">温度 ${tempStr}</span><div class="temp-bar"><div class="temp-fill" style="width:${tempPct}%;background:${tempColor(d.temp,trip)}"></div></div></div>
@@ -2042,7 +2618,7 @@ function renderFanControl(){
   if(!fans.length) return '<div class="card"><div class="loading">未检测到可调控风扇（部分 NAS 由系统固件统一控温，本工具不接管）</div></div>';
   let presets=[['auto','默认'],['100','全速'],['10','10%'],['20','20%'],['30','30%'],['40','40%'],['50','50%'],['60','60%'],['70','70%'],['80','80%'],['90','90%']];
   let presetHtml=presets.map(p=>`<button class="preset-btn ${p[0]==='100'?'full':''}" data-preset="${p[0]}" onclick="applyFanPreset('${p[0]}')">${p[1]}</button>`).join('');
-  let modeMap={'curve':'曲线温控','manual':'手动控制','auto':'自动温控','off':'关闭'};
+  let modeMap={'curve':'曲线温控','manual':'手动控制','auto':'自动温控','off':'关闭','disk_temp':'硬盘温控','sys_temp':'主板/CPU温控'};
   let cards=fans.map(f=>{
     let id='fan'+f.idx;
     let pct=(f.pwm!=null)?f.pwm:50;
@@ -2077,7 +2653,11 @@ function renderFanControl(){
       </div>
     </div>`;
   }).join('');
+  let dtHtml = renderDiskTempPanel();
+  let stHtml = renderSysTempPanel();
   return `<div class="fan-page">
+    ${dtHtml}
+    ${stHtml}
     <div class="fan-presets">
       <span class="label">一键调速：</span>${presetHtml}
       <span class="fan-global-state" id="fan-global-state"></span>
@@ -2205,6 +2785,290 @@ function bindFanSliders(){
     inp.addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); applyFanCustom(inp.dataset.hwmon, parseInt(inp.dataset.idx)); } });
   });
   if(!fanTimer){ fetchFanStatus(); fanTimer=setInterval(fetchFanStatus, 2000); }
+}
+
+// ===== 硬盘温度控制风扇（disk_temp）=====
+function renderDiskTempPanel(){
+  var fans=(typeof FAN_LIST!=='undefined'?FAN_LIST:[])||[];
+  var disks=(DATA&&DATA.disks)||[];
+  var fanOptsHtml='', diskOptsHtml='';
+  if(fans.length){
+    fanOptsHtml=fans.map(function(f){
+      var id='dt-fan-'+f.hwmon+'-'+f.idx;
+      var label=esc((f.label||f.name||('风扇'+f.idx))).replace(/</g,'&lt;');
+      var meta=(f.rpm||0)+' RPM';
+      return '<label class="dt-opt" for="'+id+'"><input type="checkbox" class="dt-fan" id="'+id+'" data-hwmon="'+f.hwmon+'" data-idx="'+f.idx+'"> <span class="dt-name">'+label+'</span><span class="dt-meta">'+meta+'</span></label>';
+    }).join('');
+  }else{
+    fanOptsHtml='<div class="dt-empty">未检测到可调控风扇</div>';
+  }
+  if(disks.length){
+    diskOptsHtml=disks.map(function(d){
+      var shortDev=(d.dev||'').replace(/^\/dev\//,'');
+      var id='dt-disk-'+shortDev;
+      var name=esc(shortDev);
+      var meta='';
+      if(d.model||d.vendor) meta=esc((d.vendor||'')+' '+(d.model||'')).trim();
+      return '<label class="dt-opt" for="'+id+'"><input type="checkbox" class="dt-disk" id="'+id+'" value="'+d.dev+'"> <span class="dt-name">'+name+'</span><span class="dt-meta" id="dt-temp-'+shortDev+'">'+(meta?meta:'')+'</span></label>';
+    }).join('');
+  }else{
+    diskOptsHtml='<div class="dt-empty">未检测到硬盘</div>';
+  }
+  return '<div class="card dt-panel" id="disk-temp-panel">'
+    +'<h3>硬盘温度控制风扇 <span class="badge b-info">新功能</span></h3>'
+    +'<label class="dt-toggle" style="margin-bottom:14px"><input type="checkbox" id="dt-enabled"> 启用硬盘温控</label>'
+    +'<div class="dt-section">'
+      +'<div class="dt-section-title">监控硬盘 <span class="count" id="dt-disk-count">0</span></div>'
+      +'<div class="dt-grid">'+diskOptsHtml+'</div>'
+    +'</div>'
+    +'<div class="dt-section">'
+      +'<div class="dt-section-title">受控风扇 <span class="count" id="dt-fan-count">0</span></div>'
+      +'<div class="dt-grid">'+fanOptsHtml+'</div>'
+    +'</div>'
+    +'<div class="dt-section">'
+      +'<div class="dt-section-title">温控曲线</div>'
+      +'<div class="dt-thresholds">'
+        +'<div class="dt-field"><label>开转温度</label><input type="number" id="dt-start" min="20" max="80" value="40"><span class="unit">°C</span></div>'
+        +'<div class="dt-field"><label>全速温度</label><input type="number" id="dt-full" min="30" max="90" value="60"><span class="unit">°C</span></div>'
+        +'<div class="dt-field"><label>开转占空比</label><input type="number" id="dt-min" min="0" max="100" value="30"><span class="unit">%</span></div>'
+        +'<div class="dt-field"><label>全速占空比</label><input type="number" id="dt-max" min="0" max="100" value="100"><span class="unit">%</span></div>'
+        +'<div class="dt-field"><label>恢复自动温度</label><input type="number" id="dt-recover" min="20" max="80" value="35"><span class="unit">°C</span></div>'
+      +'</div>'
+    +'</div>'
+    +'<div class="dt-section">'
+      +'<div class="dt-options">'
+        +'<label class="dt-toggle"><input type="checkbox" id="dt-sleep" checked> 监控盘全部休眠时停转风扇</label>'
+      +'</div>'
+    +'</div>'
+    +'<div class="dt-actions">'
+      +'<button class="btn-mini" id="dt-save" onclick="saveDiskTempConfig()">保存配置</button>'
+      +'<span class="dt-live">当前计算目标占空比：<b id="dt-live-pwm">—</b></span>'
+      +'<span class="dt-save-state" id="dt-save-state"></span>'
+    +'</div>'
+  +'</div>';
+}
+function updateDiskTempCounts(){
+  var dc=document.querySelectorAll('.dt-disk:checked').length;
+  var fc=document.querySelectorAll('.dt-fan:checked').length;
+  var dce=document.getElementById('dt-disk-count'); if(dce) dce.textContent=dc;
+  var fce=document.getElementById('dt-fan-count'); if(fce) fce.textContent=fc;
+}
+var dtTimer=null;
+async function initDiskTemp(){
+  try{
+    var r=await fetch('/api/fan/disk_temp?_='+Date.now());
+    var j=await r.json();
+    var c=j.config||{};
+    var en=document.getElementById('dt-enabled'); if(en) en.checked=!!c.enabled;
+    var st=document.getElementById('dt-start'); if(st) st.value=(c.start_temp!=null?c.start_temp:40);
+    var fu=document.getElementById('dt-full'); if(fu) fu.value=(c.full_temp!=null?c.full_temp:60);
+    var mn=document.getElementById('dt-min'); if(mn) mn.value=(c.min_pwm!=null?c.min_pwm:30);
+    var mx=document.getElementById('dt-max'); if(mx) mx.value=(c.max_pwm!=null?c.max_pwm:100);
+    var rc=document.getElementById('dt-recover'); if(rc) rc.value=(c.recover_temp!=null?c.recover_temp:35);
+    var sl=document.getElementById('dt-sleep'); if(sl) sl.checked=(c.sleep_stop!==false);
+    (c.disks||[]).forEach(function(dev){
+      var shortDev=String(dev).replace(/^\/dev\//,'');
+      var cbs=document.querySelectorAll('.dt-disk');
+      for(var i=0;i<cbs.length;i++){ if(cbs[i].value===shortDev){ cbs[i].checked=true; break; } }
+    });
+    var cf=c.controlled_fans||'all';
+    var fanCbs=document.querySelectorAll('.dt-fan');
+    if(cf==='all' && fanCbs.length){ fanCbs.forEach(function(cb){cb.checked=true;}); }
+    else if(Array.isArray(cf)){
+      fanCbs.forEach(function(cb){
+        var h=cb.dataset.hwmon, idx=parseInt(cb.dataset.idx);
+        cf.forEach(function(pair){ if(pair && pair[0]===h && pair[1]===idx){ cb.checked=true; } });
+      });
+    }
+    var panel=document.getElementById('disk-temp-panel');
+    if(panel){
+      panel.addEventListener('change', function(e){
+        if(e.target && (e.target.classList.contains('dt-disk') || e.target.classList.contains('dt-fan'))) updateDiskTempCounts();
+      });
+    }
+    updateDiskTempCounts();
+    refreshDiskTempPanel();
+    if(dtTimer) clearInterval(dtTimer);
+    dtTimer=setInterval(refreshDiskTempPanel,5000);
+  }catch(e){}
+}
+async function refreshDiskTempPanel(){
+  var panel=document.getElementById('disk-temp-panel');
+  if(!panel) return;
+  try{
+    var r=await fetch('/api/fan/disk_temp?_='+Date.now());
+    var j=await r.json();
+    (j.disks||[]).forEach(function(d){
+      var shortDev=(d.dev||'').replace(/^\/dev\//,'');
+      var el=document.getElementById('dt-temp-'+shortDev);
+      if(el){
+        if(d.asleep) el.textContent='休眠';
+        else if(d.temp!=null) el.textContent=d.temp+'°C';
+        else el.textContent='N/A';
+      }
+    });
+    var live=document.getElementById('dt-live-pwm');
+    if(live){ live.textContent=(j.computed_pwm!=null?j.computed_pwm+'%':'—'); }
+  }catch(e){}
+}
+async function saveDiskTempConfig(){
+  var st=document.getElementById('dt-save-state');
+  var en=document.getElementById('dt-enabled'); var enabled=en?en.checked:false;
+  var devs=[].slice.call(document.querySelectorAll('.dt-disk:checked')).map(function(cb){return cb.value;});
+  var fanCbs=[].slice.call(document.querySelectorAll('.dt-fan:checked'));
+  var allFans=[].slice.call(document.querySelectorAll('.dt-fan'));
+  var controlled_fans='all';
+  if(fanCbs.length && fanCbs.length<allFans.length){
+    controlled_fans=fanCbs.map(function(cb){return [cb.dataset.hwmon, parseInt(cb.dataset.idx)];});
+  }
+  var start=parseFloat(document.getElementById('dt-start').value);
+  var full=parseFloat(document.getElementById('dt-full').value);
+  var minp=parseFloat(document.getElementById('dt-min').value);
+  var maxp=parseFloat(document.getElementById('dt-max').value);
+  var rec=parseFloat(document.getElementById('dt-recover').value);
+  var sl=document.getElementById('dt-sleep'); var sleep=sl?sl.checked:true;
+  if(!devs.length){ if(st){ st.textContent='请至少勾选一个硬盘'; st.className='dt-save-state'; } return; }
+  if(!(full>start)){ if(st){ st.textContent='全速温度须大于开转温度'; st.className='dt-save-state'; } return; }
+  if(!(rec<start)){ if(st){ st.textContent='恢复自动温度须小于开转温度'; st.className='dt-save-state'; } return; }
+  if(st){ st.textContent='保存中…'; st.className='dt-save-state'; }
+  try{
+    var body={enabled:enabled,disks:devs,start_temp:start,full_temp:full,min_pwm:minp,max_pwm:maxp,recover_temp:rec,sleep_stop:sleep,controlled_fans:controlled_fans};
+    var r=await fetch('/api/fan/disk_temp',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    var j=await r.json();
+    if(st){ st.textContent=j.ok?'已保存 ✓':'失败：'+(j.error||''); st.className=j.ok?'dt-save-state ok':'dt-save-state'; }
+    if(j.ok){ refreshDiskTempPanel(); }
+  }catch(e){ if(st){ st.textContent='请求失败'; st.className='dt-save-state'; } }
+}
+
+// ===== 主板/CPU 温度控制风扇（sys_temp）=====
+function renderSysTempPanel(){
+  var fans=(typeof FAN_LIST!=='undefined'?FAN_LIST:[])||[];
+  var fanOptsHtml='';
+  if(fans.length){
+    fanOptsHtml=fans.map(function(f){
+      var id='st-fan-'+f.hwmon+'-'+f.idx;
+      var label=esc((f.label||f.name||('风扇'+f.idx))).replace(/</g,'&lt;');
+      var meta=(f.rpm||0)+' RPM';
+      return '<label class="dt-opt" for="'+id+'"><input type="checkbox" class="st-fan" id="'+id+'" data-hwmon="'+f.hwmon+'" data-idx="'+f.idx+'"> <span class="dt-name">'+label+'</span><span class="dt-meta">'+meta+'</span></label>';
+    }).join('');
+  }else{
+    fanOptsHtml='<div class="dt-empty">未检测到可调控风扇</div>';
+  }
+  return '<div class="card dt-panel" id="sys-temp-panel">'
+    +'<h3>主板 / CPU 温度控制风扇 <span class="badge b-info">新功能</span></h3>'
+    +'<label class="dt-toggle" style="margin-bottom:14px"><input type="checkbox" id="st-enabled"> 启用主板/CPU 温控</label>'
+    +'<div class="dt-section">'
+      +'<div class="dt-section-title">温度来源</div>'
+      +'<div class="dt-options">'
+        +'<label class="dt-toggle"><input type="radio" name="st-source" value="cpu" checked> CPU 封装温度</label>'
+        +'<label class="dt-toggle"><input type="radio" name="st-source" value="mb"> 主板温度</label>'
+      +'</div>'
+    +'</div>'
+    +'<div class="dt-section">'
+      +'<div class="dt-section-title">受控风扇 <span class="count" id="st-fan-count">0</span></div>'
+      +'<div class="dt-grid">'+fanOptsHtml+'</div>'
+    +'</div>'
+    +'<div class="dt-section">'
+      +'<div class="dt-section-title">温控曲线</div>'
+      +'<div class="dt-thresholds">'
+        +'<div class="dt-field"><label>开转温度</label><input type="number" id="st-start" min="20" max="90" value="45"><span class="unit">°C</span></div>'
+        +'<div class="dt-field"><label>全速温度</label><input type="number" id="st-full" min="30" max="100" value="70"><span class="unit">°C</span></div>'
+        +'<div class="dt-field"><label>开转占空比</label><input type="number" id="st-min" min="0" max="100" value="30"><span class="unit">%</span></div>'
+        +'<div class="dt-field"><label>全速占空比</label><input type="number" id="st-max" min="0" max="100" value="100"><span class="unit">%</span></div>'
+        +'<div class="dt-field"><label>恢复自动温度</label><input type="number" id="st-recover" min="20" max="90" value="40"><span class="unit">°C</span></div>'
+      +'</div>'
+    +'</div>'
+    +'<div class="dt-actions">'
+      +'<button class="btn-mini" id="st-save" onclick="saveSysTempConfig()">保存配置</button>'
+      +'<span class="dt-live">当前<span id="st-src-label">CPU</span>温度：<b id="st-live-temp">—</b> · 计算目标占空比：<b id="st-live-pwm">—</b></span>'
+      +'<span class="dt-save-state" id="st-save-state"></span>'
+    +'</div>'
+  +'</div>';
+}
+function updateSysTempCounts(){
+  var fc=document.querySelectorAll('.st-fan:checked').length;
+  var fce=document.getElementById('st-fan-count'); if(fce) fce.textContent=fc;
+}
+var stTimer=null;
+async function initSysTemp(){
+  try{
+    var r=await fetch('/api/fan/sys_temp?_='+Date.now());
+    var j=await r.json();
+    var c=j.config||{};
+    var en=document.getElementById('st-enabled'); if(en) en.checked=!!c.enabled;
+    var cpuRb=document.querySelector('input[name="st-source"][value="cpu"]');
+    var mbRb=document.querySelector('input[name="st-source"][value="mb"]');
+    var src=c.source||'cpu';
+    if(cpuRb) cpuRb.checked=(src==='cpu');
+    if(mbRb) mbRb.checked=(src==='mb');
+    var lbl=document.getElementById('st-src-label'); if(lbl) lbl.textContent=(src==='mb'?'主板':'CPU');
+    var st=document.getElementById('st-start'); if(st) st.value=(c.start_temp!=null?c.start_temp:45);
+    var fu=document.getElementById('st-full'); if(fu) fu.value=(c.full_temp!=null?c.full_temp:70);
+    var mn=document.getElementById('st-min'); if(mn) mn.value=(c.min_pwm!=null?c.min_pwm:30);
+    var mx=document.getElementById('st-max'); if(mx) mx.value=(c.max_pwm!=null?c.max_pwm:100);
+    var rc=document.getElementById('st-recover'); if(rc) rc.value=(c.recover_temp!=null?c.recover_temp:40);
+    var cf=c.controlled_fans||'all';
+    var fanCbs=document.querySelectorAll('.st-fan');
+    if(cf==='all' && fanCbs.length){ fanCbs.forEach(function(cb){cb.checked=true;}); }
+    else if(Array.isArray(cf)){
+      fanCbs.forEach(function(cb){
+        var h=cb.dataset.hwmon, idx=parseInt(cb.dataset.idx);
+        cf.forEach(function(pair){ if(pair && pair[0]===h && pair[1]===idx){ cb.checked=true; } });
+      });
+    }
+    var panel=document.getElementById('sys-temp-panel');
+    if(panel){
+      panel.addEventListener('change', function(e){
+        if(e.target && e.target.classList.contains('st-fan')) updateSysTempCounts();
+        if(e.target && e.target.name==='st-source'){
+          var l=document.getElementById('st-src-label');
+          if(l) l.textContent=(e.target.value==='mb'?'主板':'CPU');
+        }
+      });
+    }
+    updateSysTempCounts();
+    refreshSysTempPanel();
+    if(stTimer) clearInterval(stTimer);
+    stTimer=setInterval(refreshSysTempPanel,5000);
+  }catch(e){}
+}
+async function refreshSysTempPanel(){
+  var panel=document.getElementById('sys-temp-panel');
+  if(!panel) return;
+  try{
+    var r=await fetch('/api/fan/sys_temp?_='+Date.now());
+    var j=await r.json();
+    var tEl=document.getElementById('st-live-temp');
+    if(tEl){ tEl.textContent=(j.source_temp!=null?j.source_temp+'°C':'N/A'); }
+    var live=document.getElementById('st-live-pwm');
+    if(live){ live.textContent=(j.computed_pwm!=null?j.computed_pwm+'%':'—'); }
+  }catch(e){}
+}
+async function saveSysTempConfig(){
+  var st=document.getElementById('st-save-state');
+  var en=document.getElementById('st-enabled'); var enabled=en?en.checked:false;
+  var srcRb=document.querySelector('input[name="st-source"]:checked'); var source=srcRb?srcRb.value:'cpu';
+  var fanCbs=[].slice.call(document.querySelectorAll('.st-fan:checked'));
+  var allFans=[].slice.call(document.querySelectorAll('.st-fan'));
+  var controlled_fans='all';
+  if(fanCbs.length && fanCbs.length<allFans.length){
+    controlled_fans=fanCbs.map(function(cb){return [cb.dataset.hwmon, parseInt(cb.dataset.idx)];});
+  }
+  var start=parseFloat(document.getElementById('st-start').value);
+  var full=parseFloat(document.getElementById('st-full').value);
+  var minp=parseFloat(document.getElementById('st-min').value);
+  var maxp=parseFloat(document.getElementById('st-max').value);
+  var rec=parseFloat(document.getElementById('st-recover').value);
+  if(!(full>start)){ if(st){ st.textContent='全速温度须大于开转温度'; st.className='dt-save-state'; } return; }
+  if(!(rec<start)){ if(st){ st.textContent='恢复自动温度须小于开转温度'; st.className='dt-save-state'; } return; }
+  if(st){ st.textContent='保存中…'; st.className='dt-save-state'; }
+  try{
+    var body={enabled:enabled,source:source,start_temp:start,full_temp:full,min_pwm:minp,max_pwm:maxp,recover_temp:rec,controlled_fans:controlled_fans};
+    var r=await fetch('/api/fan/sys_temp',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    var j=await r.json();
+    if(st){ st.textContent=j.ok?'已保存 ✓':'失败：'+(j.error||''); st.className=j.ok?'dt-save-state ok':'dt-save-state'; }
+    if(j.ok){ refreshSysTempPanel(); }
+  }catch(e){ if(st){ st.textContent='请求失败'; st.className='dt-save-state'; } }
 }
 
 function showBoardEdit(){ let b=document.getElementById('boardEditBox'); if(b) b.style.display='block'; }
@@ -2471,6 +3335,8 @@ function renderAll(){
   document.getElementById('docker').innerHTML = renderDocker(DATA.docker);
   document.getElementById('lastUpdate').textContent = '更新于 '+DATA.time+' ('+DATA.elapsed+'s)';
   bindFanSliders();
+  initDiskTemp();
+  initSysTemp();
 }
 
 async function loadData(){

@@ -20,6 +20,11 @@ start)
         mkdir -p /app 2>/dev/null
         ln -sf "$APP_DIR/app.py" /app/app.py 2>/dev/null
     fi
+    # 加载风扇控制芯片驱动（按需，缺则忽略）：
+    # 新机(MSI B360M MORTAR)=NCT6797D 走 nct6775；旧机=IT87 走 it87。
+    # fnOS 默认不加载，须由 app 自启恢复风扇可见性。
+    modprobe nct6775 2>/dev/null || true
+    modprobe it87 2>/dev/null || true
     cd "$APP_DIR"
     PORT="${TRIM_SERVICE_PORT:-9800}"
     $PYTHON "$APP_DIR/app.py" > "$LOG_FILE" 2>&1 &
