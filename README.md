@@ -1,6 +1,6 @@
 # nasdash
 
-**当前版本：v1.7.7** · [下载最新 fpk](https://github.com/han951meng/nasdash/releases/latest)
+**当前版本：v1.7.8** · [下载最新 fpk](https://github.com/han951meng/nasdash/releases/latest)
 
 飞牛OS（fnOS）NAS 硬件监控面板 —— FPK 应用包
 
@@ -10,7 +10,7 @@
 
 1. 下载 `nasdash.fpk`
 2. 在飞牛OS 应用中心上传安装
-3. 安装时自动安装依赖：smartmontools / lm-sensors / mdadm / Flask（storcli 可选，非 LSI 阵列卡可忽略）
+3. 安装时自动安装依赖：smartmontools / lm-sensors / mdadm / Flask / dmidecode / i2c-tools；**storcli 现已随包内置**，LSI 阵列卡用户无需手动下载
 4. 安装后浏览器访问 `http://NAS_IP:9800`
 
 > 旧版本手动安装过依赖的用户：直接覆盖安装即可，install_callback 会跳过已安装的工具。
@@ -75,11 +75,11 @@
 | smartctl (smartmontools) | 硬盘 SMART | ✅ | ✅ apt |
 | sensors (lm-sensors) | 温度/风扇/电压 | ✅ | ✅ apt |
 | mdadm | RAID 阵列 | ✅ | ✅ apt |
-| storcli | LSI MegaRAID 阵列卡信息 | ❌ | ❌ 需手动 |
+| storcli | LSI MegaRAID 阵列卡信息 | ❌ | ✅ 随包内置 |
 | lspci (pciutils) | 显卡 / 阵列卡识别 | ✅ | 系统自带 |
 | ip (iproute2) | 网卡 | ✅ | 系统自带 |
 
-**storcli** 不在标准软件源中，LSI 阵列卡（MegaRAID IR/RAID 模式与 HBA IT 模式）用户都需手动从 [Broadcom 官网](https://www.broadcom.com/support/download-search) 下载安装：MegaRAID 卡走 `storcli /c0 show` 读取完整信息（含 ROC 芯片温度），HBA 卡额外走 `storcli /c0 show temperature` 读取芯片温度（HBA 卡的 `/c0 show` 不含温度字段，这是正常现象，并非面板 bug）。纯 SATA 主板（无 LSI 卡）用户可忽略此工具。
+**storcli 现已随包内置**：LSI MegaRAID 阵列卡（IR/RAID 模式）走 `storcli /c0 show` 读取完整信息（含 ROC 芯片温度），HBA 直通卡（IT 模式）额外走 `storcli /c0 show temperature` 读取芯片温度（HBA 卡的 `/c0 show` 不含温度字段，这是正常现象，并非面板 bug）。安装时由 install_callback 自动落地到 /opt/MegaRAID/storcli 并建软链，无需再从 Broadcom 官网手动下载。纯 SATA 主板（无 LSI 卡）用户可忽略此工具。
 
 ## 数据来源
 
@@ -116,6 +116,11 @@
 - 双磁臂（双执行器）硬盘：LSI 阵列卡会将其每个执行器作为独立盘暴露给系统（如各 7T），面板在阵列卡页显示整盘标称容量（如 14T）并标注每执行器容量
 
 ## 更新日志
+
+### v1.7.8
+- 应用图标全面升级为 256×256 高清：修复飞牛桌面与应用中心图标模糊问题（参考 fnos-hermes-agent 正确做法——无论文件名是否带 64，位图内容统一为 256×256 高清）
+- 阵列卡物理盘品牌识别修复：storcli 表格将厂商与型号分列，原代码只取型号列导致金士顿(Kingston) SSD 误判为三星；现改用含厂商前缀的完整型号识别
+- storcli 二进制随包内置分发：安装时由 install_callback 自动落地到 /opt/MegaRAID/storcli 并建软链，无需再从 Broadcom 官网手动下载；采用 007.2705 新版，兼容 fnOS 内核 6.18（旧版 1.21.06 在新内核下会段错误）
 
 ### v1.7.7
 - 风扇温控曲线拆分为「两套」对称逻辑：原有「硬盘温控」(disk_temp) 按指定硬盘温度调速；新增「主板/CPU 温控」(sys_temp) 按 CPU 封装温度或主板温度调速
