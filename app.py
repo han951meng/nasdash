@@ -595,6 +595,25 @@ def _storcli_size_to_decimal(size_str):
     except Exception:
         return size_str
 
+def _resolve_brand_model(model, inquiry_model):
+    """解析阵列卡物理盘用于品牌识别的型号。
+
+    storcli 表格的 model 列常丢厂商前缀（如 SATA 盘只给 `SV300S37A/120G`，
+    而 `KINGSTON` 在上一列）。若表格型号无厂商前缀、但 Inquiry Data / Model Number
+    含前缀，则改用完整型号，避免把 `KINGSTON SV300S37A/120G` 误判为三星。
+    详见 v1.7.8 品牌修复。行为保持与内联逻辑完全一致。
+    """
+    brand_model = model
+    if inquiry_model and inquiry_model != "-":
+        _known = ("ST", "WD", "WDC", "TOSHIBA", "HGST", "HUH", "HUS", "INTEL",
+                  "KINGSTON", "CT", "CRUCIAL", "MICRON", "SANDISK", "PNY", "HITACHI", "SAMSUNG")
+        _tbl_vendor = model.upper().startswith(_known) or "SAMSUNG" in model.upper()
+        _inq_vendor = inquiry_model.upper().startswith(_known) or "SAMSUNG" in inquiry_model.upper()
+        if (not _tbl_vendor) and _inq_vendor:
+            brand_model = inquiry_model
+    return brand_model
+
+
 def disk_brand_and_feature(model):
     """根据型号解析硬盘品牌与特性（如双磁臂/双执行器）。返回 (brand_cn, feature)"""
     model_u = (model or "").strip().upper()
@@ -736,14 +755,7 @@ def get_raid_card():
                 # 表格列的型号常丢厂商前缀（如 SATA 盘只给 SV300S37A/120G，KINGSTON 在上一列），
                 # 直接用该型号做品牌识别会被误判（如 SV 开头误认三星）。
                 # 故品牌识别优先用含厂商前缀的完整型号（Model Number / Inquiry Data）。
-                brand_model = model
-                if inquiry_model and inquiry_model != "-":
-                    _known = ("ST", "WD", "WDC", "TOSHIBA", "HGST", "HUH", "HUS", "INTEL",
-                              "KINGSTON", "CT", "CRUCIAL", "MICRON", "SANDISK", "PNY", "HITACHI", "SAMSUNG")
-                    _tbl_vendor = model.upper().startswith(_known) or "SAMSUNG" in model.upper()
-                    _inq_vendor = inquiry_model.upper().startswith(_known) or "SAMSUNG" in inquiry_model.upper()
-                    if (not _tbl_vendor) and _inq_vendor:
-                        brand_model = inquiry_model
+                brand_model = _resolve_brand_model(model, inquiry_model)
                 brand, feature = disk_brand_and_feature(brand_model)
                 # 展示用 model：表格列已够用则保留（与 HDD 显示风格一致），仅在表格缺失时兜底用完整型号
                 if (not model or model == "-") and inquiry_model and inquiry_model != "-":

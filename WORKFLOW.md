@@ -1,6 +1,6 @@
 # nasdash 开发 / 发版工作流
 
-基于 `v1.7.8` 基线。所有修改一律从干净基线出发，绝不用旧包 / 旧图标当母版。
+基于 `v1.7.9` 基线。所有修改一律从干净基线出发，绝不用旧包 / 旧图标当母版。
 
 ## Step 0 · 明确需求（先想清楚再动手）
 
@@ -21,8 +21,8 @@
 
 ```bash
 git fetch
-git checkout v1.7.8        # 或 git pull 到最新 main（HEAD 即 1.7.8 发版 commit）
-grep '^version' manifest   # 确认 version = 1.7.8
+git checkout v1.7.9        # 或 git pull 到最新 main（HEAD 即 1.7.9 发版 commit）
+grep '^version' manifest   # 确认 version = 1.7.9
 ```
 
 ## Step 2 · 编码 / 改图标
@@ -39,10 +39,19 @@ grep '^version' manifest   # 确认 version = 1.7.8
 - `py_compile` 语法检查；若有 flask 则本地起服务 curl `/api/version`、`/api/all`。
 - 硬件接口在 Mac 上可能 500，属正常，只要服务启动且 `/api/version` 返回 200 即可。
 
+## Step 3.5 · 跑回归测试（守护历史 bug 不复发）
+
+```bash
+./test.sh          # 纯函数 pytest：品牌识别 / 阵列卡温度 / NVMe 通电时长 等 15 个用例
+```
+
+- 不依赖硬件，本地 venv 跑；覆盖 v1.7.5(通电时长逗号截断)、v1.7.8(金士顿误判三星) 等历史修复。
+- 改了 `app.py` 的解析逻辑后务必跑一遍，再上真机。
+
 ## Step 4 · 改版本号 + 同步四处一致（一键）
 
 ```bash
-./release.py 1.7.9 "一句话更新要点"
+./release.py 1.7.10 "一句话更新要点"
 ```
 
 自动改 `manifest`(version/desc/changelog) + `README.md`(版本号/更新日志) + 重建 fpk + 校验。
@@ -85,9 +94,9 @@ ps -o user= -p $(pgrep -f com.dashboard.nasdash)   # 运行用户为 root
 ## Step 8 · 发版
 
 ```bash
-git add -A && git commit -m "release: v1.7.9"
-git tag v1.7.9 && git push && git push --tags
-gh release upload v1.7.9 nasdash.fpk --clobber
+git add -A && git commit -m "release: v1.7.10"
+git tag v1.7.10 && git push && git push --tags
+gh release upload v1.7.10 nasdash.fpk --clobber
 ```
 
 ## 附：回滚预案
