@@ -1497,10 +1497,12 @@ def get_system():
         _pv = run(f"cat {_hw}/pwm{_fi} 2>/dev/null", 2).strip()
         _controllable = bool(_pe)
         if _fk in fan_info:
-            # 已知的风扇（来自系统风扇服务配置）：优先用配置里的 pwm_path，兜底用枚举到的 hwmon
-            if not fan_info[_fk].get("hwmon"):
-                fan_info[_fk]["hwmon"] = _hw
-                fan_info[_fk]["idx"] = _fi
+            # 已知的风扇（来自系统风扇服务配置）：name/mode 用配置，
+            # 但 hwmon/idx 一律以「实时枚举结果」为权威(优先级最高)。
+            # 配置里写死的 pwm_path(如 hwmon3)会随内核重排失效，若仍优先用它，
+            # GUI 滑块会拿到错误 hwmon → 调速请求命中不到真实通道(停在自动曲线35%)。
+            fan_info[_fk]["hwmon"] = _hw
+            fan_info[_fk]["idx"] = _fi
             fan_info[_fk]["controllable"] = fan_info[_fk].get("controllable") or _controllable
         else:
             # 仅 sysfs 暴露的风扇，用 sysfs 模式兜底
@@ -1944,6 +1946,15 @@ def api_fan_set():
     except (TypeError, ValueError):
         return jsonify({"ok": False, "error": "invalid idx"}), 400
     key = (hwmon, idx)
+    # 防御：hwmon 路径可能跨重启/进程漂移(如 nct6797 在 hwmon3↔hwmon4 间变化)，
+    # 而 FAN_TARGETS 与平滑线程都以「实时枚举」为权威 key。若 GUI 发来的 (hwmon,idx)
+    # 不在实时枚举中、但该 idx 存在，则按 idx 校正 hwmon，确保目标命中真正的可控通道。
+    _enum = _enumerate_fans()
+    if (hwmon, idx) not in _enum:
+        _idx2hw = {i: h for (h, i) in _enum}
+        if idx in _idx2hw:
+            hwmon = _idx2hw[idx]
+            key = (hwmon, idx)
     if mode == "auto":
         if _fan_ext_service_running():
             # 系统风扇服务在跑：交还它接管（写 enable=2）
