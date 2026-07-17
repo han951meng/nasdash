@@ -5,8 +5,18 @@ LOG="${TRIM_TEMP_LOGFILE}"
 
 PYTHON=$(which python3 2>/dev/null || echo "/usr/bin/python3")
 
-# 0. 兼容只装了 storcli64 的机器（动态探测已兜底，这里再建软链双保险）
-if command -v storcli64 >/dev/null 2>&1; then
+# 0. 安装随包内置的 storcli 二进制（优先，避免外部下载/源不可用）
+#    注意：旧版 storcli(1.21.06, 2016) 在新内核(6.x, vsyscall=none)上会段错误，
+#    仓库 vendor/storcli/storcli64 已替换为 007.2705 新版（动态链接现代 glibc，走 vDSO）。
+BUNDLED_STORCLI="${TRIM_APPDEST}/vendor/storcli/storcli64"
+if [ -f "$BUNDLED_STORCLI" ]; then
+    mkdir -p /opt/MegaRAID/storcli
+    install -m 0755 "$BUNDLED_STORCLI" /opt/MegaRAID/storcli/storcli64
+    ln -sf /opt/MegaRAID/storcli/storcli64 /usr/local/bin/storcli64 2>/dev/null
+    ln -sf /opt/MegaRAID/storcli/storcli64 /usr/local/bin/storcli 2>/dev/null
+    echo "[nasdash] 已从内置包安装 storcli ($(${BUNDLED_STORCLI} -v 2>/dev/null | head -1))" >> "$LOG"
+elif command -v storcli64 >/dev/null 2>&1; then
+    # 兼容只装了 storcli64 的机器，建软链双保险
     [ -e /usr/local/bin/storcli64 ] || ln -sf "$(command -v storcli64)" /usr/local/bin/storcli64 2>/dev/null
     [ -e /usr/local/bin/storcli ] || ln -sf "$(command -v storcli64)" /usr/local/bin/storcli 2>/dev/null
 fi
@@ -94,8 +104,9 @@ if [ ${#need_install[@]} -gt 0 ]; then
                 esac
                 ;;
             storcli)
-                # storcli 不在标准源里，提示用户从 Broadcom 官网下载
-                echo "[nasdash] storcli 未安装。可选：LSI 阵列卡用户从 Broadcom 官网下载 storcli_*.deb 并安装；非 LSI 阵列卡可忽略此提示" >> "$LOG"
+                # 正常情况不会走到这里：install_callback 第 0 步已从内置包安装 storcli。
+                # 仅当 fpk 未携带 vendor/storcli 时作为兜底提示。
+                echo "[nasdash] storcli 未安装且内置包缺失。LSI 阵列卡用户可从 Broadcom 官网下载 storcli_*.deb 并安装；非 LSI 阵列卡可忽略此提示" >> "$LOG"
                 ;;
             flask)
                 $PYTHON -m pip install --break-system-packages flask 2>>"$LOG" 1>/dev/null
