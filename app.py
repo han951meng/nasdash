@@ -204,7 +204,8 @@ def _fan_smooth_step(hwmon, idx, target):
         if cur != target:
             _fan_write_raw(hwmon, idx, target)
         return
-    step = 6 if abs(diff) > 6 else abs(diff)
+    # 每 tick 最多变 18（≈ 12%/秒），手动拉进度条几秒内明显响应，又不至于瞬间从静音直接满速。
+    step = 18 if abs(diff) > 18 else abs(diff)
     _fan_write_raw(hwmon, idx, cur + (step if diff > 0 else -step))
 
 def _enumerate_fans(force=False):
@@ -1558,6 +1559,9 @@ def get_system():
                                 "controllable": fi.get("controllable", False),
                                 "hwmon": fi.get("hwmon", ""),
                                 "idx": fi.get("idx", 0),
+                                # has_tach=False：读不到转速（分线器副扇/未接转速线/主板未布线该通道）
+                                "has_tach": int(fv) > 0,
+                                "hidden": bool(_lab.get("hidden")),
                             })
                             break
                         elif fn.startswith("in"):
@@ -2006,15 +2010,20 @@ def api_fan_status():
             tcfg = FAN_TARGETS.get(key)
         if tcfg and tcfg.get("mode") == "manual":
             target_pct = round(tcfg["target"] / 255 * 100)
+        _lbl = labels.get(f"{hwmon}::{idx}", {})
         fans.append({
             "name": names.get(idx, f"风扇{idx}"),
-            "label": labels.get(f"{hwmon}::{idx}", {}).get("name", ""),
-            "voltage": labels.get(f"{hwmon}::{idx}", {}).get("voltage", ""),
+            "label": _lbl.get("name", ""),
+            "voltage": _lbl.get("voltage", ""),
             "idx": idx, "hwmon": hwmon,
             "rpm": rpm, "pwm": pwm_pct,
             "mode": mode,
             "target_pct": target_pct,
             "controllable": True,
+            # has_tach=False：该通道读不到转速（分线器副扇/未接转速线/主板未布线该通道）
+            "has_tach": rpm > 0,
+            # 用户可把「无风扇的幽灵通道」隐藏（持久化到 fan_labels.json）
+            "hidden": bool(_lbl.get("hidden")),
         })
     return jsonify({"fans": fans})
 
@@ -2202,7 +2211,10 @@ def api_fan_labels_post():
         volt = v.get("voltage", "")
         if volt not in _FAN_VOLT_ALLOWED:
             volt = "未知"
-        clean[k] = {"name": name, "voltage": volt}
+        entry = {"name": name, "voltage": volt}
+        if v.get("hidden"):
+            entry["hidden"] = True   # 隐藏无风扇的幽灵通道（可恢复）
+        clean[k] = entry
     if _save_fan_labels(clean):
         return jsonify({"ok": True})
     return jsonify({"ok": False, "error": "save failed"}), 500
@@ -2702,10 +2714,14 @@ function renderFanControls(fans){
 
 // ===== 风扇控制独立页面（预设档位 + 实时转速卡片）=====
 let FAN_LIST=[];
+let SHOW_HIDDEN_FANS=false;
+function toggleShowHiddenFans(){ SHOW_HIDDEN_FANS=!SHOW_HIDDEN_FANS; if(typeof loadData==='function'){ loadData(); } }
 function renderFanControl(){
-  let fans=(DATA.system&&DATA.system.sensors&&DATA.system.sensors.fans||[]).filter(f=>f.controllable);
+  let allFans=(DATA.system&&DATA.system.sensors&&DATA.system.sensors.fans||[]).filter(f=>f.controllable);
+  let hiddenCount=allFans.filter(f=>f.hidden).length;
+  let fans=SHOW_HIDDEN_FANS?allFans:allFans.filter(f=>!f.hidden);
   FAN_LIST=fans;
-  if(!fans.length) return '<div class="card"><div class="loading">未检测到可调控风扇（部分 NAS 由系统固件统一控温，本工具不接管）</div></div>';
+  if(!allFans.length) return '<div class="card"><div class="loading">未检测到可调控风扇（部分 NAS 由系统固件统一控温，本工具不接管）</div></div>';
   let presets=[['auto','默认'],['100','全速'],['10','10%'],['20','20%'],['30','30%'],['40','40%'],['50','50%'],['60','60%'],['70','70%'],['80','80%'],['90','90%']];
   let presetHtml=presets.map(p=>`<button class="preset-btn ${p[0]==='100'?'full':''}" data-preset="${p[0]}" onclick="applyFanPreset('${p[0]}')">${p[1]}</button>`).join('');
   let modeMap={'curve':'曲线温控','manual':'手动控制','auto':'自动温控','off':'关闭','disk_temp':'硬盘温控','sys_temp':'主板/CPU温控'};
@@ -2726,7 +2742,7 @@ function renderFanControl(){
           <span id="${id}-label-state" class="fan-label-state"></span>
         </span>
       </div>
-      <div class="fan-rpm"><span id="${id}-rpm">${f.rpm||0}</span><small>RPM</small></div>
+      <div class="fan-rpm" ${f.has_tach?'':'title="读不到转速：可能是一分二分线器的副风扇（转速线未接）、风扇本身未接转速线，或主板未把该通道布线到风扇接口。若此通道无风扇，可点下方『隐藏』把它收起。"'}><span id="${id}-rpm">${f.has_tach?(f.rpm||0):'—'}</span><small id="${id}-rpm-unit">${f.has_tach?'RPM':'无转速信号'}</small></div>
       <div class="fan-speed-bar"><div class="fan-speed-fill" id="${id}-bar" style="width:${pct}%"></div></div>
       <div class="fan-pct-line">
         <span>当前 <b id="${id}-cur">${pct}</b>%</span>
@@ -2739,20 +2755,24 @@ function renderFanControl(){
           <input type="number" min="10" max="100" step="1" value="${pct}" class="fan-custom-input" id="${id}-custom" data-hwmon="${f.hwmon}" data-idx="${f.idx}" title="自定义该风扇占空比"> %
           <button class="btn-mini" onclick="applyFanCustom('${f.hwmon}', ${f.idx})">应用</button>
         </span>
+        <button class="btn-mini" onclick="toggleFanHidden('${f.hwmon}', ${f.idx}, ${f.hidden?'false':'true'})" title="隐藏无风扇/无转速的空通道，可随时恢复">${f.hidden?'取消隐藏':'隐藏'}</button>
         <span class="fan-card-state" id="${id}-state"></span>
       </div>
     </div>`;
   }).join('');
   let dtHtml = renderDiskTempPanel();
   let stHtml = renderSysTempPanel();
+  let hideToggle = hiddenCount>0 ? `<button class="btn-mini" style="margin-left:8px" onclick="toggleShowHiddenFans()">${SHOW_HIDDEN_FANS?('收起已隐藏('+hiddenCount+')'):('显示已隐藏通道('+hiddenCount+')')}</button>` : '';
+  let gridInner = cards || `<div class="loading">可见风扇均已隐藏${hiddenCount>0?'，点上方「显示已隐藏通道」可展开':''}。</div>`;
   return `<div class="fan-page">
     ${dtHtml}
     ${stHtml}
     <div class="fan-presets">
       <span class="label">一键调速：</span>${presetHtml}
+      ${hideToggle}
       <span class="fan-global-state" id="fan-global-state"></span>
     </div>
-    <div class="fan-grid">${cards}</div>
+    <div class="fan-grid">${gridInner}</div>
   </div>`;
 }
 async function applyFanPreset(val){
@@ -2817,7 +2837,8 @@ async function fetchFanStatus(){
       let sl=document.getElementById(id+'-slider');
       if(cur) cur.textContent=(f.pwm!=null?f.pwm:'--');
       if(tgt) tgt.textContent=(f.target_pct!=null && f.target_pct!==f.pwm)?('→ 目标 '+f.target_pct+'%'):(f.mode==='auto'?'· 自动控温':'');
-      if(rpm) rpm.textContent=(f.rpm||0);
+      if(rpm) rpm.textContent=(f.has_tach?(f.rpm||0):'—');
+      let unit=document.getElementById(id+'-rpm-unit'); if(unit) unit.textContent=(f.has_tach?'RPM':'无转速信号');
       let bar=document.getElementById(id+'-bar');
       if(bar) bar.style.width=(f.pwm!=null?f.pwm:50)+'%';
       if(sl && document.activeElement!==sl) sl.value=(f.pwm!=null?f.pwm:50);
@@ -2852,12 +2873,24 @@ async function saveFanLabel(hwmon, idx){
   if(!labInp||!voltSel) return;
   try{
     let r=await fetch('/api/fan/labels'); let cur=await r.json();
-    cur[hwmon+'::'+idx]={name:labInp.value.trim(), voltage:voltSel.value};
+    let k=hwmon+'::'+idx; let e=cur[k]||{};
+    e.name=labInp.value.trim(); e.voltage=voltSel.value;  // 保留 e.hidden 不被覆盖
+    cur[k]=e;
     let r2=await fetch('/api/fan/labels',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cur)});
     let j=await r2.json();
     if(st) st.textContent=j.ok?'已保存 ✓':'失败';
     if(j.ok){ loadData(); }
   }catch(e){ if(st) st.textContent='请求失败'; }
+}
+async function toggleFanHidden(hwmon, idx, hide){
+  try{
+    let r=await fetch('/api/fan/labels'); let cur=await r.json();
+    let k=hwmon+'::'+idx; let e=cur[k]||{};
+    e.hidden=!!hide; cur[k]=e;
+    await fetch('/api/fan/labels',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cur)});
+    if(!hide){ SHOW_HIDDEN_FANS=true; }  // 取消隐藏后确保该风扇仍可见
+    if(typeof loadData==='function'){ loadData(); }
+  }catch(e){}
 }
 function bindFanSliders(){
   document.querySelectorAll('.fan-slider').forEach(sl=>{
