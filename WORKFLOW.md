@@ -1,6 +1,6 @@
 # nasdash 开发 / 发版工作流
 
-基于 `v1.7.9` 基线。所有修改一律从干净基线出发，绝不用旧包 / 旧图标当母版。
+基于 `v1.7.10` 基线。所有修改一律从干净基线出发，绝不用旧包 / 旧图标当母版。
 
 ## Step 0 · 明确需求（先想清楚再动手）
 
@@ -21,8 +21,8 @@
 
 ```bash
 git fetch
-git checkout v1.7.9        # 或 git pull 到最新 main（HEAD 即 1.7.9 发版 commit）
-grep '^version' manifest   # 确认 version = 1.7.9
+git checkout v1.7.10        # 或 git pull 到最新 main（HEAD 即 1.7.10 发版 commit）
+grep '^version' manifest   # 确认 version = 1.7.10
 ```
 
 ## Step 2 · 编码 / 改图标

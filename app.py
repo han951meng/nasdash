@@ -118,11 +118,14 @@ def sudo(cmd, timeout=30):
 
 # ===================== 风扇缓变控制（常驻线程平滑过渡，避免瞬间全速）=====================
 import threading as _threading
+import glob as _glob
 
 # 全局风扇目标状态：key=(hwmon, idx) -> {"mode":"manual"|"auto", "target":0-255}
 FAN_LOCK = _threading.Lock()
 FAN_TARGETS = {}
 _FAN_LAST_CPU_TEMP = {"t": 0.0, "v": None}
+# 本机真实风扇全集缓存（拓扑基本静态，30s 刷新；见 _enumerate_fans）
+_FAN_ENUM_CACHE = {"t": 0.0, "v": []}
 
 def _fan_read_raw(hwmon, idx):
     try:
@@ -204,47 +207,86 @@ def _fan_smooth_step(hwmon, idx, target):
     step = 6 if abs(diff) > 6 else abs(diff)
     _fan_write_raw(hwmon, idx, cur + (step if diff > 0 else -step))
 
+def _enumerate_fans(force=False):
+    """枚举本机真实可控风扇 (hwmon_path, idx)，仅 it87/nct 芯片（与前端展示/配置引用一致）。
+    作为温控循环的控制全集；FAN_TARGETS 仅作「每风扇手动/自动覆盖映射」。
+    修复 Bug A：此前温控循环只遍历 FAN_TARGETS（仅用户手动调过的风扇才填充），
+    导致 sys_temp/disk_temp 设 controlled_fans:"all" 时启动即空转、一个风扇都不控。
+    拓扑基本静态，缓存 30s 刷新一次（支持热插拔风机后自动纳入）。"""
+    now = time.time()
+    if not force and now - _FAN_ENUM_CACHE["t"] < 30:
+        return _FAN_ENUM_CACHE["v"]
+    fans = []
+    try:
+        for _hp in sorted(_glob.glob("/sys/class/hwmon/hwmon*")):
+            _cn = run(f"cat {_hp}/name 2>/dev/null", 2).strip()
+            if not _cn.startswith(("it87", "nct")):
+                continue
+            for _fi in range(1, 6):
+                _pe = run(f"cat {_hp}/pwm{_fi}_enable 2>/dev/null", 2).strip()
+                if not _pe:
+                    continue
+                fans.append((_hp, _fi))
+    except Exception:
+        pass
+    _FAN_ENUM_CACHE["t"] = now
+    _FAN_ENUM_CACHE["v"] = fans
+    return fans
+
+def _select_temp_fans(all_fans, sys_cfg, disk_cfg):
+    """按 controlled_fans 配置从 all_fans 中选出被 sys_temp / disk_temp 接管的风扇集合。
+    选择依据「真实风扇全集 all_fans」而非 FAN_TARGETS —— 这是 Bug A 修复的核心。"""
+    sys_claimed = set()
+    disk_claimed = set()
+    if sys_cfg.get("enabled"):
+        cf = sys_cfg.get("controlled_fans", "all")
+        for (hwmon, idx) in all_fans:
+            if cf != "all" and [hwmon, idx] not in cf:
+                continue
+            sys_claimed.add((hwmon, idx))
+    if disk_cfg.get("enabled") and disk_cfg.get("disks"):
+        cf = disk_cfg.get("controlled_fans", "all")
+        for (hwmon, idx) in all_fans:
+            if (hwmon, idx) in sys_claimed:
+                continue
+            if cf != "all" and [hwmon, idx] not in cf:
+                continue
+            disk_claimed.add((hwmon, idx))
+    return sys_claimed, disk_claimed
+
 def fan_smooth_loop():
     # daemon 线程：每 ~0.6s 把风扇当前 pwm 朝目标平滑过渡（常驻线程 tick + 缓变）
     while True:
         try:
             with FAN_LOCK:
-                items = list(FAN_TARGETS.items())
-            # 受温控接管的风扇集合（sys_temp 与 disk_temp 共用，避免重复控）
-            controlled = set()
-            # 主板/CPU 温控（sys_temp）：优先级最高，先接管
+                overrides = dict(FAN_TARGETS)   # 每风扇手动/自动覆盖（仅用户经 UI 调过的风扇）
+            all_fans = _enumerate_fans()          # 本机真实风扇全集（it87/nct）
             st = _load_fan_sys_temp()
+            dt = _load_fan_disk_temp()
+            sys_claimed, disk_claimed = _select_temp_fans(all_fans, st, dt)
+            controlled = sys_claimed | disk_claimed
+            # 主板/CPU 温控（sys_temp）：优先级最高，先接管
             if st.get("enabled"):
                 T = _fan_read_sys_temp(st.get("source", "cpu"))
                 action, target = _fan_sys_temp_decision(T, st)
-                cf = st.get("controlled_fans", "all")
-                for (hwmon, idx), cfg in items:
-                    if cf != "all" and [hwmon, idx] not in cf:
-                        continue
-                    controlled.add((hwmon, idx))
+                for (hwmon, idx) in sys_claimed:
                     if action == "control" and target is not None:
                         _fan_smooth_step(hwmon, idx, target)
                     elif action == "release":
                         _fan_release_auto(hwmon, idx)
                     # "hold" → 已交还自动，不再写入（避免与主板/内核抢控）
             # 硬盘温度控制（disk_temp）：接管未被 sys_temp 占用的受控风扇
-            dt = _load_fan_disk_temp()
             if dt.get("enabled") and dt.get("disks"):
                 states = get_disk_temps(dt["disks"])
                 action, target = _fan_disk_temp_decision(states, dt)
-                cf = dt.get("controlled_fans", "all")
-                for (hwmon, idx), cfg in items:
-                    if (hwmon, idx) in controlled:
-                        continue  # 已被 sys_temp 接管
-                    if cf != "all" and [hwmon, idx] not in cf:
-                        continue
-                    controlled.add((hwmon, idx))
+                for (hwmon, idx) in disk_claimed:
                     if action == "control" and target is not None:
                         _fan_smooth_step(hwmon, idx, target)
                     elif action == "release":
                         _fan_release_auto(hwmon, idx)
                     # "hold" → 已交还自动，不再写入
-            for (hwmon, idx), cfg in items:
+            # 剩余风扇：仅处理用户在 UI 中手动/自动设过的（overrides）；未触碰的风扇保持原样（交还 BIOS/主板）
+            for (hwmon, idx), cfg in overrides.items():
                 if (hwmon, idx) in controlled:
                     continue  # 已被温控接管
                 if cfg.get("mode") == "auto":
@@ -949,7 +991,7 @@ def get_disks():
             size_str = f"{gb/1000:.1f}T" if gb >= 1000 else f"{gb:.0f}G"
         except:
             size_str = "?"
-        smart_out = sudo(f"{SMARTCTL} -a {dev}", 20)
+        smart_out = sudo(f"{SMARTCTL} -n standby -a {dev}", 20)
         disk = {
             "dev": name, "size": size_str, "rota": info.get("rota", "?"),
             "model": "", "serial": "", "tran": info.get("tran", ""), "vendor": "",

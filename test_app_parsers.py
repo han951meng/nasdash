@@ -119,3 +119,100 @@ def test_parse_nvme_missing_fields_none():
     assert d["power_on_hours"] is None
     assert d["temp"] is None
     assert d["health"] == "PASSED"
+
+
+# ---------------- 风扇温控选择（Bug A 修复回归） ----------------
+def _fake_fans():
+    base = "/sys/class/hwmon/hwmon4"
+    return [(base, 1), (base, 2), (base, 3)]
+
+
+def test_select_sys_temp_all_claims_every_fan():
+    # Bug A 核心：controlled_fans="all" 时，sys_temp 必须接管全集里的每一把风扇，
+    # 而不是只接管「用户手动调过的」(FAN_TARGETS)。
+    all_fans = _fake_fans()
+    sys_cfg = {"enabled": True, "controlled_fans": "all"}
+    disk_cfg = {"enabled": False, "disks": []}
+    sys_claimed, disk_claimed = app._select_temp_fans(all_fans, sys_cfg, disk_cfg)
+    assert sys_claimed == set(all_fans)
+    assert disk_claimed == set()
+
+
+def test_select_disk_temp_all_claims_every_fan():
+    all_fans = _fake_fans()
+    sys_cfg = {"enabled": False, "controlled_fans": "all"}
+    disk_cfg = {"enabled": True, "disks": ["/dev/sda"], "controlled_fans": "all"}
+    sys_claimed, disk_claimed = app._select_temp_fans(all_fans, sys_cfg, disk_cfg)
+    assert sys_claimed == set()
+    assert disk_claimed == set(all_fans)
+
+
+def test_select_subset_only_claims_listed():
+    all_fans = _fake_fans()
+    sys_cfg = {"enabled": True, "controlled_fans": [["/sys/class/hwmon/hwmon4", 1]]}
+    disk_cfg = {"enabled": False, "disks": []}
+    sys_claimed, _ = app._select_temp_fans(all_fans, sys_cfg, disk_cfg)
+    assert sys_claimed == {("/sys/class/hwmon/hwmon4", 1)}
+
+
+def test_select_sys_priority_over_disk():
+    # sys_temp 与 disk_temp 都设 "all" 时，sys 先占全部，disk 不得重复控（互不干扰）。
+    all_fans = _fake_fans()
+    sys_cfg = {"enabled": True, "controlled_fans": "all"}
+    disk_cfg = {"enabled": True, "disks": ["/dev/sda"], "controlled_fans": "all"}
+    sys_claimed, disk_claimed = app._select_temp_fans(all_fans, sys_cfg, disk_cfg)
+    assert sys_claimed == set(all_fans)
+    assert disk_claimed == set()
+
+
+def test_select_disk_only_when_sys_disabled():
+    # sys 关、disk 开 all：disk 接管全集。
+    all_fans = _fake_fans()
+    sys_cfg = {"enabled": False, "controlled_fans": "all"}
+    disk_cfg = {"enabled": True, "disks": ["/dev/sda"], "controlled_fans": "all"}
+    sys_claimed, disk_claimed = app._select_temp_fans(all_fans, sys_cfg, disk_cfg)
+    assert sys_claimed == set()
+    assert disk_claimed == set(all_fans)
+
+
+def test_enumerate_fans_filters_it87_nct_and_enable(monkeypatch):
+    # _enumerate_fans 只认 it87/nct 芯片、且跳过 pwm_enable 为空的风扇口。
+    base = "/sys/class/hwmon/hwmon4"
+
+    class FakeGlob:
+        def glob(self, pat):
+            return [base]
+
+    monkeypatch.setattr(app, "_glob", FakeGlob())
+
+    def fake_run(cmd, *a, **k):
+        # 真实命令形如 "cat /sys/class/hwmon/hwmon4/name 2>/dev/null"，不能用 endswith 判断
+        if "/name" in cmd:
+            return "nct6797\n"
+        if "pwm5_enable" in cmd:
+            return ""  # 该口不存在（cat 返回空）→ 应跳过
+        if "_enable" in cmd:
+            return "1\n"
+        return ""
+
+    monkeypatch.setattr(app, "run", fake_run)
+    fans = app._enumerate_fans(force=True)
+    assert (base, 1) in fans
+    assert (base, 2) in fans
+    assert (base, 3) in fans
+    assert (base, 4) in fans
+    assert (base, 5) not in fans  # enable=0 跳过
+
+
+def test_enumerate_fans_skips_non_it87_nct(monkeypatch):
+    # 非 it87/nct 芯片（如 coretemp）的风扇不应被纳入控制全集。
+    base = "/sys/class/hwmon/hwmon3"
+
+    class FakeGlob:
+        def glob(self, pat):
+            return [base]
+
+    monkeypatch.setattr(app, "_glob", FakeGlob())
+    monkeypatch.setattr(app, "run", lambda cmd, *a, **k: "coretemp\n" if "/name" in cmd else "1\n")
+    fans = app._enumerate_fans(force=True)
+    assert fans == []

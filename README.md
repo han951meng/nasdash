@@ -1,6 +1,6 @@
 # nasdash
 
-**当前版本：v1.7.8** · [下载最新 fpk](https://github.com/han951meng/nasdash/releases/latest)
+**当前版本：v1.7.10** · [下载最新 fpk](https://github.com/han951meng/nasdash/releases/latest)
 
 飞牛OS（fnOS）NAS 硬件监控面板 —— FPK 应用包
 
@@ -116,6 +116,14 @@
 - 双磁臂（双执行器）硬盘：LSI 阵列卡会将其每个执行器作为独立盘暴露给系统（如各 7T），面板在阵列卡页显示整盘标称容量（如 14T）并标注每执行器容量
 
 ## 更新日志
+
+### v1.7.10
+- 修复风扇温控空转(Bug A)：sys_temp/disk_temp 设 controlled_fans:all 时启动即接管全部风扇，不再因 FAN_TARGETS 为空而失效；主采集 smartctl 加 -n standby 避免每次轮询唤醒休眠 SAS 盘(Bug B)；新增风扇枚举/温控选择回归测试
+
+
+### v1.7.9
+- 重装应用不再丢失风扇/主板标注配置（卸载自动备份、安装自动还原）；新增本地自测/校验/一键发版脚本
+
 
 ### v1.7.8
 - 应用图标全面升级为 256×256 高清：修复飞牛桌面与应用中心图标模糊问题（参考 fnos-hermes-agent 正确做法——无论文件名是否带 64，位图内容统一为 256×256 高清）
