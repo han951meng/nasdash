@@ -6,25 +6,25 @@ def create_icon(size, filename, base=1024):
     img = Image.new('RGBA', (base, base), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
-    blue = (37, 99, 235, 255)   # #2563EB
+    blue = (59, 130, 246, 255)   # #3B82F6 ( brighter blue, closer to reference )
     white = (255, 255, 255, 255)
-    green = (34, 197, 94, 255)  # #22C55E
+    green = (34, 197, 94, 255)   # #22C55E
 
-    # 圆角方形背景（饱满圆角tile，贴近系统图标风格；留白适度）
+    # 圆角方形背景（饱满大圆角，接近参考图风格）
     margin = 32
     draw.rounded_rectangle(
         [(margin, margin), (base - margin, base - margin)],
-        radius=200,
+        radius=240,
         fill=blue
     )
 
-    # 三条白杠（服务器）
-    bar_w = 720
-    bar_h = 140
+    # 三条白杠（更粗、更圆、间距更均匀）
+    bar_w = 540
+    bar_h = 135
     bar_x = (base - bar_w) // 2
-    bar_radius = 70
-    gap = 60
-    bar_y1 = 262
+    bar_radius = 65
+    gap = 175
+    bar_y1 = (base - (3 * bar_h + 2 * gap)) // 2
     bar_y2 = bar_y1 + bar_h + gap
     bar_y3 = bar_y2 + bar_h + gap
 
@@ -35,9 +35,9 @@ def create_icon(size, filename, base=1024):
             fill=white
         )
 
-    # 三个绿色状态灯
-    dot_r = 36
-    dot_x = bar_x + 90
+    # 三个绿色状态灯（更大，偏左内嵌）
+    dot_r = 40
+    dot_x = bar_x + 78
     for y in (bar_y1, bar_y2, bar_y3):
         cy = y + bar_h // 2
         draw.ellipse(
