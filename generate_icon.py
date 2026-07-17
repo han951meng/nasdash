@@ -10,11 +10,11 @@ def create_icon(size, filename, base=1024):
     white = (255, 255, 255, 255)
     green = (34, 197, 94, 255)  # #22C55E
 
-    # 圆角方形背景（保持原概念，留白更明显以贴合飞牛「圆角矩形+留白」风格）
-    margin = 64
+    # 圆角方形背景（饱满圆角tile，贴近系统图标风格；留白适度）
+    margin = 32
     draw.rounded_rectangle(
         [(margin, margin), (base - margin, base - margin)],
-        radius=210,
+        radius=200,
         fill=blue
     )
 
@@ -51,8 +51,14 @@ def create_icon(size, filename, base=1024):
 
 if __name__ == '__main__':
     out_dir = os.path.dirname(os.path.abspath(__file__))
-    # 飞牛规范：ICON.PNG 必须 64x64，ICON_256.PNG 必须 256x256
+    # 飞牛规范：包图标 ICON.PNG 必须 64x64，ICON_256.PNG 必须 256x256
     create_icon(64, os.path.join(out_dir, 'ICON.PNG'))
     create_icon(256, os.path.join(out_dir, 'ICON_256.PNG'))
-    print('ICON.PNG: 64x64 (fnOS spec)')
-    print('ICON_256.PNG: 256x256 (fnOS spec)')
+    # 应用入口/桌面/应用中心真正显示的图标来自 ui/images/icon-{0}.png
+    # （ui/config 引用 "images/icon-{0}.png"，fnOS 把 {0} 替换成 64/256）
+    create_icon(64, os.path.join(out_dir, 'ui', 'images', 'icon-64.png'))
+    create_icon(256, os.path.join(out_dir, 'ui', 'images', 'icon-256.png'))
+    print('ICON.PNG: 64x64 (fnOS spec, 包图标)')
+    print('ICON_256.PNG: 256x256 (fnOS spec, 包图标)')
+    print('ui/images/icon-64.png: 64x64 (真正显示用)')
+    print('ui/images/icon-256.png: 256x256 (真正显示用)')
