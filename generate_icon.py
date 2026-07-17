@@ -10,11 +10,11 @@ def create_icon(size, filename, base=1024):
     white = (255, 255, 255, 255)
     green = (34, 197, 94, 255)  # #22C55E
 
-    # 圆角方形背景（保持原概念）
-    margin = 32
+    # 圆角方形背景（保持原概念，留白更明显以贴合飞牛「圆角矩形+留白」风格）
+    margin = 64
     draw.rounded_rectangle(
         [(margin, margin), (base - margin, base - margin)],
-        radius=200,
+        radius=210,
         fill=blue
     )
 
@@ -51,7 +51,8 @@ def create_icon(size, filename, base=1024):
 
 if __name__ == '__main__':
     out_dir = os.path.dirname(os.path.abspath(__file__))
-    create_icon(512, os.path.join(out_dir, 'ICON.PNG'))
+    # 飞牛规范：ICON.PNG 必须 64x64，ICON_256.PNG 必须 256x256
+    create_icon(64, os.path.join(out_dir, 'ICON.PNG'))
     create_icon(256, os.path.join(out_dir, 'ICON_256.PNG'))
-    print('ICON.PNG: 512x512')
-    print('ICON_256.PNG: 256x256')
+    print('ICON.PNG: 64x64 (fnOS spec)')
+    print('ICON_256.PNG: 256x256 (fnOS spec)')
