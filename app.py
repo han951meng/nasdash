@@ -10,9 +10,39 @@ from flask import Flask, jsonify, render_template_string, request
 
 app = Flask(__name__)
 
-# 应用根目录（用来存放手动标注等运行时配置）
+# 应用根目录
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
-BOARD_OVERRIDE_FILE = os.path.join(APP_DIR, "board_override.txt")
+
+# 用户配置持久目录：飞牛运行时通过环境变量 TRIM_PKGVAR 提供 @appdata 持久目录
+# （与应用卸载无关，重装后保留；cmd/main 也用它存 app.pid/app.log）。
+# 早期版本把配置写在 APP_DIR，导致每次重装被清空。现统一写入此持久目录，重装不丢配置。
+def _config_dir():
+    d = os.environ.get("TRIM_PKGVAR")
+    if not d:
+        d = "/usr/local/apps/@appdata/com.dashboard.nasdash"
+    try:
+        os.makedirs(d, exist_ok=True)
+        return d
+    except Exception:
+        return APP_DIR
+
+# 从旧版(配置存 APP_DIR)升级时，把已有配置迁移到持久目录，避免丢失
+def _migrate_legacy_configs():
+    cfg = _config_dir()
+    if cfg == APP_DIR:
+        return
+    for name in ("board_override.txt", "fan_labels.json", "fan_disk_temp.json", "fan_sys_temp.json"):
+        src = os.path.join(APP_DIR, name)
+        dst = os.path.join(cfg, name)
+        if os.path.exists(src) and not os.path.exists(dst):
+            try:
+                shutil.copy2(src, dst)
+            except Exception:
+                pass
+
+_migrate_legacy_configs()
+
+BOARD_OVERRIDE_FILE = os.path.join(_config_dir(), "board_override.txt")
 
 # 版本号单一来源：fnOS 标准安装时 manifest 不在 APP_DIR（APP_DIR 只有 app.tgz 内容），
 # 而是在 /var/apps/<appid>/manifest。两个位置都查，最后才回退硬编码值（曾因只查 APP_DIR 导致所有标准安装都显示 v1.6.2）。
@@ -321,7 +351,7 @@ _fan_thread.start()
 
 # ===================== 风扇标注（用户可编辑名称/电压，按安装实例持久化）=====================
 # 标注与硬件无关：只存 (hwmon, idx) -> {name, voltage}，不写死任何机型，对所有用户（含 IT87）安全。
-FAN_LABELS_FILE = os.path.join(APP_DIR, "fan_labels.json")
+FAN_LABELS_FILE = os.path.join(_config_dir(), "fan_labels.json")
 _FAN_VOLT_ALLOWED = ("12V", "5V", "未知", "")
 
 def _load_fan_labels():
@@ -357,7 +387,7 @@ def _fan_label_for(hwmon, idx):
 # ===================== 风扇：硬盘温度控制（disk_temp）=====================
 # 论坛需求（服务器/硬盘多/风扇多场景）：用指定硬盘温度驱动风扇——
 # 如设置若干硬盘，40°C 开转、60°C 全速、硬盘休眠则停转。nasdash 增量支持，不替换现有 IT87/NCT 温控。
-FAN_DISK_TEMP_FILE = os.path.join(APP_DIR, "fan_disk_temp.json")
+FAN_DISK_TEMP_FILE = os.path.join(_config_dir(), "fan_disk_temp.json")
 
 def _load_fan_disk_temp():
     """读取硬盘温度控风扇配置（缺省关闭）。"""
@@ -395,7 +425,7 @@ def _save_fan_disk_temp(cfg):
 # 与 disk_temp 对称的另一套「温度曲线控速」：温度源来自 CPU 封装温度或主板温度，
 # 同样用 start/full/recover/min/max + 受控风扇 的滞回曲线。两套互不干扰，可分别接管不同风扇
 # （如 CPU 风扇交给 sys_temp 按 CPU 温度控，机箱风扇交给 disk_temp 按硬盘温度控）。
-FAN_SYS_TEMP_FILE = os.path.join(APP_DIR, "fan_sys_temp.json")
+FAN_SYS_TEMP_FILE = os.path.join(_config_dir(), "fan_sys_temp.json")
 
 def _load_fan_sys_temp():
     """读取主板/CPU 温度控风扇配置（缺省关闭）。"""

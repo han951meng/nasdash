@@ -150,13 +150,14 @@ fi
 # 7. 确保脚本可执行
 chmod +x "${TRIM_APPDEST}"/*.py 2>/dev/null
 
-# 8. 还原用户配置（uninstall 时备份到持久目录，避免重装丢配置）
+# 8. 还原用户配置（uninstall 时镜像到持久目录，避免重装丢配置）
+#    自 v1.7.12 起配置由 app.py 直接读写 TRIM_PKGVAR，此处从镜像备份再保险一次。
 : "${TRIM_PKGVAR:=/usr/local/apps/@appdata/com.dashboard.nasdash}"
 _BACKUP_DIR="$TRIM_PKGVAR/config_backup"
 if [ -d "$_BACKUP_DIR" ]; then
     for f in fan_disk_temp.json fan_sys_temp.json fan_labels.json board_override.txt; do
         if [ -f "$_BACKUP_DIR/$f" ]; then
-            cp -f "$_BACKUP_DIR/$f" "$_APP_DIR/$f"
+            cp -f "$_BACKUP_DIR/$f" "$TRIM_PKGVAR/$f"
             echo "[nasdash] 已还原用户配置 $f" >> "$LOG"
         fi
     done
