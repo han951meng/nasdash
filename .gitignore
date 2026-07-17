@@ -5,5 +5,11 @@ _rebuild/
 # Python 缓存
 __pycache__/
 
+# 本地自测虚拟环境
+.venv/
+
+# 运行时日志
+debug.log
+
 # 本地打包中间产物（app.tgz 由打包脚本重新生成，不入库）
 app.tgz

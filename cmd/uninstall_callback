@@ -1,5 +1,21 @@
 #!/bin/bash
-# 卸载后回调：清理进程（如有残留）
+# 卸载后回调：备份用户配置到持久目录 + 清理进程
+# 注意：uninstall 会清空 target(APP_DIR)，而风扇/主板标注等用户配置就在其中，
+# 因此卸载前先备份到 TRIM_PKGVAR（@appdata，卸载后保留），重装时由 install_callback 还原。
+: "${TRIM_PKGVAR:=/usr/local/apps/@appdata/com.dashboard.nasdash}"
+_APP_DIR="${TRIM_APPDEST:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+_BACKUP_DIR="$_APP_DIR/.uninstall_backup"
+mkdir -p "$_BACKUP_DIR"
+for f in fan_disk_temp.json fan_sys_temp.json fan_labels.json board_override.txt; do
+    if [ -f "$_APP_DIR/$f" ]; then
+        cp -f "$_APP_DIR/$f" "$_BACKUP_DIR/$f"
+        echo "[nasdash] 已备份用户配置 $f" >> "${TRIM_TEMP_LOGFILE}"
+    fi
+done
+# 同时镜像一份到持久目录，确保重装后能还原
+mkdir -p "$TRIM_PKGVAR/config_backup"
+cp -f "$_BACKUP_DIR"/* "$TRIM_PKGVAR/config_backup/" 2>/dev/null || true
+
 PID_FILE="${TRIM_PKGVAR}/app.pid"
 if [ -f "$PID_FILE" ]; then
     pid=$(cat "$PID_FILE" | tr -d '[:space:]')
