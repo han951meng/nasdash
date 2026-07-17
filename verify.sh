@@ -42,6 +42,15 @@ print(f"版本号 -> manifest={man_ver}  fpk={fpk_ver}  README={rm_ver}")
 assert man_ver == fpk_ver, "fpk 内 manifest 版本与根目录 manifest 不一致"
 assert man_ver == rm_ver, "README 当前版本与 manifest 不一致"
 print("OK: 版本号三处一致 (manifest / fpk / README)")
+
+import json, os
+for f in ('config/privilege', 'config/resource'):
+    assert os.path.exists(f), f"{f} 缺失（fnpack 打包检查要求存在）"
+    try:
+        json.load(open(f))
+    except Exception as e:
+        raise AssertionError(f"{f} 不是合法 JSON: {e}")
+print("OK: config/privilege 与 config/resource 为合法 JSON（fnpack 等价检查）")
 PY
 
 echo "=== verify 全部通过 ==="

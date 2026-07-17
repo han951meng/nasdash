@@ -26,7 +26,10 @@ start)
     modprobe nct6775 2>/dev/null || true
     modprobe it87 2>/dev/null || true
     cd "$APP_DIR"
-    PORT="${TRIM_SERVICE_PORT:-9800}"
+    # 统一网关模式：监听 Unix Socket（飞牛网关校验登录态后转发），不再暴露裸 TCP 端口。
+    export NAS_DASH_GATEWAY=1
+    export GATEWAY_PREFIX="/app/com.dashboard.nasdash"
+    export APP_SOCKET="$APP_DIR/app.sock"
     $PYTHON "$APP_DIR/app.py" > "$LOG_FILE" 2>&1 &
     echo $! > "$PID_FILE"
     sleep 2

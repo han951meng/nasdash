@@ -1,5 +1,10 @@
 {
     "data-share": {
         "shares": []
+    },
+    "usr-local-linker": {
+        "bin": [
+            "bin/storcli64"
+        ]
     }
 }

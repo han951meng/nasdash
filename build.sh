@@ -3,7 +3,7 @@ set -e
 cd "$(dirname "$0")"
 
 # 1. 重建 app.tgz（含 app.py / ui / config / vendor）
-COPYFILE_DISABLE=1 tar --format gnutar --no-mac-metadata -czf app.tgz app.py ui config vendor
+COPYFILE_DISABLE=1 tar --format gnutar --no-mac-metadata -czf app.tgz app.py ui config bin
 
 # 2. 同步 manifest.checksum（GNU tar 把 mtime 嵌进归档，md5 必漂移，必须重算）
 python3 - <<'PY'

@@ -2536,6 +2536,19 @@ HTML = r"""<!DOCTYPE html>
 </div>
 
 <script>
+// 统一网关适配：页面位于 /app/{appname} 路径下时，自动为所有绝对根路径 fetch 补上前缀；
+// 本地 TCP 模式（根路径）下前缀为空，行为完全不变。无需逐个改 fetch 调用。
+(function(){
+  var _orig = window.fetch ? window.fetch.bind(window) : null;
+  if (!_orig) return;
+  var base = (location.pathname || '/').replace(/\/[^\/]*$/, '');
+  window.fetch = function(u, o){
+    if (typeof u === 'string' && u.charAt(0) === '/' && u.charAt(1) !== '/') {
+      u = base + u;
+    }
+    return _orig(u, o);
+  };
+})();
 let DATA=null, timer=null;
 function switchTab(id, btn){
   document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
@@ -3598,7 +3611,88 @@ checkUpdate(false);
 </html>
 """
 
+def _serve_gateway(app, socket_path):
+    """统一网关模式：在标准库 wsgiref 上监听 Unix Socket。
+    不用 Flask app.run(unix_socket=) 的原因：新版 Werkzeug(>=2.1) 已移除该参数，而 wsgiref
+    是 Python 标准库，与 Flask/Werkzeug 版本无关，在飞牛 fnOS 上必定可用。飞牛网关会先校验
+    NAS 登录态，再把请求转发到本 Socket。"""
+    import os as _os, socket as _socket, socketserver as _ss
+    from wsgiref.simple_server import WSGIServer, WSGIRequestHandler
+
+    socket_path = _os.path.abspath(socket_path)
+    parent = _os.path.dirname(socket_path)
+    if parent:
+        _os.makedirs(parent, exist_ok=True)
+    try:
+        if _os.path.exists(socket_path):
+            _os.unlink(socket_path)
+    except OSError:
+        pass
+
+    class _UnixWSGIServer(_ss.ThreadingMixIn, WSGIServer):
+        address_family = _socket.AF_UNIX
+        daemon_threads = True
+        def server_bind(self):
+            self.socket.bind(self.server_address)
+            self.socket.listen(self.request_queue_size)
+            self.server_name = "localhost"
+            self.server_port = 0
+            # WSGIServer.server_bind 原本会调 setup_environ() 生成 base_environ，
+            # 这里重写了 server_bind，需手动补上，否则请求处理时取 base_environ 会报错。
+            self.setup_environ()
+
+    class _H(WSGIRequestHandler):
+        def address_string(self):
+            return "localhost"
+        def setup(self):
+            # Unix Socket 的 client_address 是空字符串 ''，会导致 wsgiref 的
+            # make_environ() 访问 client_address[0] 时 IndexError；此处修正为合法元组。
+            self.client_address = ("127.0.0.1", 0)
+            super().setup()
+        def log_message(self, *a, **k):
+            pass
+
+    srv = _UnixWSGIServer(socket_path, _H)
+    srv.set_app(app)
+    # 网关进程以其他用户身份连接本 socket，需放开连接权限。
+    # 相比旧版 0.0.0.0:9800 对全网开放且无任何鉴权，现收敛到仅经飞牛登录态校验后才能连的
+    # 本地 socket，安全性反而更高；本地 socket 只需同机进程可达，无需担心跨网络暴露。
+    try:
+        _os.chmod(socket_path, 0o777)
+    except OSError:
+        pass
+    try:
+        srv.serve_forever()
+    finally:
+        try:
+            _os.unlink(socket_path)
+        except OSError:
+            pass
+
+
 if __name__ == "__main__":
-    _env_port = (os.environ.get("TRIM_SERVICE_PORT") or "").strip()
-    port = int(_env_port) if _env_port else 9800
-    app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
+    APP_DIR = os.path.dirname(os.path.abspath(__file__))
+    # 统一网关模式（飞牛 fnOS 应用中心）：监听 Unix Socket，网关先校验 NAS 登录态再转发。
+    # 由 cmd/main 注入 NAS_DASH_GATEWAY=1 启用；本地开发/CI 不设则保持 TCP 端口（便于测试）。
+    if os.environ.get("NAS_DASH_GATEWAY") == "1":
+        socket_path = os.environ.get("APP_SOCKET") or os.path.join(APP_DIR, "app.sock")
+        # 网关转发请求路径带前缀 /app/{appname}，去掉前缀再交给原路由。
+        _gw_prefix = (os.environ.get("GATEWAY_PREFIX") or "/app/com.dashboard.nasdash").rstrip("/")
+        if _gw_prefix and _gw_prefix != "/":
+            # 标准 Flask 中间件写法：包裹已有的 app.wsgi_app（Flask 的 WSGI 处理器），
+            # 而非 app 本身——否则 app.__call__ 会再次调回 app.wsgi_app 形成无限递归。
+            class _PrefixMiddleware:
+                def __init__(self, wsgi_app):
+                    self.wsgi_app = wsgi_app
+                def __call__(self, environ, start_response):
+                    path = environ.get("PATH_INFO", "")
+                    if path == _gw_prefix or path.startswith(_gw_prefix + "/"):
+                        environ["PATH_INFO"] = path[len(_gw_prefix):] or "/"
+                        environ["SCRIPT_NAME"] = _gw_prefix
+                    return self.wsgi_app(environ, start_response)
+            app.wsgi_app = _PrefixMiddleware(app.wsgi_app)
+        _serve_gateway(app, socket_path)
+    else:
+        _env_port = (os.environ.get("TRIM_SERVICE_PORT") or "").strip()
+        port = int(_env_port) if _env_port else 9800
+        app.run(host="0.0.0.0", port=port, debug=False, threaded=True)

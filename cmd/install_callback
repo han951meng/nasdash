@@ -5,24 +5,16 @@ LOG="${TRIM_TEMP_LOGFILE}"
 
 PYTHON=$(which python3 2>/dev/null || echo "/usr/bin/python3")
 
-# 0. 安装随包内置的 storcli 二进制（优先，避免外部下载/源不可用）
-#    注意：旧版 storcli(1.21.06, 2016) 在新内核(6.x, vsyscall=none)上会段错误，
-#    仓库 vendor/storcli/storcli64 已替换为 007.2705 新版（动态链接现代 glibc，走 vDSO）。
-#    二进制随 app.tgz 解包到 <APP_DIR>/vendor/storcli/storcli64（fpk 顶层 vendor 会被飞牛忽略，必须放 app.tgz 内）。
+# 0. storcli 由 config/resource 的 usr-local-linker 自动软链到 /usr/local/bin/storcli64。
+#    二进制随 app.tgz 解包到 <APP_DIR>/bin/storcli64（fpk 顶层 vendor 会被飞牛忽略，必须放 app.tgz 内 bin/）。
 #    APP_DIR 由本脚本位置反推（install_callback 在 <APP_DIR>/cmd/ 下），不依赖 TRIM_APPDEST 是否注入。
 _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null)"
 _APP_DIR="$(cd "$_SCRIPT_DIR/.." && pwd 2>/dev/null)"
-BUNDLED_STORCLI="$_APP_DIR/vendor/storcli/storcli64"
-if [ -f "$BUNDLED_STORCLI" ]; then
-    mkdir -p /opt/MegaRAID/storcli
-    install -m 0755 "$BUNDLED_STORCLI" /opt/MegaRAID/storcli/storcli64
-    ln -sf /opt/MegaRAID/storcli/storcli64 /usr/local/bin/storcli64 2>/dev/null
-    ln -sf /opt/MegaRAID/storcli/storcli64 /usr/local/bin/storcli 2>/dev/null
-    echo "[nasdash] 已从内置包安装 storcli ($(${BUNDLED_STORCLI} -v 2>/dev/null | head -1))" >> "$LOG"
-elif command -v storcli64 >/dev/null 2>&1; then
-    # 兼容只装了 storcli64 的机器，建软链双保险
-    [ -e /usr/local/bin/storcli64 ] || ln -sf "$(command -v storcli64)" /usr/local/bin/storcli64 2>/dev/null
-    [ -e /usr/local/bin/storcli ] || ln -sf "$(command -v storcli64)" /usr/local/bin/storcli 2>/dev/null
+# 兜底：若 usr-local-linker 未生效（极少数环境），手动软链一次。
+if ! command -v storcli64 >/dev/null 2>&1 && [ -f "$_APP_DIR/bin/storcli64" ]; then
+    ln -sf "$_APP_DIR/bin/storcli64" /usr/local/bin/storcli64 2>/dev/null
+    ln -sf "$_APP_DIR/bin/storcli64" /usr/local/bin/storcli 2>/dev/null
+    echo "[nasdash] usr-local-linker 未生效，已手动软链 storcli" >> "$LOG"
 fi
 
 # 1. 工具检测
