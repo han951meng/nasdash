@@ -2841,7 +2841,10 @@ async function fetchFanStatus(){
       let unit=document.getElementById(id+'-rpm-unit'); if(unit) unit.textContent=(f.has_tach?'RPM':'无转速信号');
       let bar=document.getElementById(id+'-bar');
       if(bar) bar.style.width=(f.pwm!=null?f.pwm:50)+'%';
-      if(sl && document.activeElement!==sl) sl.value=(f.pwm!=null?f.pwm:50);
+      if(sl && document.activeElement!==sl){
+        // 手动模式下滑块停在用户设定的目标值，不强行跟随实时爬升（避免松手后滑块回弹误以为没生效）；自动模式跟随实时值
+        sl.value=(f.mode==='manual' && f.target_pct!=null)?f.target_pct:(f.pwm!=null?f.pwm:50);
+      }
     });
     updatePresetHighlight(j.fans);
   }catch(e){}
@@ -3453,11 +3456,16 @@ function renderAll(){
   document.getElementById('raid').innerHTML = renderRaid(DATA.raid, DATA.disks);
   document.getElementById('disks').innerHTML = renderDisks(DATA.disks);
   document.getElementById('system').innerHTML = renderSystem(DATA.system);
-  document.getElementById('fan').innerHTML = renderFanControl();
+  let _fa=document.activeElement;
+  let _fanBusy = _fa && (_fa.classList.contains('fan-slider') || _fa.classList.contains('fan-custom-input'));
+  if(!_fanBusy){
+    document.getElementById('fan').innerHTML = renderFanControl();
+    bindFanSliders();
+  }
+  // 正在拖动滑块/编辑自定义占空比时跳过风扇页整页重建，避免打断操作；转速数值由 fetchFanStatus 每2秒刷新
   document.getElementById('storage').innerHTML = renderStorage(DATA.storage);
   document.getElementById('docker').innerHTML = renderDocker(DATA.docker);
   document.getElementById('lastUpdate').textContent = '更新于 '+DATA.time+' ('+DATA.elapsed+'s)';
-  bindFanSliders();
   initDiskTemp();
   initSysTemp();
 }
