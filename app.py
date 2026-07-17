@@ -607,7 +607,7 @@ def disk_brand_and_feature(model):
         brand = "东芝(Toshiba)"
     elif model_u.startswith(("HGST", "HUH", "HUS")):
         brand = "HGST(日立)"
-    elif "SAMSUNG" in model_u or model_u.startswith("SV"):
+    elif "SAMSUNG" in model_u:
         brand = "三星(Samsung)"
     elif model_u.startswith("INTEL"):
         brand = "英特尔(Intel)"
@@ -733,9 +733,21 @@ def get_raid_card():
                         inquiry_model = " ".join(m.group(1).strip().split())
                 except Exception:
                     pass
+                # 表格列的型号常丢厂商前缀（如 SATA 盘只给 SV300S37A/120G，KINGSTON 在上一列），
+                # 直接用该型号做品牌识别会被误判（如 SV 开头误认三星）。
+                # 故品牌识别优先用含厂商前缀的完整型号（Model Number / Inquiry Data）。
+                brand_model = model
+                if inquiry_model and inquiry_model != "-":
+                    _known = ("ST", "WD", "WDC", "TOSHIBA", "HGST", "HUH", "HUS", "INTEL",
+                              "KINGSTON", "CT", "CRUCIAL", "MICRON", "SANDISK", "PNY", "HITACHI", "SAMSUNG")
+                    _tbl_vendor = model.upper().startswith(_known) or "SAMSUNG" in model.upper()
+                    _inq_vendor = inquiry_model.upper().startswith(_known) or "SAMSUNG" in inquiry_model.upper()
+                    if (not _tbl_vendor) and _inq_vendor:
+                        brand_model = inquiry_model
+                brand, feature = disk_brand_and_feature(brand_model)
+                # 展示用 model：表格列已够用则保留（与 HDD 显示风格一致），仅在表格缺失时兜底用完整型号
                 if (not model or model == "-") and inquiry_model and inquiry_model != "-":
                     model = inquiry_model
-                brand, feature = disk_brand_and_feature(model)
                 rpm = rpm_map.get(sn.upper(), "")
                 if not rpm:
                     rpm = "固态(SSD)" if parts[7].upper() == "SSD" else "—"
