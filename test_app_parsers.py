@@ -9,6 +9,7 @@
 运行：./test.sh  （自动建 .venv 装 flask+pytest 并跑）
 """
 import app as app
+import json
 
 
 # ---------------- 品牌识别（含历史误判回归） ----------------
@@ -175,44 +176,152 @@ def test_select_disk_only_when_sys_disabled():
     assert disk_claimed == set(all_fans)
 
 
-def test_enumerate_fans_filters_it87_nct_and_enable(monkeypatch):
-    # _enumerate_fans 只认 it87/nct 芯片、且跳过 pwm_enable 为空的风扇口。
-    base = "/sys/class/hwmon/hwmon4"
+# ---------------- 风扇枚举（自动检测，换硬件不失效） ----------------
+def _fan_enum_harness(monkeypatch, hwmap):
+    """构造 _enumerate_fans 的假环境。
+    hwmap: {hwmon_path: {"enable":[idx...], "pwm":[idx...], "fan":[idx...]}}
+    - _glob.glob 返回 pwm*_enable 路径列表 / 所有 hwmon 目录
+    - os.path.exists 按 pwm<N> / fan<N>_input 佐证
+    关键：新实现不再按芯片名(it87/nct)过滤，也不限 fan1-5，而是枚举所有 hwmon 的 pwmN_enable。
+    """
+    import re as _re
 
     class FakeGlob:
         def glob(self, pat):
-            return [base]
+            if pat.endswith("pwm*_enable"):
+                hp = pat[: -len("pwm*_enable")].rstrip("/")
+                return [f"{hp}/pwm{i}_enable" for i in hwmap.get(hp, {}).get("enable", [])]
+            if pat.endswith("hwmon*"):
+                return list(hwmap.keys())
+            return []
 
     monkeypatch.setattr(app, "_glob", FakeGlob())
 
+    def fake_exists(path):
+        m = _re.search(r"/(hwmon\d+)/(pwm|fan)(\d+)(_input)?$", path)
+        if not m:
+            return False
+        for hp_key, spec in hwmap.items():
+            if path.startswith(hp_key + "/"):
+                kind, idx = m.group(2), int(m.group(3))
+                if kind == "pwm":
+                    return idx in spec.get("pwm", [])
+                return idx in spec.get("fan", [])
+        return False
+
+    monkeypatch.setattr(app.os.path, "exists", fake_exists)
+
+
+def test_enumerate_fans_by_pwm_enable(monkeypatch):
+    # 枚举依据是「存在 pwmN_enable 且佐证 pwm/fan_input」，不再依赖芯片名
+    hp = "/sys/class/hwmon/hwmon4"
+    _fan_enum_harness(monkeypatch, {hp: {"enable": [1, 2, 3, 4], "pwm": [1, 2, 3, 4], "fan": [1, 2, 3, 4]}})
+    fans = app._enumerate_fans(force=True)
+    assert (hp, 1) in fans and (hp, 2) in fans and (hp, 3) in fans and (hp, 4) in fans
+    assert (hp, 5) not in fans  # 无 enable 文件 → 跳过
+
+
+def test_enumerate_fans_includes_non_it87_nct_chip(monkeypatch):
+    # 换非 it87/nct 主板（Fintek f71882fg / 华硕 / AMD）→ 仍应自动枚举风扇
+    fintek = "/sys/class/hwmon/hwmon3"
+    it87 = "/sys/class/hwmon/hwmon4"
+    _fan_enum_harness(monkeypatch, {
+        fintek: {"enable": [1, 2], "pwm": [1, 2], "fan": [1, 2]},
+        it87:   {"enable": [1], "pwm": [1], "fan": [1]},
+    })
+    fans = app._enumerate_fans(force=True)
+    assert (fintek, 1) in fans and (fintek, 2) in fans
+    assert (it87, 1) in fans
+
+
+def test_enumerate_fans_multi_channel_hub(monkeypatch):
+    # 集线器/分线器占用 fan6 通道 → 不漏（旧实现只到 fan5）
+    hp = "/sys/class/hwmon/hwmon4"
+    _fan_enum_harness(monkeypatch, {hp: {"enable": [1, 2, 3, 4, 5, 6], "pwm": [1, 2, 3, 4, 5, 6], "fan": [1, 2, 3, 4, 5, 6]}})
+    fans = app._enumerate_fans(force=True)
+    assert all((hp, i) in fans for i in range(1, 7))
+
+
+def test_enumerate_fans_excludes_rgb_pwm(monkeypatch):
+    # 存在 pwm3_enable 但无对应 pwm3 / fan3_input（如 RGB 灯效 pwm）→ 排除
+    hp = "/sys/class/hwmon/hwmon4"
+    _fan_enum_harness(monkeypatch, {hp: {"enable": [1, 3], "pwm": [1], "fan": [1]}})
+    fans = app._enumerate_fans(force=True)
+    assert (hp, 1) in fans
+    assert (hp, 3) not in fans
+
+
+# ---------------- 存储控制器检测（厂商白名单放宽） ----------------
+def test_detect_storage_controllers_includes_non_whitelisted_vendor(monkeypatch):
+    # Areca 等不在旧厂商白名单，但应自动识别为 HBA（换任意品牌卡都不漏）
+    out = (
+        "01:00.0 RAID bus controller: Areca Technology Corp. ARC-1882 SAS/SATA RAID Controller\n"
+        "02:00.0 Non-Volatile memory controller: Samsung Electronics Co Ltd NVMe SSD Controller\n"
+    )
+    monkeypatch.setattr(app, "run", lambda cmd, *a, **k: out if "lspci" in cmd else "")
+    cs = app.detect_storage_controllers()
+    assert any("Areca" in c["model"] for c in cs)
+    assert any(c["is_hba"] for c in cs)
+    # 仍正确识别 MegaRAID
+    mega_out = "03:00.0 RAID bus controller: Broadcom / LSI MegaRAID SAS 9271-8i\n"
+    monkeypatch.setattr(app, "run", lambda cmd, *a, **k: mega_out if "lspci" in cmd else "")
+    cs2 = app.detect_storage_controllers()
+    assert cs2 and cs2[0]["is_megaraid"]
+
+
+# ---------------- 磁盘枚举（多位盘名 / 分区 / 控制器过滤） ----------------
+def test_get_disks_includes_multi_letter_sata_names(monkeypatch):
+    # 验证 sdaa / sdab 等多位盘名不被漏掉（原 ls /dev/sd? 只匹配单字母）
+    sd_out = "sda\nsdaa\nsdab\nsdb\n"
+    nvme_out = "nvme0\nnvme0n1\nnvme0n1p1\n"
+
     def fake_run(cmd, *a, **k):
-        # 真实命令形如 "cat /sys/class/hwmon/hwmon4/name 2>/dev/null"，不能用 endswith 判断
-        if "/name" in cmd:
-            return "nct6797\n"
-        if "pwm5_enable" in cmd:
-            return ""  # 该口不存在（cat 返回空）→ 应跳过
-        if "_enable" in cmd:
-            return "1\n"
+        if "ls /dev/sd" in cmd:
+            return sd_out
+        if "ls /dev/nvme" in cmd:
+            return nvme_out
         return ""
 
     monkeypatch.setattr(app, "run", fake_run)
-    fans = app._enumerate_fans(force=True)
-    assert (base, 1) in fans
-    assert (base, 2) in fans
-    assert (base, 3) in fans
-    assert (base, 4) in fans
-    assert (base, 5) not in fans  # enable=0 跳过
+    monkeypatch.setattr(app, "sudo", lambda *a, **k: "")
+    disks = app.get_disks()
+    devs = [d["dev"] for d in disks]
+    assert "sdaa" in devs and "sdab" in devs
+    assert "nvme0n1" in devs
+    assert "nvme0" not in devs       # NVMe 控制器排除
+    assert "nvme0n1p1" not in devs   # NVMe 分区排除
 
 
-def test_enumerate_fans_skips_non_it87_nct(monkeypatch):
-    # 非 it87/nct 芯片（如 coretemp）的风扇不应被纳入控制全集。
-    base = "/sys/class/hwmon/hwmon3"
+# ---------------- sys_temp 温度源（CPU 封装 / AMD Tdie 优先） ----------------
+def test_fan_read_sys_temp_cpu_prefers_package(monkeypatch):
+    sens = json.dumps({
+        "coretemp-isa-0000": {
+            "Package id 0": {"temp1_input": 55.0},
+            "Core 0": {"temp2_input": 50.0},
+        },
+        "it8620-isa-0290": {"temp1_input": 40.0},
+    })
+    monkeypatch.setattr(app, "run", lambda cmd, *a, **k: sens if "sensors -j" in cmd else "")
+    assert app._fan_read_sys_temp("cpu") == 55.0
 
-    class FakeGlob:
-        def glob(self, pat):
-            return [base]
 
-    monkeypatch.setattr(app, "_glob", FakeGlob())
-    monkeypatch.setattr(app, "run", lambda cmd, *a, **k: "coretemp\n" if "/name" in cmd else "1\n")
-    fans = app._enumerate_fans(force=True)
-    assert fans == []
+def test_fan_read_sys_temp_cpu_amd_tdie(monkeypatch):
+    # AMD 主板无 coretemp，应优先 Tdie（而非回落所有传感器最大混入 it86 主板温度）
+    sens = json.dumps({
+        "k10temp-pci-00c3": {
+            "Tdie": {"temp1_input": 62.0},
+            "Tctl": {"temp2_input": 62.0},
+        },
+        "it8620-isa-0290": {"temp1_input": 35.0},
+    })
+    monkeypatch.setattr(app, "run", lambda cmd, *a, **k: sens if "sensors -j" in cmd else "")
+    assert app._fan_read_sys_temp("cpu") == 62.0
+
+
+def test_fan_read_sys_temp_mb_excludes_coretemp(monkeypatch):
+    sens = json.dumps({
+        "coretemp-isa-0000": {"Package id 0": {"temp1_input": 70.0}},
+        "it8620-isa-0290": {"temp1_input": 38.0, "temp2_input": 41.0},
+    })
+    monkeypatch.setattr(app, "run", lambda cmd, *a, **k: sens if "sensors -j" in cmd else "")
+    assert app._fan_read_sys_temp("mb") == 41.0  # 主板温度取 it86 最高，不含 coretemp

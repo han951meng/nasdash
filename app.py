@@ -208,7 +208,14 @@ def _fan_smooth_step(hwmon, idx, target):
     _fan_write_raw(hwmon, idx, cur + (step if diff > 0 else -step))
 
 def _enumerate_fans(force=False):
-    """枚举本机真实可控风扇 (hwmon_path, idx)，仅 it87/nct 芯片（与前端展示/配置引用一致）。
+    """枚举本机所有「可控制风扇通道」(hwmon_path, idx)。
+
+    自动检测设计（换硬件不失效）：
+    - 不依赖芯片型号白名单（it87 / nct / fintek / winbond / asus / AMD 等皆可），
+      只要某个 hwmon 暴露 pwm<N>_enable 且存在对应 pwm<N> / fan<N>_input，
+      就视为一个可控制风扇通道；
+    - 遍历所有 /sys/class/hwmon/hwmon*（多风扇芯片主板不漏）；
+    - 通道号 1..10（覆盖主板直连 + 集线器 / 分线器扩展）。
     作为温控循环的控制全集；FAN_TARGETS 仅作「每风扇手动/自动覆盖映射」。
     修复 Bug A：此前温控循环只遍历 FAN_TARGETS（仅用户手动调过的风扇才填充），
     导致 sys_temp/disk_temp 设 controlled_fans:"all" 时启动即空转、一个风扇都不控。
@@ -219,12 +226,19 @@ def _enumerate_fans(force=False):
     fans = []
     try:
         for _hp in sorted(_glob.glob("/sys/class/hwmon/hwmon*")):
-            _cn = run(f"cat {_hp}/name 2>/dev/null", 2).strip()
-            if not _cn.startswith(("it87", "nct")):
+            try:
+                _pes = _glob.glob(f"{_hp}/pwm*_enable")
+            except Exception:
                 continue
-            for _fi in range(1, 6):
-                _pe = run(f"cat {_hp}/pwm{_fi}_enable 2>/dev/null", 2).strip()
-                if not _pe:
+            for _pe_path in _pes:
+                _m = re.search(r"pwm(\d+)_enable$", _pe_path)
+                if not _m:
+                    continue
+                _fi = int(_m.group(1))
+                if _fi > 10:
+                    continue
+                # 佐证文件存在：pwm<N> 或 fan<N>_input，排除非风扇 pwm（如 RGB 灯效）
+                if not (os.path.exists(f"{_hp}/pwm{_fi}") or os.path.exists(f"{_hp}/fan{_fi}_input")):
                     continue
                 fans.append((_hp, _fi))
     except Exception:
@@ -405,37 +419,55 @@ def _save_fan_sys_temp(cfg):
         return False
 
 def _fan_read_sys_temp(source):
-    """读取主板/CPU 温控的温度源单值（°C）。
-    source='cpu' → CPU 封装温度（coretemp Package）；
-    source='mb'  → 主板温度（it87/nct 芯片 systin 等，排除 coretemp 后取最高，回落取所有传感器最高）。
-    读不到返回 None。"""
+    """读取主板/CPU 温控的温度源单值（°C），自动适配不同主板传感器布局。
+    source='cpu' → CPU 封装温度：优先 coretemp 的 'Package id' / AMD k10temp/zenpower 的 'Tdie'/'Tctl'；
+                   找不到时回落取 coretemp 全部通道最高，再回落取所有传感器最高。
+    source='mb'  → 主板温度：排除 coretemp 等 CPU 芯片后取最高（it87/nct/等主板传感器），
+                   回落取所有传感器最高。
+    同时兼容 sensors -j 的嵌套格式(chip->{标签:{tempN_input:值}})与扁平格式(chip->{tempN_input:值})，
+    不依赖芯片具体型号，换主板/CPU 后仍能正确取温。读不到返回 None。"""
     source = (source or "cpu").lower()
     try:
         out = run("sensors -j 2>/dev/null", 5)
         j = json.loads(out)
+        # temps: (chip, label, value) —— label 为传感器名(Package id 0 / Tdie / temp1_input 等)
         temps = []
         for chip, entries in j.items():
             if not isinstance(entries, dict):
                 continue
             for _ename, fields in entries.items():
                 if isinstance(fields, dict):
+                    # 嵌套格式：chip -> { "Package id 0": {"temp1_input": 55.0}, ... }
                     for k, v in fields.items():
                         if k.startswith("temp") and k.endswith("_input"):
                             try:
-                                temps.append((chip, float(v)))
+                                temps.append((chip, _ename, float(v)))
                             except (TypeError, ValueError):
                                 pass
+                elif isinstance(fields, (int, float)) and _ename.startswith("temp") and _ename.endswith("_input"):
+                    # 扁平格式：chip -> { "temp1_input": 40.0, ... }
+                    try:
+                        temps.append((chip, _ename, float(fields)))
+                    except (TypeError, ValueError):
+                        pass
         if temps:
+            _prio = ("package", "tdie", "tctl")
+            def _is_prio(t):
+                return any(p in t[1].lower() for p in _prio)
             if source == "mb":
-                mb = [t for t in temps if not t[0].startswith("coretemp")]
+                mb = [t for t in temps if "coretemp" not in t[0].lower()]
                 if mb:
-                    return max(t[1] for t in mb)
-                return max(t[1] for t in temps)  # 回落
+                    return max(t[2] for t in mb)
+                return max(t[2] for t in temps)  # 回落
             else:
-                cpu = [t for t in temps if t[0].startswith("coretemp")]
+                # CPU：优先 CPU 封装/Tdie/Tctl 标签，再回落 coretemp 全部通道，最后回落全部传感器
+                prio = [t for t in temps if _is_prio(t)]
+                if prio:
+                    return max(t[2] for t in prio)
+                cpu = [t for t in temps if "coretemp" in t[0].lower()]
                 if cpu:
-                    return max(t[1] for t in cpu)
-                return max(t[1] for t in temps)  # 回落
+                    return max(t[2] for t in cpu)
+                return max(t[2] for t in temps)  # 回落
     except Exception:
         pass
     return None
@@ -607,8 +639,8 @@ def detect_storage_controllers():
     out = run("lspci -nn 2>/dev/null", 10)
     controllers = []
     for line in out.splitlines():
-        if not re.search(r"(LSI|Avago|Broadcom|Microchip|Adaptec|Marvell|Intel|ASMedia)", line, re.I):
-            continue
+        # 只按设备类型识别（RAID/SAS/SCSI/HBA），不限制厂商白名单，
+        # 换任意品牌阵列卡/HBA（LSI/Broadcom/Areca/HighPoint/Adaptec/...）都能自动纳入
         if not re.search(r"(RAID|SAS|SCSI|HBA)", line, re.I):
             continue
         m = re.search(r":\s*(.+)$", line)
@@ -697,7 +729,7 @@ def _smart_rpm_by_serial():
     """
     rpm_map = {}
     try:
-        devs = [d for d in os.listdir("/dev") if re.match(r"^sd[a-z]$", d)]
+        devs = [d for d in os.listdir("/dev") if re.match(r"^sd[a-z]+$", d)]
     except Exception:
         return rpm_map
     for d in sorted(devs):
@@ -958,13 +990,14 @@ def parse_nvme_smart(text):
     return d
 
 def get_disks():
-    """采集所有块设备 + SMART（SD/SAS 用 ls /dev/sd?，NVMe 用 ls /dev/nvme?n?；smartctl 拿详情，不依赖 lsblk 字段对齐）"""
+    """采集所有块设备 + SMART（SD/SAS 用 ls /dev/sd*，NVMe 用 ls /dev/nvme*；再用正则过滤掉分区/控制器，
+    支持多位盘名 sdaa/sdab 与多控制器 nvme10n1 等；smartctl 拿详情，不依赖 lsblk 字段对齐）"""
     disks = []
-    out = run("ls /dev/sd? 2>/dev/null", 5)
+    out = run("ls /dev/sd* 2>/dev/null", 5)
     devnames = sorted(set(l.strip().split('/')[-1] for l in out.split()
                           if l.strip() and re.match(r"^sd[a-z]+$", l.strip().split('/')[-1])))
     # NVMe 命名空间（如 /dev/nvme0n1；控制器 /dev/nvme0 不匹配 n\d+，不会误纳入）
-    nvme_out = run("ls /dev/nvme?n? 2>/dev/null", 5)
+    nvme_out = run("ls /dev/nvme* 2>/dev/null", 5)
     for l in nvme_out.split():
         n = l.strip().split('/')[-1]
         if re.match(r"^nvme\d+n\d+$", n):
@@ -1445,34 +1478,31 @@ def get_system():
                 }
         except (json.JSONDecodeError, ValueError):
             pass
-    # 2) sysfs hwmon —— 不依赖外部风扇服务，直接读 it87/nct 芯片的 PWM
-    import glob as _glob
-    for _hp in sorted(_glob.glob("/sys/class/hwmon/hwmon*")):
-        _cn = run(f"cat {_hp}/name 2>/dev/null", 2).strip()
-        if _cn.startswith(("it87", "nct")):
-            for _fi in range(1, 6):
-                _fk = f"fan{_fi}"
-                _pe = run(f"cat {_hp}/pwm{_fi}_enable 2>/dev/null", 2).strip()
-                _pv = run(f"cat {_hp}/pwm{_fi} 2>/dev/null", 2).strip()
-                _controllable = bool(_pe)
-                if _fk in fan_info:
-                    # 已知的风扇：优先用配置里的 pwm_path，兜底用当前 hwmon
-                    if not fan_info[_fk].get("hwmon"):
-                        fan_info[_fk]["hwmon"] = _hp
-                        fan_info[_fk]["idx"] = _fi
-                    fan_info[_fk]["controllable"] = fan_info[_fk].get("controllable") or _controllable
-                elif _pe:
-                    # 仅 sysfs 暴露的风扇，用 sysfs 模式兜底
-                    _mm = {"0": "off", "1": "manual", "2": "auto"}
-                    fan_info[_fk] = {"name": f"风扇{_fi}", "mode": _mm.get(_pe, ""),
-                                     "hwmon": _hp, "idx": _fi, "controllable": _controllable}
-                # PWM 占空比（0-255 → 百分比），不管装没装外部风扇服务都读
-                if _pv and _fk in fan_info:
-                    try:
-                        fan_info[_fk]["pwm"] = round(int(_pv) / 255 * 100)
-                    except ValueError:
-                        pass
-            break
+    # 2) sysfs hwmon —— 不依赖芯片型号（it87/nct/fintek/winbond/asus 等皆可），
+    #    枚举所有 hwmon 的 pwmN_enable 可写通道；遍历所有芯片、fan1-10，避免漏掉多芯片/集线器。
+    #    复用 _enumerate_fans 保证与温控循环 / 风扇状态接口看到的风扇全集一致。
+    for (_hw, _fi) in _enumerate_fans():
+        _fk = f"fan{_fi}"
+        _pe = run(f"cat {_hw}/pwm{_fi}_enable 2>/dev/null", 2).strip()
+        _pv = run(f"cat {_hw}/pwm{_fi} 2>/dev/null", 2).strip()
+        _controllable = bool(_pe)
+        if _fk in fan_info:
+            # 已知的风扇（来自系统风扇服务配置）：优先用配置里的 pwm_path，兜底用枚举到的 hwmon
+            if not fan_info[_fk].get("hwmon"):
+                fan_info[_fk]["hwmon"] = _hw
+                fan_info[_fk]["idx"] = _fi
+            fan_info[_fk]["controllable"] = fan_info[_fk].get("controllable") or _controllable
+        else:
+            # 仅 sysfs 暴露的风扇，用 sysfs 模式兜底
+            _mm = {"0": "off", "1": "manual", "2": "auto"}
+            fan_info[_fk] = {"name": f"风扇{_fi}", "mode": _mm.get(_pe, ""),
+                             "hwmon": _hw, "idx": _fi, "controllable": _controllable}
+        # PWM 占空比（0-255 → 百分比），不管装没装外部风扇服务都读
+        if _pv and _fk in fan_info:
+            try:
+                fan_info[_fk]["pwm"] = round(int(_pv) / 255 * 100)
+            except ValueError:
+                pass
     if sens_j:
         try:
             j = json.loads(sens_j)
@@ -1952,46 +1982,40 @@ def api_fan_status():
                     names[fi] = fan.get("name", f"风扇{fi}")
         except Exception:
             pass
-    for _hp in sorted(_glob.glob("/sys/class/hwmon/hwmon*")):
-        _cn = run(f"cat {_hp}/name 2>/dev/null", 2).strip()
-        if not _cn.startswith(("it87", "nct")):
-            continue
-        for _fi in range(1, 6):
-            _pe = run(f"cat {_hp}/pwm{_fi}_enable 2>/dev/null", 2).strip()
-            if not _pe:
-                continue
-            _pv = run(f"cat {_hp}/pwm{_fi} 2>/dev/null", 2).strip()
-            _fv = run(f"cat {_hp}/fan{_fi}_input 2>/dev/null", 2).strip()
-            try:
-                rpm = int(_fv)
-            except Exception:
-                rpm = 0
-            try:
-                pwm_raw = int(_pv)
-            except Exception:
-                pwm_raw = None
-            pwm_pct = round(pwm_raw / 255 * 100) if pwm_raw is not None else None
-            cur_mode = "manual" if _pe == "1" else "auto" if _pe == "2" else "off"
-            _is_st = bool(_st_active) and (_st_cf == "all" or [_hp, _fi] in _st_cf)
-            _is_dt = (not _is_st) and bool(_dt_active) and (_dt_cf == "all" or [_hp, _fi] in _dt_cf)
-            mode = "sys_temp" if _is_st else ("disk_temp" if _is_dt else cur_mode)
-            key = (_hp, _fi)
-            target_pct = None
-            with FAN_LOCK:
-                tcfg = FAN_TARGETS.get(key)
-            if tcfg and tcfg.get("mode") == "manual":
-                target_pct = round(tcfg["target"] / 255 * 100)
-            fans.append({
-                "name": names.get(_fi, f"风扇{_fi}"),
-                "label": labels.get(f"{_hp}::{_fi}", {}).get("name", ""),
-                "voltage": labels.get(f"{_hp}::{_fi}", {}).get("voltage", ""),
-                "idx": _fi, "hwmon": _hp,
-                "rpm": rpm, "pwm": pwm_pct,
-                "mode": mode,
-                "target_pct": target_pct,
-                "controllable": True,
-            })
-        break
+    # 复用 _enumerate_fans：不依赖芯片型号、遍历所有 hwmon 风扇通道（fan1-10）、多芯片不漏
+    for (hwmon, idx) in _enumerate_fans():
+        _pe = run(f"cat {hwmon}/pwm{idx}_enable 2>/dev/null", 2).strip()
+        _pv = run(f"cat {hwmon}/pwm{idx} 2>/dev/null", 2).strip()
+        _fv = run(f"cat {hwmon}/fan{idx}_input 2>/dev/null", 2).strip()
+        try:
+            rpm = int(_fv)
+        except Exception:
+            rpm = 0
+        try:
+            pwm_raw = int(_pv)
+        except Exception:
+            pwm_raw = None
+        pwm_pct = round(pwm_raw / 255 * 100) if pwm_raw is not None else None
+        cur_mode = "manual" if _pe == "1" else "auto" if _pe == "2" else "off"
+        _is_st = bool(_st_active) and (_st_cf == "all" or [hwmon, idx] in _st_cf)
+        _is_dt = (not _is_st) and bool(_dt_active) and (_dt_cf == "all" or [hwmon, idx] in _dt_cf)
+        mode = "sys_temp" if _is_st else ("disk_temp" if _is_dt else cur_mode)
+        key = (hwmon, idx)
+        target_pct = None
+        with FAN_LOCK:
+            tcfg = FAN_TARGETS.get(key)
+        if tcfg and tcfg.get("mode") == "manual":
+            target_pct = round(tcfg["target"] / 255 * 100)
+        fans.append({
+            "name": names.get(idx, f"风扇{idx}"),
+            "label": labels.get(f"{hwmon}::{idx}", {}).get("name", ""),
+            "voltage": labels.get(f"{hwmon}::{idx}", {}).get("voltage", ""),
+            "idx": idx, "hwmon": hwmon,
+            "rpm": rpm, "pwm": pwm_pct,
+            "mode": mode,
+            "target_pct": target_pct,
+            "controllable": True,
+        })
     return jsonify({"fans": fans})
 
 
