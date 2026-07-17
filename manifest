@@ -16,4 +16,4 @@ desktop_applaunchname = com.dashboard.nasdash.main
 ctl_stop              = true
 install_type          = root
 changelog             = 1.7.13: 风扇滑块拖动体验修复：后台定时刷新不再打断正在拖动的滑块；手动调速后滑块停在目标值（不再被实时占空比回弹），转速数字继续爬升，反馈更明确 1.7.12: 风扇手动调速响应加快（平滑爬升步长提升，几秒内到位，解决拉进度条像没反应的错觉）；无转速回读的空通道(一分二分线器副扇/主板未布线该通道)明确显示「无转速信号」并可一键隐藏/恢复，不再误导；停在SmartFan自动档(pwm_enable=5)的风扇手动调速即刻接管生效 1.7.11: 全模块自动检测加固：风扇枚举移除芯片白名单并支持集线器多通道(fan6+)；CPU/主板温度源兼容非coretemp主板(AMD/华硕等)；磁盘枚举支持多字母盘名(sdaa/sdab)；阵列卡检测移除厂商白名单(任意品牌自动识别)；回归测试扩至29项
-checksum              = a6d73983fa0bfec506f3beccb80316a4
+checksum              = 26e0c187ccd30ffe019c74afad61be86

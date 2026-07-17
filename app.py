@@ -343,7 +343,16 @@ def _save_fan_labels(d):
         return False
 
 def _fan_label_for(hwmon, idx):
-    return _load_fan_labels().get(f"{hwmon}::{idx}", {})
+    labels = _load_fan_labels()
+    lbl = labels.get(f"{hwmon}::{idx}")
+    if not lbl:
+        # hwmon 路径可能跨重启变化（如 hwmon4→hwmon3），按通道序号兜底命中，
+        # 避免重启后标签/隐藏全部错位（用户按界面序号标的名字仍对得上）。
+        for k, v in labels.items():
+            if k.endswith(f"::{idx}"):
+                lbl = v
+                break
+    return lbl or {}
 
 # ===================== 风扇：硬盘温度控制（disk_temp）=====================
 # 论坛需求（服务器/硬盘多/风扇多场景）：用指定硬盘温度驱动风扇——
@@ -1544,10 +1553,10 @@ def get_system():
                             fan_key = fn.replace("_input", "")
                             default_name = fan_key.replace("fan", "风扇")
                             fi = fan_info.get(fan_key, {})
-                            display_name = fi.get("name", default_name)
+                            _lab = _fan_label_for(fi.get("hwmon", ""), fi.get("idx", 0))
+                            display_name = _lab.get("name") or fi.get("name", default_name)
                             mode = fi.get("mode", "")
                             pwm = fi.get("pwm")
-                            _lab = _fan_label_for(fi.get("hwmon", ""), fi.get("idx", 0))
                             d["sensors"]["fans"].append({
                                 "name": display_name,
                                 "label": _lab.get("name", ""),
@@ -2012,7 +2021,7 @@ def api_fan_status():
             target_pct = round(tcfg["target"] / 255 * 100)
         _lbl = labels.get(f"{hwmon}::{idx}", {})
         fans.append({
-            "name": names.get(idx, f"风扇{idx}"),
+            "name": _lbl.get("name") or names.get(idx, f"风扇{idx}"),
             "label": _lbl.get("name", ""),
             "voltage": _lbl.get("voltage", ""),
             "idx": idx, "hwmon": hwmon,
