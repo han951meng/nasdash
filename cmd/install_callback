@@ -8,7 +8,11 @@ PYTHON=$(which python3 2>/dev/null || echo "/usr/bin/python3")
 # 0. 安装随包内置的 storcli 二进制（优先，避免外部下载/源不可用）
 #    注意：旧版 storcli(1.21.06, 2016) 在新内核(6.x, vsyscall=none)上会段错误，
 #    仓库 vendor/storcli/storcli64 已替换为 007.2705 新版（动态链接现代 glibc，走 vDSO）。
-BUNDLED_STORCLI="${TRIM_APPDEST}/vendor/storcli/storcli64"
+#    二进制随 app.tgz 解包到 <APP_DIR>/vendor/storcli/storcli64（fpk 顶层 vendor 会被飞牛忽略，必须放 app.tgz 内）。
+#    APP_DIR 由本脚本位置反推（install_callback 在 <APP_DIR>/cmd/ 下），不依赖 TRIM_APPDEST 是否注入。
+_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null)"
+_APP_DIR="$(cd "$_SCRIPT_DIR/.." && pwd 2>/dev/null)"
+BUNDLED_STORCLI="$_APP_DIR/vendor/storcli/storcli64"
 if [ -f "$BUNDLED_STORCLI" ]; then
     mkdir -p /opt/MegaRAID/storcli
     install -m 0755 "$BUNDLED_STORCLI" /opt/MegaRAID/storcli/storcli64
