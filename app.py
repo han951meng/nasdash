@@ -55,29 +55,41 @@ app.template_folder = os.path.join(APP_DIR, "templates")
 # 用户配置持久目录：飞牛运行时通过环境变量 TRIM_PKGVAR 提供 @appdata 持久目录
 # （与应用卸载无关，重装后保留；cmd/main 也用它存 app.pid/app.log）。
 # 早期版本把配置写在 APP_DIR，导致每次重装被清空。现统一写入此持久目录，重装不丢配置。
+# LEGACY_APPATA 是旧固件/旧安装下 _config_dir 的硬编码兜底位置（当 TRIM_PKGVAR 未注入时），
+# 与运行时 TRIM_PKGVAR（如 /vol1/@appdata/...）可能不在同一物理路径；
+# 重装迁移时须把它也当作旧配置来源，否则标注会孤儿在旧目录导致 UI 空白。
+LEGACY_APPATA = "/usr/local/apps/@appdata/com.dashboard.nasdash"
 def _config_dir():
     d = os.environ.get("TRIM_PKGVAR")
     if not d:
-        d = "/usr/local/apps/@appdata/com.dashboard.nasdash"
+        d = LEGACY_APPATA
     try:
         os.makedirs(d, exist_ok=True)
         return d
     except Exception:
         return APP_DIR
 
-# 从旧版(配置存 APP_DIR)升级时，把已有配置迁移到持久目录，避免丢失
+# 从旧版（配置存 APP_DIR 或旧 @appdata 兜底目录）升级时，把已有配置迁移到当前持久目录，避免丢失
 def _migrate_legacy_configs():
     cfg = _config_dir()
     if cfg == APP_DIR:
         return
+    # 旧配置可能来源（按陈旧程度排序；跳过与当前目标相同的目录，避免无意义的自复制）
+    legacy_sources = [APP_DIR, LEGACY_APPATA]
     for name in ("board_override.txt", "fan_labels.json", "fan_disk_temp.json", "fan_sys_temp.json"):
-        src = os.path.join(APP_DIR, name)
         dst = os.path.join(cfg, name)
-        if os.path.exists(src) and not os.path.exists(dst):
-            try:
-                shutil.copy2(src, dst)
-            except Exception:
-                pass
+        if os.path.exists(dst):
+            continue
+        for src_dir in legacy_sources:
+            if src_dir == cfg:
+                continue
+            src = os.path.join(src_dir, name)
+            if os.path.exists(src):
+                try:
+                    shutil.copy2(src, dst)
+                except Exception:
+                    pass
+                break
 
 _migrate_legacy_configs()
 
