@@ -13,3 +13,10 @@ debug.log
 
 # 本地打包中间产物（app.tgz 由打包脚本重新生成，不入库）
 app.tgz
+
+# 构建产物 fpk（仅作 GitHub Release 资产，不入库；由 build.sh 重新生成）
+nasdash.fpk
+
+# 论坛发帖草稿等杂物（非源码）
+forum_post_*
+forum_reply_*

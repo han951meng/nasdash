@@ -178,10 +178,19 @@ def sudo(cmd, timeout=30):
     # 已是 root 直接跑，省去 sudo（fnOS 应用常以 root 运行）
     if os.geteuid() == 0:
         return run(cmd, timeout)
-    out = run("sudo -n " + cmd, timeout)
-    if out.strip():
-        return out
-    return run(cmd, timeout)  # sudo -n 失败再裸跑兜底
+    # 非 root：尝试 passwordless sudo，按 returncode 判成败（不靠输出非空，
+    # 否则空输出命令如 `echo 1 > file` 会被误判失败并重复执行）
+    try:
+        r = subprocess.run("sudo -n " + cmd, shell=True, capture_output=True, text=True, timeout=timeout)
+    except Exception as e:
+        log(f"sudo cmd error: {cmd}\n{e}")
+        return run(cmd, timeout)
+    if r.returncode == 0:
+        if r.stderr.strip():
+            log(f"sudo warning (rc=0): {cmd}\n{r.stderr.strip()}")
+        return r.stdout
+    # sudo -n 失败（需密码 / 无权限），回退裸跑
+    return run(cmd, timeout)
 
 # ===================== 风扇缓变控制（常驻线程平滑过渡，避免瞬间全速）=====================
 import threading as _threading
@@ -2009,7 +2018,7 @@ def api_fan_set():
         return jsonify({"ok": False, "error": "invalid hwmon"}), 400
     try:
         idx = int(idx)
-        if idx < 1 or idx > 9:
+        if idx < 1 or idx > 10:
             raise ValueError()
     except (TypeError, ValueError):
         return jsonify({"ok": False, "error": "invalid idx"}), 400
