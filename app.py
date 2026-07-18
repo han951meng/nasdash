@@ -7,8 +7,45 @@
 """
 import subprocess, json, re, os, time, socket, platform, shutil, sys, urllib.request, urllib.error
 from flask import Flask, jsonify, render_template_string, request
+from functools import wraps
 
 app = Flask(__name__)
+
+# ===================== 飞牛统一网关用户身份 =====================
+# 官方文档要求：访问经网关时，fnOS 先校验登录态，再通过 Header 转发用户信息
+# （X-Trim-Userid / X-Trim-Isadmin / X-Trim-Username）。应用必须以网关转发
+# Header 为准，「不要信任客户端传入的用户 ID」。本应用仅经统一网关暴露
+# （裸端口 9800 仅本地兜底、不对外），故浏览器请求必带这些 Header。
+def get_gateway_user():
+    """读取网关转发的可信用户上下文；未经过网关时 uid 为空（authenticated=False）。"""
+    h = request.headers
+    uid = (h.get("X-Trim-Userid") or "").strip()
+    return {
+        "uid": uid or None,
+        "username": (h.get("X-Trim-Username") or "").strip() or None,
+        "isAdmin": (h.get("X-Trim-Isadmin") or "").strip().lower() == "true",
+        "authenticated": bool(uid),  # 有 Userid 即视为网关已校验登录态
+    }
+
+def require_admin():
+    """装饰器：要求经网关鉴权且为管理员，否则 403。
+    用于所有配置写入 / 硬件控制类「管理接口」（文档：管理接口需要管理员身份）。"""
+    def decorator(fn):
+        @wraps(fn)
+        def wrapper(*args, **kwargs):
+            u = get_gateway_user()
+            if not u["authenticated"]:
+                return jsonify({"ok": False, "error": "unauthorized: gateway login required"}), 403
+            if not u["isAdmin"]:
+                return jsonify({"ok": False, "error": "forbidden: admin required"}), 403
+            return fn(*args, **kwargs)
+        return wrapper
+    return decorator
+
+@app.route("/api/me")
+def api_me():
+    """返回当前网关登录用户，供前端展示登录身份。"""
+    return jsonify(get_gateway_user())
 
 # 应用根目录
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -1956,6 +1993,7 @@ def api_all():
     return jsonify(result)
 
 @app.route("/api/fan/set", methods=["POST"])
+@require_admin()
 def api_fan_set():
     """设置风扇转速：设目标 PWM（后台缓变线程平滑过渡）或恢复自动控温"""
     try:
@@ -2099,6 +2137,7 @@ def api_fan_disk_temp_get():
 
 
 @app.route("/api/fan/disk_temp", methods=["POST"])
+@require_admin()
 def api_fan_disk_temp_set():
     data = request.get_json(force=True, silent=True) or {}
     cfg = _load_fan_disk_temp()
@@ -2176,6 +2215,7 @@ def api_fan_sys_temp_get():
 
 
 @app.route("/api/fan/sys_temp", methods=["POST"])
+@require_admin()
 def api_fan_sys_temp_set():
     data = request.get_json(force=True, silent=True) or {}
     cfg = _load_fan_sys_temp()
@@ -2237,6 +2277,7 @@ def api_fan_labels_get():
 
 
 @app.route("/api/fan/labels", methods=["POST"])
+@require_admin()
 def api_fan_labels_post():
     """保存风扇标注（整体覆盖）。body: {"hwmon::idx": {"name":"...","voltage":"12V"}, ...}"""
     try:
@@ -2278,6 +2319,7 @@ def api_version():
     return jsonify(_check_latest_version())
 
 @app.route("/api/board/set", methods=["POST"])
+@require_admin()
 def api_board_set():
     """保存/清除主板型号手动标注（白牌板 DMI 为空时由用户填写）"""
     try:
