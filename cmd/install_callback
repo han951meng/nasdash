@@ -155,4 +155,30 @@ if [ -d "$_BACKUP_DIR" ]; then
     done
 fi
 
+# 9. 预创建占位 gateway socket：飞牛纯 bash 第三方应用在安装阶段不会把 socket
+#    路径主动汇报给 appcenter，导致 entry.gateway_socket 在安装扫描时记成空
+#    （应用中心打开即 404，只能靠运行时看门狗补回）。此处预先在 target/app.sock
+#    创建一个真正的 Unix Socket 文件（无监听进程），让 appcenter 安装扫描时即
+#    登记正确路径；start 时 cmd/main 会先 rm 再让 app.py 复用同一路径重新监听，
+#    路径字符串不变，网关转发照常工作。
+SOCK_PATH="${TRIM_APPDEST}/app.sock"
+if [ -n "$SOCK_PATH" ] && [ ! -S "$SOCK_PATH" ]; then
+    NAS_PLACEHOLDER_SOCK="$SOCK_PATH" "$PYTHON" - <<'PYEOF' 2>/dev/null
+import os, socket, sys
+p = os.environ.get("NAS_PLACEHOLDER_SOCK")
+if p:
+    try:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.bind(p)
+        # 进程退出后文件保留为 socket 类型，供 appcenter 扫描登记（不主动 unlink）
+    except OSError as e:
+        sys.stderr.write("placeholder sock bind failed: %s\n" % e)
+PYEOF
+    if [ -S "$SOCK_PATH" ]; then
+        echo "[nasdash] 已预创建占位 gateway socket: $SOCK_PATH" >> "$LOG"
+    else
+        echo "[nasdash] 预创建占位 gateway socket 失败(将依赖运行时自愈): $SOCK_PATH" >> "$LOG"
+    fi
+fi
+
 exit 0

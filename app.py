@@ -3691,6 +3691,18 @@ if __name__ == "__main__":
                         environ["SCRIPT_NAME"] = _gw_prefix
                     return self.wsgi_app(environ, start_response)
             app.wsgi_app = _PrefixMiddleware(app.wsgi_app)
+        # 同时监听 127.0.0.1:TRIM_SERVICE_PORT（由 manifest service_port 注入），
+        # 供飞牛网关按端口转发；仅绑定本地回环，不对外暴露。网关既可通过
+        # app.sock 也可通过 127.0.0.1:service_port 访问，兼容 fygo-browser/app-cleaner/Hermes 三种转发模式。
+        _service_port = (os.environ.get("TRIM_SERVICE_PORT") or "").strip()
+        if _service_port:
+            def _serve_tcp(app, port):
+                from wsgiref.simple_server import make_server
+                srv = make_server("127.0.0.1", port, app)
+                srv.serve_forever()
+            _port = int(_service_port)
+            _tcp_thread = _threading.Thread(target=_serve_tcp, args=(app, _port), daemon=True)
+            _tcp_thread.start()
         _serve_gateway(app, socket_path)
     else:
         _env_port = (os.environ.get("TRIM_SERVICE_PORT") or "").strip()
