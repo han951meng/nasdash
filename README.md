@@ -1,6 +1,6 @@
 # nasdash
 
-**当前版本：v1.7.15** · [下载最新 fpk](https://github.com/han951meng/nasdash/releases/latest)
+**当前版本：v1.7.16** · [下载最新 fpk](https://github.com/han951meng/nasdash/releases/latest)
 
 飞牛OS（fnOS）NAS 硬件监控面板 —— FPK 应用包
 
@@ -152,6 +152,10 @@
 > 本应用仅在以上硬件完成完整实测；其他主板/阵列卡组合功能可能不同，欢迎在 Issues 反馈。
 
 ## 更新日志
+
+### v1.7.16
+- 图标规范修正：包图标 ICON.PNG 与桌面入口图标 icon-64.png 改为标准 64×64（原误用 256×256），包图标与桌面图标清晰度符合飞牛应用规范。
+- 清单补充 disable_authorization_path=true：nasdash 不访问用户文件/目录，自动隐藏应用设置里无用的「授权目录」项。
 
 ### v1.7.15
 - 统一网关鉴权（安全性大幅提升）：弃用旧版对全网开放、无任何鉴权的裸端口 9800，改为接入飞牛统一网关——访问前先经 NAS 登录态校验，未登录无法访问；从桌面图标或应用中心点击即用。
