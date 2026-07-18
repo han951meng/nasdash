@@ -1,0 +1,1304 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>飞牛 NAS 硬件监控</title>
+<style>
+  :root{
+    --bg:#f0f2f5; --card:#ffffff; --border:#e5e7eb; --text:#1f2937; --muted:#6b7280;
+    --blue:#2563eb; --green:#16a34a; --orange:#ea580c; --red:#dc2626; --yellow:#ca8a04;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,"Microsoft YaHei",sans-serif;background:var(--bg);color:var(--text);line-height:1.5}
+  .header{background:linear-gradient(135deg,#1e3a5f,#2563eb);color:#fff;padding:18px 28px;display:flex;align-items:center;justify-content:space-between;box-shadow:0 2px 8px rgba(0,0,0,.1)}
+  .header h1{font-size:20px;font-weight:600}
+  .header .meta{font-size:13px;opacity:.9;display:flex;gap:16px;align-items:center}
+  .container{max-width:1600px;margin:0 auto;padding:20px;display:flex;gap:20px;align-items:flex-start}
+  .sidebar{width:210px;flex:0 0 210px;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:8px;box-shadow:0 1px 3px rgba(0,0,0,.06);position:sticky;top:20px}
+  .sidebar-title{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;padding:6px 10px 10px}
+  .tabs{display:flex;flex-direction:column;gap:4px}
+  .tab{width:100%;padding:12px 14px;text-align:left;cursor:pointer;border-radius:8px;font-size:14px;font-weight:500;color:var(--muted);transition:all .2s;border:none;background:none;display:flex;align-items:center;gap:10px}
+  .tab:hover{background:#f3f4f6}
+  .tab.active{background:var(--blue);color:#fff}
+  .content{flex:1;min-width:0}
+  .panel{display:none}
+  .panel.active{display:block}
+  .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}
+  .card{background:var(--card);border-radius:10px;padding:16px;box-shadow:0 1px 3px rgba(0,0,0,.06);border:1px solid var(--border)}
+  .card h3{font-size:13px;color:var(--muted);margin-bottom:10px;font-weight:500;text-transform:uppercase;letter-spacing:.5px}
+  .kv{display:flex;justify-content:space-between;padding:4px 0;font-size:14px;border-bottom:1px solid #f3f4f6;gap:12px}
+  .kv:last-child{border-bottom:none}
+  .kv .k{color:var(--muted);flex:0 0 auto;max-width:60%}
+  .kv .v{font-weight:500;text-align:right;word-break:break-all;flex:1;min-width:0}
+  .badge{display:inline-block;padding:2px 10px;border-radius:12px;font-size:12px;font-weight:600}
+  .b-ok{background:#dcfce7;color:var(--green)}
+  .b-warn{background:#fef3c7;color:var(--yellow)}
+  .b-bad{background:#fee2e2;color:var(--red)}
+  .b-info{background:#dbeafe;color:var(--blue)}
+  .disk-card{position:relative}
+  .disk-card.bad{border-color:var(--red);background:#fef2f2}
+  .disk-card.warn{border-color:var(--orange)}
+  .disk-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+  .disk-head .name{font-size:16px;font-weight:600}
+  .temp-bar{height:6px;border-radius:3px;background:#e5e7eb;margin:8px 0;overflow:hidden}
+  .temp-fill{height:100%;border-radius:3px;transition:width .3s}
+  .table{width:100%;border-collapse:collapse;font-size:13px}
+  .table th,.table td{padding:8px 10px;text-align:left;border-bottom:1px solid var(--border)}
+  .table th{color:var(--muted);font-weight:500;background:#f9fafb}
+  .table tr:hover{background:#f9fafb}
+  .progress{height:20px;background:#e5e7eb;border-radius:10px;overflow:hidden;position:relative}
+  .progress-fill{height:100%;display:flex;align-items:center;justify-content:flex-end;padding-right:8px;color:#fff;font-size:11px;font-weight:600}
+  .btn{padding:6px 14px;border:1px solid rgba(255,255,255,.4);background:rgba(255,255,255,.15);color:#fff;border-radius:6px;cursor:pointer;font-size:13px}
+  .btn:hover{background:rgba(255,255,255,.25)}
+  .switch{display:inline-flex;align-items:center;gap:6px;font-size:13px;cursor:pointer}
+  .switch input{display:none}
+  .slider{width:34px;height:18px;background:rgba(255,255,255,.3);border-radius:10px;position:relative;transition:.2s}
+  .slider:before{content:"";position:absolute;width:14px;height:14px;background:#fff;border-radius:50%;top:2px;left:2px;transition:.2s}
+  .switch input:checked+.slider{background:#16a34a}
+  .switch input:checked+.slider:before{transform:translateX(16px)}
+  .spinner{display:inline-block;width:14px;height:14px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin .6s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .loading{text-align:center;padding:40px;color:var(--muted)}
+  pre{background:#1e293b;color:#e2e8f0;padding:14px;border-radius:8px;font-size:12px;overflow-x:auto;max-height:400px;white-space:pre-wrap}
+  .section-title{font-size:15px;font-weight:600;margin:18px 0 10px;color:var(--text)}
+  .pill{display:inline-block;padding:1px 8px;border-radius:6px;font-size:11px;margin-left:6px}
+  .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .grid-auto{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px}
+  .detect-title{font-size:22px;font-weight:700;margin-bottom:2px}
+  .detect-sub{font-size:13px;color:var(--muted);margin-bottom:18px}
+  .statusbar{display:flex;justify-content:space-between;align-items:center;background:var(--card);border:1px solid var(--border);border-radius:12px;padding:10px 18px;margin-bottom:20px;box-shadow:0 1px 3px rgba(0,0,0,.06)}
+  .status-left{display:flex;align-items:center;gap:8px}
+  .status-dot{width:9px;height:9px;border-radius:50%;background:var(--green)}
+  .status-right{display:flex;gap:26px;align-items:center}
+  .status-item{display:flex;flex-direction:column;gap:2px}
+  .status-item .k{font-size:11px;color:var(--muted)}
+  .status-item .v{font-size:13px;font-weight:600}
+  .detect-cards{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .disk-mini{display:flex;justify-content:space-between;padding:5px 0;font-size:13px;border-bottom:1px solid #f3f4f6;gap:10px}
+  .disk-mini:last-child{border-bottom:none}
+  .disk-group-title{font-size:12px;font-weight:600;color:#6b7280;margin:10px 0 4px;padding-left:2px}
+  .disk-group-title:first-child{margin-top:0}
+  .b-sas{background:#1e40af;color:#fff}
+  .b-sata{background:#15803d;color:#fff}
+  @media(max-width:768px){
+    .header{flex-direction:column;align-items:flex-start;gap:10px;padding:14px 16px}
+    .header h1{font-size:18px}
+    .meta{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+    .container{flex-direction:column;padding:12px 14px 20px;gap:14px}
+    .sidebar{width:100%;flex:auto;position:static}
+    .content{min-width:0}
+    .statusbar{flex-direction:column;align-items:stretch;gap:10px;padding:12px 14px;margin-bottom:14px}
+    .status-right{flex-wrap:wrap;width:100%;gap:12px 18px}
+    .status-item{min-width:42%}
+    .detect-cards,.cards{grid-template-columns:1fr;gap:12px}
+    .detect-cards>*,.cards>*{grid-column:auto!important}
+    .grid-2,.grid-auto{grid-template-columns:1fr}
+    .card{padding:14px}
+    .kv{gap:8px}
+    .kv .v{word-break:break-word;overflow-wrap:anywhere}
+    .detect-title{font-size:18px}
+    .detect-sub{margin-bottom:12px}
+    .table{font-size:12px}
+    .table th,.table td{padding:7px 8px}
+  }
+  .fan-ctrl-wrap{margin-top:10px;border-top:1px dashed var(--border);padding-top:10px}
+  .fan-ctrl-list{display:flex;flex-direction:column;gap:14px}
+  .fan-ctrl-head{display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px}
+  .fan-ctrl-val{font-weight:600;color:var(--blue)}
+  .fan-slider{width:100%;accent-color:var(--blue)}
+  .fan-ctrl-actions{display:flex;align-items:center;gap:10px;margin-top:6px}
+  .fan-ctrl-state{font-size:12px;color:var(--muted)}
+  .btn-mini{padding:3px 10px;font-size:12px;border:1px solid var(--border);border-radius:6px;background:var(--card);cursor:pointer;color:var(--text)}
+  .btn-mini:hover{background:var(--bg)}
+  .btn-mini.b-ok{background:var(--green);color:#fff;border-color:var(--green)}
+  .btn-mini.b-bad{background:var(--red);color:#fff;border-color:var(--red)}
+  .edit-pencil{float:right;cursor:pointer;color:var(--blue);font-size:13px;font-weight:400}
+  .edit-pencil:hover{opacity:.7}
+  .inp{padding:6px 8px;font-size:13px;border:1px solid var(--border);border-radius:6px;background:#fff;color:var(--text)}
+  /* 风扇控制独立页面 */
+  .fan-page{display:flex;flex-direction:column;gap:16px}
+  .fan-presets{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:14px;background:var(--card);border:1px solid var(--border);border-radius:10px}
+  .fan-presets .label{font-size:13px;color:var(--muted);margin-right:2px}
+  .preset-btn{padding:8px 13px;font-size:13px;font-weight:600;border:1px solid var(--border);border-radius:8px;background:var(--bg);cursor:pointer;color:var(--text);transition:.15s}
+  .preset-btn:hover{border-color:var(--blue);color:var(--blue)}
+  .preset-btn.full{background:var(--red);color:#fff;border-color:var(--red)}
+  .preset-btn.full:hover{opacity:.85;color:#fff}
+  .preset-btn.active{background:var(--blue);color:#fff;border-color:var(--blue);box-shadow:0 0 0 2px rgba(57,125,255,.25)}
+  .preset-btn.full.active{background:var(--red);border-color:var(--red);box-shadow:0 0 0 2px rgba(220,53,69,.25)}
+  .fan-global-state{font-size:13px;color:var(--muted);margin-left:auto}
+  .fan-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px}
+  .fan-card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px}
+  .fan-card-head{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:6px}
+  .fan-card-name{font-size:14px;font-weight:600}
+  .fan-label-input{flex:1 1 140px;min-width:120px;padding:5px 8px;font-size:13px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text)}
+  .fan-label-input:focus{outline:none;border-color:var(--blue)}
+  .fan-label-save{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap}
+  .fan-volt-select{padding:4px 6px;font-size:12px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text)}
+  .fan-volt-select:focus{outline:none;border-color:var(--blue)}
+  .fan-label-state{font-size:12px;color:var(--green)}
+  .volt-badge{display:inline-block;font-size:11px;font-weight:600;padding:1px 7px;border-radius:10px;background:var(--bg);color:var(--muted);border:1px solid var(--border);margin-left:4px}
+  .fan-rpm{font-size:26px;font-weight:700;color:var(--blue);line-height:1.1}
+  .fan-rpm small{font-size:12px;color:var(--muted);font-weight:400;margin-left:4px}
+  .fan-speed-bar{height:8px;background:var(--bg);border-radius:5px;overflow:hidden;margin:10px 0 4px}
+  .fan-speed-fill{height:100%;background:linear-gradient(90deg,var(--green),var(--blue));border-radius:5px;transition:width .4s}
+  .fan-pct-line{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-bottom:6px}
+  .fan-pct-line b{color:var(--text)}
+  .fan-card .fan-slider{margin-top:4px}
+  .fan-card-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px 10px;margin-top:8px}
+  .fan-custom{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--muted)}
+  .fan-custom-input{width:56px;padding:5px 6px;font-size:13px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text)}
+  .fan-custom-input:focus{outline:none;border-color:var(--blue)}
+  .fan-card-state{font-size:12px;color:var(--muted)}
+  /* 硬盘温度控制风扇面板 */
+  .dt-panel{--dt-gap:16px;padding:18px}
+  .dt-panel h3{display:flex;align-items:center;gap:10px;margin:0 0 16px;font-size:16px}
+  .dt-section{margin-bottom:18px}
+  .dt-section-title{font-size:13px;font-weight:600;color:var(--muted);margin-bottom:10px;display:flex;align-items:center;gap:8px}
+  .dt-section-title .count{font-size:11px;color:var(--blue);background:var(--bg);padding:2px 8px;border-radius:10px;border:1px solid var(--border)}
+  .dt-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px}
+  .dt-opt{display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--bg);border:1px solid var(--border);border-radius:8px;cursor:pointer;transition:.15s}
+  .dt-opt:hover{border-color:var(--blue)}
+  .dt-opt input[type=checkbox]{margin:0;accent-color:var(--blue);flex-shrink:0}
+  .dt-opt .dt-name{font-size:13px;font-weight:500;color:var(--text);flex:1}
+  .dt-opt .dt-meta{font-size:11px;color:var(--muted);white-space:nowrap}
+  .dt-empty{padding:18px;text-align:center;color:var(--muted);font-size:13px;background:var(--bg);border:1px dashed var(--border);border-radius:8px}
+  .dt-thresholds{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px}
+  .dt-field{display:flex;align-items:center;gap:8px;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 12px}
+  .dt-field label{font-size:13px;color:var(--muted);margin:0;min-width:64px}
+  .dt-field input[type=number]{width:64px;padding:5px 7px;font-size:14px;text-align:center;border:1px solid var(--border);border-radius:6px;background:#fff;color:var(--text)}
+  .dt-field input[type=number]:focus{outline:none;border-color:var(--blue)}
+  .dt-field .unit{font-size:12px;color:var(--muted)}
+  .dt-options{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+  .dt-actions{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:8px}
+  .dt-save-state{font-size:13px;color:var(--muted)}
+  .dt-save-state.ok{color:var(--green)}
+  .dt-live{display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--bg);border:1px solid var(--border);border-radius:8px;font-size:13px}
+  .dt-live b{font-size:16px;color:var(--green)}
+  .dt-toggle{display:inline-flex;align-items:center;gap:8px;font-size:14px;font-weight:500;cursor:pointer}
+  .dt-toggle input{accent-color:var(--blue);flex-shrink:0}
+  /* 检测新版本横幅 */
+  .update-banner{display:none;align-items:center;justify-content:space-between;gap:14px;background:linear-gradient(135deg,#ea580c,#f59e0b);color:#fff;padding:11px 18px;border-radius:10px;margin-bottom:16px;box-shadow:0 2px 10px rgba(234,88,12,.28);font-size:14px}
+  .update-banner.show{display:flex}
+  .update-banner a{color:#fff;text-decoration:underline;font-weight:700;white-space:nowrap}
+  .update-banner .ub-close{background:rgba(255,255,255,.22);border:none;color:#fff;cursor:pointer;border-radius:6px;padding:3px 11px;font-size:13px}
+  .update-banner .ub-close:hover{background:rgba(255,255,255,.35)}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>🖥️ 飞牛 NAS 硬件监控</h1>
+  <div class="meta">
+    <span id="lastUpdate">加载中…</span>
+    <span><span class="spinner" id="spin"></span></span>
+    <label class="switch"><input type="checkbox" id="autoRefresh"><span class="slider"></span>自动刷新</label>
+    <button class="btn" onclick="loadData()">🔄 刷新</button>
+    <button class="btn" id="checkUpdateBtn" onclick="checkUpdate(true)">🔔 检查更新</button>
+  </div>
+</div>
+
+<div class="container">
+  <aside class="sidebar">
+    <div class="sidebar-title">监控模块</div>
+    <div class="tabs">
+      <button class="tab active" onclick="switchTab('detect',this)">🔧 硬件配置检测</button>
+      <button class="tab" onclick="switchTab('raid',this)">💾 阵列卡</button>
+      <button class="tab" onclick="switchTab('disks',this)">💿 硬盘 SMART</button>
+      <button class="tab" onclick="switchTab('system',this)">📊 系统资源</button>
+      <button class="tab" onclick="switchTab('fan',this)">🌀 风扇控制</button>
+      <button class="tab" onclick="switchTab('storage',this)">🗄️ 存储卷</button>
+      <button class="tab" onclick="switchTab('docker',this)">🐳 Docker</button>
+    </div>
+  </aside>
+  <main class="content">
+    <div id="updateBanner" class="update-banner">
+      <div>🔔 <span id="updateText"></span></div>
+      <div style="display:flex;gap:12px;align-items:center">
+        <a id="updateLink" href="https://github.com/han951meng/nasdash/releases" target="_blank" rel="noopener">前往下载 →</a>
+        <button class="ub-close" onclick="dismissUpdate()">✕</button>
+      </div>
+    </div>
+    <div id="detect" class="panel active"><div class="loading">加载中…</div></div>
+    <div id="raid" class="panel"><div class="loading">加载中…</div></div>
+    <div id="disks" class="panel"><div class="loading">加载中…</div></div>
+    <div id="system" class="panel"><div class="loading">加载中…</div></div>
+    <div id="fan" class="panel"><div class="loading">加载中…</div></div>
+    <div id="storage" class="panel"><div class="loading">加载中…</div></div>
+    <div id="docker" class="panel"><div class="loading">加载中…</div></div>
+  </main>
+</div>
+
+<script>
+// 统一网关适配：页面位于 /app/{appname} 路径下时，自动为所有绝对根路径 fetch 补上前缀；
+// 本地 TCP 模式（根路径）下前缀为空，行为完全不变。无需逐个改 fetch 调用。
+(function(){
+  var _orig = window.fetch ? window.fetch.bind(window) : null;
+  if (!_orig) return;
+  var base = (location.pathname || '/').replace(/\/[^\/]*$/, '');
+  window.fetch = function(u, o){
+    if (typeof u === 'string' && u.charAt(0) === '/' && u.charAt(1) !== '/') {
+      u = base + u;
+    }
+    return _orig(u, o);
+  };
+})();
+let DATA=null, timer=null;
+function switchTab(id, btn){
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById(id).classList.add('active');
+}
+function badge(ok, okText='正常', badText='异常'){
+  return `<span class="badge ${ok?'b-ok':'b-bad'}">${ok?okText:badText}</span>`;
+}
+function tempColor(t, trip){
+  if(t==null) return 'var(--muted)';
+  let pct = trip? t/trip : t/60;
+  if(pct>0.9) return 'var(--red)';
+  if(pct>0.75) return 'var(--orange)';
+  return 'var(--green)';
+}
+function fmtHours(h){
+  if(h==null) return '-';
+  if(h>=8760) return (h/8760).toFixed(1)+' 年';
+  return h+' 小时';
+}
+
+function renderRaid(r, disks){
+  // 纯 SATA 主板：无独立阵列卡 / HBA
+  if(r.mode === 'none'){
+    return '<div class="card"><div class="loading">'+(r.note||'未检测到阵列卡')+'</div></div>';
+  }
+  // MegaRAID 卡存在但 storcli 读取失败
+  if(r.mode === 'mega_error'){
+    return '<div class="card"><div class="loading" style="color:var(--red)">'+(r.note||'读取失败')+'</div></div>';
+  }
+  // HBA 直通卡（IT 模式）：盘由系统直接管理，内联 smartctl 直读的磁盘温度
+  if(r.mode === 'hba'){
+    let diskRows = (disks && disks.length) ? disks.map(d=>{
+      let trip = d.temp_trip || 60;
+      let tstr = d.temp != null ? d.temp + '°C' : 'N/A';
+      let tcol = tempColor(d.temp, trip);
+      let mdl = (d.vendor ? d.vendor + ' ' : '') + (d.model || '');
+      let typ = d.type === 'nvme' ? 'NVMe' : (d.type === 'sas' ? 'SAS' : (d.rota === '1' ? 'SATA HDD' : 'SATA SSD'));
+      return `<tr><td>${d.dev}</td><td>${mdl}</td><td>${typ}</td><td style="color:${tcol};font-weight:600">${tstr}</td></tr>`;
+    }).join('') : '<tr><td colspan=4>未检测到磁盘（请用 smartctl 确认盘已被系统识别）</td></tr>';
+    return `
+    <div class="cards">
+      <div class="card">
+        <h3>控制器 (HBA 直通)</h3>
+        <div class="kv"><span class="k">型号</span><span class="v">${r.model}</span></div>
+        <div class="kv"><span class="k">模式</span><span class="v"><span class="badge b-info">IT 直通</span></span></div>
+        <div class="kv"><span class="k">状态</span><span class="v" style="color:var(--green)">✓ 正常工作</span></div>
+        ${r.controller_temp != null ? `<div class="kv"><span class="k">芯片温度</span><span class="v" style="color:${tempColor(r.controller_temp,85)};font-weight:600">${r.controller_temp}°C</span></div>` : ''}
+      </div>
+      <div class="card" style="grid-column: span 2">
+        <h3>说明</h3>
+        <div style="margin-top:6px;color:var(--muted);font-size:13px;line-height:1.7">${r.note}</div>
+      </div>
+    </div>
+    <div class="section-title">已识别磁盘温度（smartctl 直读，无需阵列卡）</div>
+    <div class="card">
+      <table class="table"><thead><tr><th>设备</th><th>型号</th><th>类型</th><th>温度</th></tr></thead><tbody>${diskRows}</tbody></table>
+    </div>`;
+  }
+  // MegaRAID (IR 模式)：现有展示逻辑
+  let ct = r.controller_temp;
+  let ctStr = ct != null ? ct + '°C' : 'N/A';
+  let ctCol = tempColor(ct, 85);
+  let drives = r.drives.map(d=>`<tr><td>${d.slot}</td><td>${d.brand||'-'}</td><td>${d.model}${d.feature?` <span class="badge b-info">${d.feature}</span>`:''}</td><td>${d.intf} ${d.media}</td><td>${d.size}${d.size_note?`<br><span style="font-size:11px;color:var(--muted)">${d.size_note}</span>`:''}</td><td><span class="badge ${d.state==='JBOD'||d.state==='Onln'?'b-ok':'b-warn'}">${d.state}${d.sp==='D'?' · 已停转':''}</span></td><td>${d.rpm||'-'}</td></tr>`).join('');
+  return `
+  <div class="cards">
+    <div class="card">
+      <h3>阵列卡信息</h3>
+      <div class="kv"><span class="k">型号</span><span class="v">${r.model}</span></div>
+      <div class="kv"><span class="k">模式</span><span class="v"><span class="badge b-info">MegaRAID (IR)</span></span></div>
+      <div class="kv"><span class="k">状态</span><span class="v" style="color:var(--green)">✓ 正常工作</span></div>
+      <div class="kv"><span class="k">序列号</span><span class="v">${r.serial}</span></div>
+      <div class="kv"><span class="k">SAS 地址</span><span class="v">${r.sas_address}</span></div>
+      <div class="kv"><span class="k">PCI 地址</span><span class="v">${r.pci}</span></div>
+      <div class="kv"><span class="k">芯片温度</span><span class="v" style="color:${ctCol};font-weight:600">${ctStr}</span></div>
+    </div>
+    <div class="card">
+      <h3>固件版本</h3>
+      <div class="kv"><span class="k">FW Package</span><span class="v">${r.fw_package}</span></div>
+      <div class="kv"><span class="k">FW Version</span><span class="v">${r.fw_version}</span></div>
+      <div class="kv"><span class="k">BIOS</span><span class="v">${r.bios_version}</span></div>
+      <div class="kv"><span class="k">驱动</span><span class="v">${r.driver}</span></div>
+    </div>
+    <div class="card">
+      <h3>缓存 / 电池</h3>
+      <div class="kv"><span class="k">CacheVault</span><span class="v">${r.cachevault}</span></div>
+      <div class="kv"><span class="k">JBOD 盘数</span><span class="v">${r.jbod_count}</span></div>
+    </div>
+    <div class="card" style="grid-column: 1 / -1">
+      <h3>说明</h3>
+      <div style="margin-top:6px;color:var(--muted);font-size:13px;line-height:1.7">MegaRAID (IR 模式)：磁盘由阵列卡固件统一管理，支持 RAID 0/1/5/10 与 JBOD。阵列卡芯片温度由 storcli 读取（ROC temperature）；每张物理盘的状态与转速见下方列表，单盘 SMART 温度与健康度请见「硬盘 SMART」标签页。</div>
+    </div>
+  </div>
+  <div class="section-title">物理盘列表</div>
+  <div class="card">
+    <div style="overflow-x:auto"><table class="table"><thead><tr><th>槽位</th><th>品牌</th><th>型号</th><th>接口</th><th>容量</th><th>状态</th><th>转速</th></tr></thead><tbody>${drives||'<tr><td colspan=7>无</td></tr>'}</tbody></table></div>
+  </div>`;
+}
+
+function renderDisks(disks){
+  if(!disks||!disks.length) return '<div class="card"><div class="loading">未检测到硬盘</div></div>';
+  return '<div class="cards">'+disks.map(d=>{
+    let isSAS = d.type==='sas';
+    let isNVMe = d.type==='nvme';
+    let healthBadge = d.health_ok ? '<span class="badge b-ok">'+d.health+'</span>' : '<span class="badge b-bad">'+d.health+'</span>';
+    let cls = d.health_ok ? '' : 'bad';
+    let trip = d.temp_trip||60;
+    let tempPct = d.temp!=null ? Math.min(d.temp/trip*100,100) : 0;
+    let tempStr = d.temp!=null ? d.temp+'°C' : 'N/A';
+    let detail = '';
+    if(isSAS){
+      detail = `
+        <div class="kv"><span class="k">已用时长</span><span class="v">${fmtHours(d.power_on_hours)}</span></div>
+        <div class="kv"><span class="k">缺陷扇区</span><span class="v" style="color:${d.defects>0?'var(--red)':'var(--text)'}">${d.defects}</span></div>
+        <div class="kv"><span class="k">待处理缺陷</span><span class="v" style="color:${d.pending>0?'var(--orange)':'var(--text)'}">${d.pending}</span></div>
+        <div class="kv"><span class="k">非介质错误</span><span class="v">${d.non_medium_errors||0}</span></div>
+        <div class="kv"><span class="k">读错误(不可纠正)</span><span class="v">${d.read_errors}</span></div>
+        <div class="kv"><span class="k">写错误(不可纠正)</span><span class="v">${d.write_errors}</span></div>`;
+    } else if(isNVMe) {
+      detail = `
+        <div class="kv"><span class="k">已用时长</span><span class="v">${fmtHours(d.power_on_hours)}</span></div>
+        <div class="kv"><span class="k">已用寿命</span><span class="v" style="color:${d.percentage_used>0?'var(--orange)':'var(--text)'}">${d.percentage_used!=null?d.percentage_used+'%':'N/A'}</span></div>
+        <div class="kv"><span class="k">剩余备用</span><span class="v">${d.available_spare!=null?d.available_spare+'%':'N/A'}</span></div>
+        <div class="kv"><span class="k">临界告警</span><span class="v" style="color:${d.critical_warning&&d.critical_warning!=='0'?'var(--red)':'var(--text)'}">0x${d.critical_warning||'0'}</span></div>
+        <div class="kv"><span class="k">读取量</span><span class="v">${d.data_units_read||'N/A'}</span></div>
+        <div class="kv"><span class="k">写入量</span><span class="v">${d.data_units_written||'N/A'}</span></div>`;
+    } else {
+      detail = `
+        <div class="kv"><span class="k">已用时长</span><span class="v">${fmtHours(d.power_on_hours)}</span></div>
+        <div class="kv"><span class="k">重映射扇区</span><span class="v" style="color:${d.reallocated>0?'var(--red)':'var(--text)'}">${d.reallocated}</span></div>
+        <div class="kv"><span class="k">待处理扇区</span><span class="v" style="color:${d.pending>0?'var(--orange)':'var(--text)'}">${d.pending}</span></div>
+        <div class="kv"><span class="k">不可纠正扇区</span><span class="v" style="color:${d.uncorrectable>0?'var(--red)':'var(--text)'}">${d.uncorrectable}</span></div>
+        <div class="kv"><span class="k">UDMA CRC 错误</span><span class="v">${d.udma_crc||0}</span></div>`;
+    }
+    return `<div class="card disk-card ${cls}">
+      <div class="disk-head">
+        <span class="name">${d.dev}</span>
+        ${healthBadge}
+      </div>
+      <div class="kv"><span class="k">型号</span><span class="v">${d.brand?d.brand+' ':''}${d.vendor?d.vendor+' ':''}${d.model}</span></div>
+      <div class="kv"><span class="k">容量 / 类型</span><span class="v">${d.size} · ${isNVMe?'NVMe':(isSAS?'SAS':'SATA')} · ${d.rota=='1'?'HDD':'SSD'}${d.feature?' · '+d.feature:''}</span></div>
+      <div class="kv"><span class="k">转速</span><span class="v">${d.rpm||(d.rota=='1'||isSAS?'—':'固态(SSD)')}</span></div>
+      <div class="kv"><span class="k">序列号</span><span class="v" style="font-size:12px">${d.serial}</span></div>
+      <div style="margin-top:8px"><span style="font-size:13px;color:var(--muted)">温度 ${tempStr}</span><div class="temp-bar"><div class="temp-fill" style="width:${tempPct}%;background:${tempColor(d.temp,trip)}"></div></div></div>
+      ${detail}
+    </div>`;
+  }).join('')+'</div>';
+}
+
+function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+function renderSystem(s){
+  let memPct = s.memory.percent;
+  let memColor = memPct>85?'var(--red)':memPct>70?'var(--orange)':'var(--green)';
+  let sens = s.sensors || {};
+  let tempsHtml = (sens.temps||[]).map(t=>{
+    let col = t.crit&&t.value>=t.crit ? 'var(--red)' : t.max&&t.value>=t.max ? 'var(--orange)' : 'inherit';
+    let extra = t.crit ? ` (上限${t.max||'-'}°C/临界${t.crit}°C)` : t.max ? ` (上限${t.max}°C)` : '';
+    return `<div class="kv"><span class="k">${t.name}</span><span class="v" style="color:${col}">${t.value}°C${extra}</span></div>`;
+  }).join('');
+  let fansHtml = (sens.fans||[]).map(f=>{
+    let stopped = f.stopped || f.rpm < 1;
+    let color = stopped ? 'var(--red)' : 'inherit';
+    let rpmStr = stopped ? '0 RPM (停转)' : f.rpm + ' RPM';
+    let modeMap = {'curve':'曲线温控','manual':'手动控制','auto':'自动温控','off':'关闭'};
+    let modeStr = f.mode ? ` <span class="pill ${f.mode==='curve'||f.mode==='auto'?'b-info':'b-warn'}">${modeMap[f.mode]||f.mode}</span>` : '';
+    let voltBadge = f.voltage ? ` <span class="volt-badge">${esc(f.voltage)}</span>` : '';
+    let pwmStr = (f.pwm!=null) ? ` · PWM ${f.pwm}%` : '';
+    let fanName = esc(f.label || f.name);
+    return `<div class="kv"><span class="k">${fanName}${voltBadge}${modeStr}</span><span class="v" style="color:${color}">${rpmStr}${pwmStr}</span></div>`;
+  }).join('');
+  let voltsHtml = (sens.voltages||[]).map(v=>`<div class="kv"><span class="k">${v.name}</span><span class="v">${v.value} V</span></div>`).join('');
+  let loadColor = (l)=>parseFloat(l)>s.cpu_threads?'var(--red)':parseFloat(l)>s.cpu_threads*0.7?'var(--orange)':'var(--green)';
+  return `
+  <div class="grid-2">
+    <div class="card">
+      <h3>负载</h3>
+      <div class="kv"><span class="k">1 分钟</span><span class="v" style="color:${loadColor(s.load[0])}">${s.load[0]}</span></div>
+      <div class="kv"><span class="k">5 分钟</span><span class="v" style="color:${loadColor(s.load[1])}">${s.load[1]}</span></div>
+      <div class="kv"><span class="k">15 分钟</span><span class="v" style="color:${loadColor(s.load[2])}">${s.load[2]}</span></div>
+      <div style="font-size:12px;color:var(--muted);margin-top:6px">阈值：> ${s.cpu_threads} 为过载</div>
+    </div>
+    <div class="card">
+      <h3>内存使用</h3>
+      <div class="kv"><span class="k">总量</span><span class="v">${s.memory.total}</span></div>
+      <div class="kv"><span class="k">已用</span><span class="v">${s.memory.used}</span></div>
+      <div class="kv"><span class="k">可用</span><span class="v">${s.memory.available}</span></div>
+      <div style="margin-top:8px"><div class="progress"><div class="progress-fill" style="width:${memPct}%;background:${memColor}">${memPct}%</div></div></div>
+    </div>
+  </div>
+  <div class="grid-auto" style="margin-top:14px">
+    <div class="card">
+      <h3>温度传感器</h3>
+      ${tempsHtml||'<div class="loading">无数据</div>'}
+    </div>
+    <div class="card">
+      <h3>风扇转速</h3>
+      ${fansHtml||'<div class="loading">无数据</div>'}
+    </div>
+    <div class="card">
+      <h3>电压</h3>
+      ${voltsHtml||'<div class="loading">无数据</div>'}
+    </div>
+  </div>`;
+}
+
+function renderFanControls(fans){
+  let ctrls = (fans||[]).filter(f=>f.controllable).map(f=>{
+    let id='fan'+f.idx;
+    let pct=(f.pwm!=null)?f.pwm:50;
+    return `<div class="fan-ctrl" id="${id}-box">
+      <div class="fan-ctrl-head"><span>${f.name}</span><span class="fan-ctrl-val"><span id="${id}-cur">${pct}</span>% <span class="fan-ctrl-tgt" id="${id}-tgt"></span></span></div>
+      <input type="range" min="30" max="100" value="${pct}" class="fan-slider" data-hwmon="${f.hwmon}" data-idx="${f.idx}" id="${id}-slider">
+      <div class="fan-ctrl-actions">
+        <span class="fan-ctrl-rpm">转速 <b id="${id}-rpm">${f.rpm||0}</b> RPM</span>
+        <button class="btn-mini" onclick="setFanAuto('${f.hwmon}', ${f.idx})">恢复自动</button>
+        <span class="fan-ctrl-state" id="${id}-state"></span>
+      </div>
+    </div>`;
+  }).join('');
+  if(!ctrls) return `<div class="loading">未检测到可调控风扇（部分 NAS 由系统固件统一控温，本工具不接管）</div>`;
+  return `<div class="fan-ctrl-list">${ctrls}</div>`;
+}
+
+// ===== 风扇控制独立页面（预设档位 + 实时转速卡片）=====
+let FAN_LIST=[];
+let SHOW_HIDDEN_FANS=false;
+function toggleShowHiddenFans(){ SHOW_HIDDEN_FANS=!SHOW_HIDDEN_FANS; if(typeof loadData==='function'){ loadData(); } }
+function renderFanControl(){
+  let allFans=(DATA.system&&DATA.system.sensors&&DATA.system.sensors.fans||[]).filter(f=>f.controllable);
+  let hiddenCount=allFans.filter(f=>f.hidden).length;
+  let fans=SHOW_HIDDEN_FANS?allFans:allFans.filter(f=>!f.hidden);
+  FAN_LIST=fans;
+  if(!allFans.length) return '<div class="card"><div class="loading">未检测到可调控风扇（部分 NAS 由系统固件统一控温，本工具不接管）</div></div>';
+  let presets=[['auto','默认'],['100','全速'],['10','10%'],['20','20%'],['30','30%'],['40','40%'],['50','50%'],['60','60%'],['70','70%'],['80','80%'],['90','90%']];
+  let presetHtml=presets.map(p=>`<button class="preset-btn ${p[0]==='100'?'full':''}" data-preset="${p[0]}" onclick="applyFanPreset('${p[0]}')">${p[1]}</button>`).join('');
+  let modeMap={'curve':'曲线温控','manual':'手动控制','auto':'自动温控','off':'关闭','disk_temp':'硬盘温控','sys_temp':'主板/CPU温控'};
+  let cards=fans.map(f=>{
+    let id='fan'+f.idx;
+    let pct=(f.pwm!=null)?f.pwm:50;
+    return `<div class="fan-card" id="${id}-box">
+      <div class="fan-card-head">
+        <input class="fan-label-input" id="${id}-label" value="${esc(f.label||f.name||'')}" placeholder="自定义名称（如 CPU 风扇）" maxlength="40">
+        <span class="pill ${f.mode==='curve'||f.mode==='auto'?'b-info':'b-warn'}">${modeMap[f.mode]||f.mode||''}</span>
+        <span class="fan-label-save">
+          <select class="fan-volt-select" id="${id}-volt" title="风扇供电电压">
+            <option value="12V" ${f.voltage==='12V'?'selected':''}>12V</option>
+            <option value="5V" ${f.voltage==='5V'?'selected':''}>5V</option>
+            <option value="未知" ${(!f.voltage||f.voltage==='未知')?'selected':''}>未知</option>
+          </select>
+          <button class="btn-mini" onclick="saveFanLabel('${f.hwmon}', ${f.idx})">保存标注</button>
+          <span id="${id}-label-state" class="fan-label-state"></span>
+        </span>
+      </div>
+      <div class="fan-rpm" ${f.has_tach?'':'title="读不到转速：可能是一分二分线器的副风扇（转速线未接）、风扇本身未接转速线，或主板未把该通道布线到风扇接口。若此通道无风扇，可点下方『隐藏』把它收起。"'}><span id="${id}-rpm">${f.has_tach?(f.rpm||0):'—'}</span><small id="${id}-rpm-unit">${f.has_tach?'RPM':'无转速信号'}</small></div>
+      <div class="fan-speed-bar"><div class="fan-speed-fill" id="${id}-bar" style="width:${pct}%"></div></div>
+      <div class="fan-pct-line">
+        <span>当前 <b id="${id}-cur">${pct}</b>%</span>
+        <span>目标 <b id="${id}-tgt"></b></span>
+      </div>
+      <input type="range" min="10" max="100" value="${pct}" class="fan-slider" data-hwmon="${f.hwmon}" data-idx="${f.idx}" id="${id}-slider">
+      <div class="fan-card-actions">
+        <button class="btn-mini" onclick="setFanAuto('${f.hwmon}', ${f.idx})">恢复自动</button>
+        <span class="fan-custom">
+          <input type="number" min="10" max="100" step="1" value="${pct}" class="fan-custom-input" id="${id}-custom" data-hwmon="${f.hwmon}" data-idx="${f.idx}" title="自定义该风扇占空比"> %
+          <button class="btn-mini" onclick="applyFanCustom('${f.hwmon}', ${f.idx})">应用</button>
+        </span>
+        <button class="btn-mini" onclick="toggleFanHidden('${f.hwmon}', ${f.idx}, ${f.hidden?'false':'true'})" title="隐藏无风扇/无转速的空通道，可随时恢复">${f.hidden?'取消隐藏':'隐藏'}</button>
+        <span class="fan-card-state" id="${id}-state"></span>
+      </div>
+    </div>`;
+  }).join('');
+  let dtHtml = renderDiskTempPanel();
+  let stHtml = renderSysTempPanel();
+  let hideToggle = hiddenCount>0 ? `<button class="btn-mini" style="margin-left:8px" onclick="toggleShowHiddenFans()">${SHOW_HIDDEN_FANS?('收起已隐藏('+hiddenCount+')'):('显示已隐藏通道('+hiddenCount+')')}</button>` : '';
+  let gridInner = cards || `<div class="loading">可见风扇均已隐藏${hiddenCount>0?'，点上方「显示已隐藏通道」可展开':''}。</div>`;
+  return `<div class="fan-page">
+    ${dtHtml}
+    ${stHtml}
+    <div class="fan-presets">
+      <span class="label">一键调速：</span>${presetHtml}
+      ${hideToggle}
+      <span class="fan-global-state" id="fan-global-state"></span>
+    </div>
+    <div class="fan-grid">${gridInner}</div>
+  </div>`;
+}
+async function applyFanPreset(val){
+  let gs=document.getElementById('fan-global-state');
+  if(!FAN_LIST.length) return;
+  if(val==='auto'){
+    if(gs) gs.textContent='正在恢复自动控温…';
+    for(let f of FAN_LIST) await setFanAuto(f.hwmon, f.idx);
+    if(gs) gs.textContent='已全部交还自动控温';
+  }else{
+    let pwm=parseInt(val,10);
+    if(gs) gs.textContent='正在设为 '+pwm+'%…';
+    for(let f of FAN_LIST) await applyFan(f.hwmon, f.idx, pwm);
+    if(gs) gs.textContent='已全部设为 '+pwm+'%';
+  }
+  highlightPreset(val);
+}
+let fanTimer=null;
+function clearPresetHighlight(){
+  document.querySelectorAll('.preset-btn[data-preset]').forEach(b=>b.classList.remove('active'));
+}
+function highlightPreset(val){
+  clearPresetHighlight();
+  let b=document.querySelector('.preset-btn[data-preset="'+val+'"]');
+  if(b) b.classList.add('active');
+}
+// 根据各卡真实目标/模式，高亮当前统一生效的档位（无统一档位则不高亮）
+function updatePresetHighlight(fans){
+  clearPresetHighlight();
+  if(!fans || !fans.length) return;
+  let manualFans=fans.filter(f=>f.mode!=='auto' && f.mode!=='off');
+  if(manualFans.length===0){
+    let b=document.querySelector('.preset-btn[data-preset="auto"]');
+    if(b) b.classList.add('active');
+    return;
+  }
+  let targets=manualFans.map(f=>(f.target_pct!=null?f.target_pct:f.pwm)).filter(p=>p!=null);
+  if(targets.length===manualFans.length && targets.every(t=>t===targets[0])){
+    let b=document.querySelector('.preset-btn[data-preset="'+targets[0]+'"]');
+    if(b) b.classList.add('active');
+  }
+}
+async function applyFanCustom(hwmon, idx){
+  let id='fan'+idx;
+  let inp=document.getElementById(id+'-custom');
+  if(!inp) return;
+  let v=parseInt(inp.value,10);
+  if(isNaN(v)) return;
+  v=Math.max(10,Math.min(100,v));
+  inp.value=v;
+  await applyFan(hwmon, idx, v);
+}
+async function fetchFanStatus(){
+  try{
+    let r=await fetch('/api/fan/status?_='+Date.now());
+    let j=await r.json();
+    (j.fans||[]).forEach(f=>{
+      let id='fan'+f.idx;
+      let cur=document.getElementById(id+'-cur');
+      let tgt=document.getElementById(id+'-tgt');
+      let rpm=document.getElementById(id+'-rpm');
+      let sl=document.getElementById(id+'-slider');
+      if(cur) cur.textContent=(f.pwm!=null?f.pwm:'--');
+      if(tgt) tgt.textContent=(f.target_pct!=null && f.target_pct!==f.pwm)?('→ 目标 '+f.target_pct+'%'):(f.mode==='auto'?'· 自动控温':'');
+      if(rpm) rpm.textContent=(f.has_tach?(f.rpm||0):'—');
+      let unit=document.getElementById(id+'-rpm-unit'); if(unit) unit.textContent=(f.has_tach?'RPM':'无转速信号');
+      let bar=document.getElementById(id+'-bar');
+      if(bar) bar.style.width=(f.pwm!=null?f.pwm:50)+'%';
+      if(sl && document.activeElement!==sl){
+        // 手动模式下滑块停在用户设定的目标值，不强行跟随实时爬升（避免松手后滑块回弹误以为没生效）；自动模式跟随实时值
+        sl.value=(f.mode==='manual' && f.target_pct!=null)?f.target_pct:(f.pwm!=null?f.pwm:50);
+      }
+    });
+    updatePresetHighlight(j.fans);
+  }catch(e){}
+}
+async function applyFan(hwmon, idx, pwm){
+  let id='fan'+idx, st=document.getElementById(id+'-state');
+  if(st) st.textContent='目标 '+pwm+'%，平滑过渡中…';
+  try{
+    let r=await fetch('/api/fan/set',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({hwmon:hwmon,idx:idx,pwm:pwm})});
+    let j=await r.json();
+    if(st) st.textContent=j.ok?('目标 '+pwm+'%，平滑过渡中'):('失败：'+(j.error||''));
+  }catch(e){ if(st) st.textContent='请求失败'; }
+}
+async function setFanAuto(hwmon, idx){
+  let id='fan'+idx, st=document.getElementById(id+'-state');
+  if(st) st.textContent='恢复中…';
+  try{
+    let r=await fetch('/api/fan/set',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({hwmon:hwmon,idx:idx,mode:'auto'})});
+    let j=await r.json();
+    let owner=j.owner==='ext_service'?'（已交还系统风扇服务）':'（nasdash 接管温控）';
+    if(st) st.textContent=j.ok?('已恢复自动 '+owner):('失败：'+(j.error||''));
+  }catch(e){ if(st) st.textContent='请求失败'; }
+}
+async function saveFanLabel(hwmon, idx){
+  let id='fan'+idx;
+  let labInp=document.getElementById(id+'-label');
+  let voltSel=document.getElementById(id+'-volt');
+  let st=document.getElementById(id+'-label-state');
+  if(!labInp||!voltSel) return;
+  try{
+    let r=await fetch('/api/fan/labels'); let cur=await r.json();
+    let k=hwmon+'::'+idx; let e=cur[k]||{};
+    e.name=labInp.value.trim(); e.voltage=voltSel.value;  // 保留 e.hidden 不被覆盖
+    cur[k]=e;
+    let r2=await fetch('/api/fan/labels',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cur)});
+    let j=await r2.json();
+    if(st) st.textContent=j.ok?'已保存 ✓':'失败';
+    if(j.ok){ loadData(); }
+  }catch(e){ if(st) st.textContent='请求失败'; }
+}
+async function toggleFanHidden(hwmon, idx, hide){
+  try{
+    let r=await fetch('/api/fan/labels'); let cur=await r.json();
+    let k=hwmon+'::'+idx; let e=cur[k]||{};
+    e.hidden=!!hide; cur[k]=e;
+    await fetch('/api/fan/labels',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cur)});
+    if(!hide){ SHOW_HIDDEN_FANS=true; }  // 取消隐藏后确保该风扇仍可见
+    if(typeof loadData==='function'){ loadData(); }
+  }catch(e){}
+}
+function bindFanSliders(){
+  document.querySelectorAll('.fan-slider').forEach(sl=>{
+    sl.addEventListener('input', ()=>{
+      clearPresetHighlight();
+      let id='fan'+sl.dataset.idx;
+      let v=sl.value;
+      let cur=document.getElementById(id+'-cur'); if(cur) cur.textContent=v;
+      let tgt=document.getElementById(id+'-tgt'); if(tgt) tgt.textContent='→ 目标 '+v+'%';
+      clearTimeout(sl._t);
+      sl._t=setTimeout(()=>applyFan(sl.dataset.hwmon, parseInt(sl.dataset.idx), parseInt(sl.value)), 120);
+    });
+  });
+  document.querySelectorAll('.fan-custom-input').forEach(inp=>{
+    inp.addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); applyFanCustom(inp.dataset.hwmon, parseInt(inp.dataset.idx)); } });
+  });
+  if(!fanTimer){ fetchFanStatus(); fanTimer=setInterval(fetchFanStatus, 2000); }
+}
+
+// ===== 硬盘温度控制风扇（disk_temp）=====
+function renderDiskTempPanel(){
+  var fans=(typeof FAN_LIST!=='undefined'?FAN_LIST:[])||[];
+  var disks=(DATA&&DATA.disks)||[];
+  var fanOptsHtml='', diskOptsHtml='';
+  if(fans.length){
+    fanOptsHtml=fans.map(function(f){
+      var id='dt-fan-'+f.hwmon+'-'+f.idx;
+      var label=esc((f.label||f.name||('风扇'+f.idx))).replace(/</g,'&lt;');
+      var meta=(f.rpm||0)+' RPM';
+      return '<label class="dt-opt" for="'+id+'"><input type="checkbox" class="dt-fan" id="'+id+'" data-hwmon="'+f.hwmon+'" data-idx="'+f.idx+'"> <span class="dt-name">'+label+'</span><span class="dt-meta">'+meta+'</span></label>';
+    }).join('');
+  }else{
+    fanOptsHtml='<div class="dt-empty">未检测到可调控风扇</div>';
+  }
+  if(disks.length){
+    diskOptsHtml=disks.map(function(d){
+      var shortDev=(d.dev||'').replace(/^\/dev\//,'');
+      var id='dt-disk-'+shortDev;
+      var name=esc(shortDev);
+      var meta='';
+      if(d.model||d.vendor) meta=esc((d.vendor||'')+' '+(d.model||'')).trim();
+      return '<label class="dt-opt" for="'+id+'"><input type="checkbox" class="dt-disk" id="'+id+'" value="'+d.dev+'"> <span class="dt-name">'+name+'</span><span class="dt-meta" id="dt-temp-'+shortDev+'">'+(meta?meta:'')+'</span></label>';
+    }).join('');
+  }else{
+    diskOptsHtml='<div class="dt-empty">未检测到硬盘</div>';
+  }
+  return '<div class="card dt-panel" id="disk-temp-panel">'
+    +'<h3>硬盘温度控制风扇 <span class="badge b-info">新功能</span></h3>'
+    +'<label class="dt-toggle" style="margin-bottom:14px"><input type="checkbox" id="dt-enabled"> 启用硬盘温控</label>'
+    +'<div class="dt-section">'
+      +'<div class="dt-section-title">监控硬盘 <span class="count" id="dt-disk-count">0</span></div>'
+      +'<div class="dt-grid">'+diskOptsHtml+'</div>'
+    +'</div>'
+    +'<div class="dt-section">'
+      +'<div class="dt-section-title">受控风扇 <span class="count" id="dt-fan-count">0</span></div>'
+      +'<div class="dt-grid">'+fanOptsHtml+'</div>'
+    +'</div>'
+    +'<div class="dt-section">'
+      +'<div class="dt-section-title">温控曲线</div>'
+      +'<div class="dt-thresholds">'
+        +'<div class="dt-field"><label>开转温度</label><input type="number" id="dt-start" min="20" max="80" value="40"><span class="unit">°C</span></div>'
+        +'<div class="dt-field"><label>全速温度</label><input type="number" id="dt-full" min="30" max="90" value="60"><span class="unit">°C</span></div>'
+        +'<div class="dt-field"><label>开转占空比</label><input type="number" id="dt-min" min="0" max="100" value="30"><span class="unit">%</span></div>'
+        +'<div class="dt-field"><label>全速占空比</label><input type="number" id="dt-max" min="0" max="100" value="100"><span class="unit">%</span></div>'
+        +'<div class="dt-field"><label>恢复自动温度</label><input type="number" id="dt-recover" min="20" max="80" value="35"><span class="unit">°C</span></div>'
+      +'</div>'
+    +'</div>'
+    +'<div class="dt-section">'
+      +'<div class="dt-options">'
+        +'<label class="dt-toggle"><input type="checkbox" id="dt-sleep" checked> 监控盘全部休眠时停转风扇</label>'
+      +'</div>'
+    +'</div>'
+    +'<div class="dt-actions">'
+      +'<button class="btn-mini" id="dt-save" onclick="saveDiskTempConfig()">保存配置</button>'
+      +'<span class="dt-live">当前计算目标占空比：<b id="dt-live-pwm">—</b></span>'
+      +'<span class="dt-save-state" id="dt-save-state"></span>'
+    +'</div>'
+  +'</div>';
+}
+function updateDiskTempCounts(){
+  var dc=document.querySelectorAll('.dt-disk:checked').length;
+  var fc=document.querySelectorAll('.dt-fan:checked').length;
+  var dce=document.getElementById('dt-disk-count'); if(dce) dce.textContent=dc;
+  var fce=document.getElementById('dt-fan-count'); if(fce) fce.textContent=fc;
+}
+var dtTimer=null;
+async function initDiskTemp(){
+  try{
+    var r=await fetch('/api/fan/disk_temp?_='+Date.now());
+    var j=await r.json();
+    var c=j.config||{};
+    var en=document.getElementById('dt-enabled'); if(en) en.checked=!!c.enabled;
+    var st=document.getElementById('dt-start'); if(st) st.value=(c.start_temp!=null?c.start_temp:40);
+    var fu=document.getElementById('dt-full'); if(fu) fu.value=(c.full_temp!=null?c.full_temp:60);
+    var mn=document.getElementById('dt-min'); if(mn) mn.value=(c.min_pwm!=null?c.min_pwm:30);
+    var mx=document.getElementById('dt-max'); if(mx) mx.value=(c.max_pwm!=null?c.max_pwm:100);
+    var rc=document.getElementById('dt-recover'); if(rc) rc.value=(c.recover_temp!=null?c.recover_temp:35);
+    var sl=document.getElementById('dt-sleep'); if(sl) sl.checked=(c.sleep_stop!==false);
+    (c.disks||[]).forEach(function(dev){
+      var shortDev=String(dev).replace(/^\/dev\//,'');
+      var cbs=document.querySelectorAll('.dt-disk');
+      for(var i=0;i<cbs.length;i++){ if(cbs[i].value===shortDev){ cbs[i].checked=true; break; } }
+    });
+    var cf=c.controlled_fans||'all';
+    var fanCbs=document.querySelectorAll('.dt-fan');
+    if(cf==='all' && fanCbs.length){ fanCbs.forEach(function(cb){cb.checked=true;}); }
+    else if(Array.isArray(cf)){
+      fanCbs.forEach(function(cb){
+        var h=cb.dataset.hwmon, idx=parseInt(cb.dataset.idx);
+        cf.forEach(function(pair){ if(pair && pair[0]===h && pair[1]===idx){ cb.checked=true; } });
+      });
+    }
+    var panel=document.getElementById('disk-temp-panel');
+    if(panel){
+      panel.addEventListener('change', function(e){
+        if(e.target && (e.target.classList.contains('dt-disk') || e.target.classList.contains('dt-fan'))) updateDiskTempCounts();
+      });
+    }
+    updateDiskTempCounts();
+    refreshDiskTempPanel();
+    if(dtTimer) clearInterval(dtTimer);
+    dtTimer=setInterval(refreshDiskTempPanel,5000);
+  }catch(e){}
+}
+async function refreshDiskTempPanel(){
+  var panel=document.getElementById('disk-temp-panel');
+  if(!panel) return;
+  try{
+    var r=await fetch('/api/fan/disk_temp?_='+Date.now());
+    var j=await r.json();
+    (j.disks||[]).forEach(function(d){
+      var shortDev=(d.dev||'').replace(/^\/dev\//,'');
+      var el=document.getElementById('dt-temp-'+shortDev);
+      if(el){
+        if(d.asleep) el.textContent='休眠';
+        else if(d.temp!=null) el.textContent=d.temp+'°C';
+        else el.textContent='N/A';
+      }
+    });
+    var live=document.getElementById('dt-live-pwm');
+    if(live){ live.textContent=(j.computed_pwm!=null?j.computed_pwm+'%':'—'); }
+  }catch(e){}
+}
+async function saveDiskTempConfig(){
+  var st=document.getElementById('dt-save-state');
+  var en=document.getElementById('dt-enabled'); var enabled=en?en.checked:false;
+  var devs=[].slice.call(document.querySelectorAll('.dt-disk:checked')).map(function(cb){return cb.value;});
+  var fanCbs=[].slice.call(document.querySelectorAll('.dt-fan:checked'));
+  var allFans=[].slice.call(document.querySelectorAll('.dt-fan'));
+  var controlled_fans='all';
+  if(fanCbs.length && fanCbs.length<allFans.length){
+    controlled_fans=fanCbs.map(function(cb){return [cb.dataset.hwmon, parseInt(cb.dataset.idx)];});
+  }
+  var start=parseFloat(document.getElementById('dt-start').value);
+  var full=parseFloat(document.getElementById('dt-full').value);
+  var minp=parseFloat(document.getElementById('dt-min').value);
+  var maxp=parseFloat(document.getElementById('dt-max').value);
+  var rec=parseFloat(document.getElementById('dt-recover').value);
+  var sl=document.getElementById('dt-sleep'); var sleep=sl?sl.checked:true;
+  if(!devs.length){ if(st){ st.textContent='请至少勾选一个硬盘'; st.className='dt-save-state'; } return; }
+  if(!(full>start)){ if(st){ st.textContent='全速温度须大于开转温度'; st.className='dt-save-state'; } return; }
+  if(!(rec<start)){ if(st){ st.textContent='恢复自动温度须小于开转温度'; st.className='dt-save-state'; } return; }
+  if(st){ st.textContent='保存中…'; st.className='dt-save-state'; }
+  try{
+    var body={enabled:enabled,disks:devs,start_temp:start,full_temp:full,min_pwm:minp,max_pwm:maxp,recover_temp:rec,sleep_stop:sleep,controlled_fans:controlled_fans};
+    var r=await fetch('/api/fan/disk_temp',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    var j=await r.json();
+    if(st){ st.textContent=j.ok?'已保存 ✓':'失败：'+(j.error||''); st.className=j.ok?'dt-save-state ok':'dt-save-state'; }
+    if(j.ok){ refreshDiskTempPanel(); }
+  }catch(e){ if(st){ st.textContent='请求失败'; st.className='dt-save-state'; } }
+}
+
+// ===== 主板/CPU 温度控制风扇（sys_temp）=====
+function renderSysTempPanel(){
+  var fans=(typeof FAN_LIST!=='undefined'?FAN_LIST:[])||[];
+  var fanOptsHtml='';
+  if(fans.length){
+    fanOptsHtml=fans.map(function(f){
+      var id='st-fan-'+f.hwmon+'-'+f.idx;
+      var label=esc((f.label||f.name||('风扇'+f.idx))).replace(/</g,'&lt;');
+      var meta=(f.rpm||0)+' RPM';
+      return '<label class="dt-opt" for="'+id+'"><input type="checkbox" class="st-fan" id="'+id+'" data-hwmon="'+f.hwmon+'" data-idx="'+f.idx+'"> <span class="dt-name">'+label+'</span><span class="dt-meta">'+meta+'</span></label>';
+    }).join('');
+  }else{
+    fanOptsHtml='<div class="dt-empty">未检测到可调控风扇</div>';
+  }
+  return '<div class="card dt-panel" id="sys-temp-panel">'
+    +'<h3>主板 / CPU 温度控制风扇 <span class="badge b-info">新功能</span></h3>'
+    +'<label class="dt-toggle" style="margin-bottom:14px"><input type="checkbox" id="st-enabled"> 启用主板/CPU 温控</label>'
+    +'<div class="dt-section">'
+      +'<div class="dt-section-title">温度来源</div>'
+      +'<div class="dt-options">'
+        +'<label class="dt-toggle"><input type="radio" name="st-source" value="cpu" checked> CPU 封装温度</label>'
+        +'<label class="dt-toggle"><input type="radio" name="st-source" value="mb"> 主板温度</label>'
+      +'</div>'
+    +'</div>'
+    +'<div class="dt-section">'
+      +'<div class="dt-section-title">受控风扇 <span class="count" id="st-fan-count">0</span></div>'
+      +'<div class="dt-grid">'+fanOptsHtml+'</div>'
+    +'</div>'
+    +'<div class="dt-section">'
+      +'<div class="dt-section-title">温控曲线</div>'
+      +'<div class="dt-thresholds">'
+        +'<div class="dt-field"><label>开转温度</label><input type="number" id="st-start" min="20" max="90" value="45"><span class="unit">°C</span></div>'
+        +'<div class="dt-field"><label>全速温度</label><input type="number" id="st-full" min="30" max="100" value="70"><span class="unit">°C</span></div>'
+        +'<div class="dt-field"><label>开转占空比</label><input type="number" id="st-min" min="0" max="100" value="30"><span class="unit">%</span></div>'
+        +'<div class="dt-field"><label>全速占空比</label><input type="number" id="st-max" min="0" max="100" value="100"><span class="unit">%</span></div>'
+        +'<div class="dt-field"><label>恢复自动温度</label><input type="number" id="st-recover" min="20" max="90" value="40"><span class="unit">°C</span></div>'
+      +'</div>'
+    +'</div>'
+    +'<div class="dt-actions">'
+      +'<button class="btn-mini" id="st-save" onclick="saveSysTempConfig()">保存配置</button>'
+      +'<span class="dt-live">当前<span id="st-src-label">CPU</span>温度：<b id="st-live-temp">—</b> · 计算目标占空比：<b id="st-live-pwm">—</b></span>'
+      +'<span class="dt-save-state" id="st-save-state"></span>'
+    +'</div>'
+  +'</div>';
+}
+function updateSysTempCounts(){
+  var fc=document.querySelectorAll('.st-fan:checked').length;
+  var fce=document.getElementById('st-fan-count'); if(fce) fce.textContent=fc;
+}
+var stTimer=null;
+async function initSysTemp(){
+  try{
+    var r=await fetch('/api/fan/sys_temp?_='+Date.now());
+    var j=await r.json();
+    var c=j.config||{};
+    var en=document.getElementById('st-enabled'); if(en) en.checked=!!c.enabled;
+    var cpuRb=document.querySelector('input[name="st-source"][value="cpu"]');
+    var mbRb=document.querySelector('input[name="st-source"][value="mb"]');
+    var src=c.source||'cpu';
+    if(cpuRb) cpuRb.checked=(src==='cpu');
+    if(mbRb) mbRb.checked=(src==='mb');
+    var lbl=document.getElementById('st-src-label'); if(lbl) lbl.textContent=(src==='mb'?'主板':'CPU');
+    var st=document.getElementById('st-start'); if(st) st.value=(c.start_temp!=null?c.start_temp:45);
+    var fu=document.getElementById('st-full'); if(fu) fu.value=(c.full_temp!=null?c.full_temp:70);
+    var mn=document.getElementById('st-min'); if(mn) mn.value=(c.min_pwm!=null?c.min_pwm:30);
+    var mx=document.getElementById('st-max'); if(mx) mx.value=(c.max_pwm!=null?c.max_pwm:100);
+    var rc=document.getElementById('st-recover'); if(rc) rc.value=(c.recover_temp!=null?c.recover_temp:40);
+    var cf=c.controlled_fans||'all';
+    var fanCbs=document.querySelectorAll('.st-fan');
+    if(cf==='all' && fanCbs.length){ fanCbs.forEach(function(cb){cb.checked=true;}); }
+    else if(Array.isArray(cf)){
+      fanCbs.forEach(function(cb){
+        var h=cb.dataset.hwmon, idx=parseInt(cb.dataset.idx);
+        cf.forEach(function(pair){ if(pair && pair[0]===h && pair[1]===idx){ cb.checked=true; } });
+      });
+    }
+    var panel=document.getElementById('sys-temp-panel');
+    if(panel){
+      panel.addEventListener('change', function(e){
+        if(e.target && e.target.classList.contains('st-fan')) updateSysTempCounts();
+        if(e.target && e.target.name==='st-source'){
+          var l=document.getElementById('st-src-label');
+          if(l) l.textContent=(e.target.value==='mb'?'主板':'CPU');
+        }
+      });
+    }
+    updateSysTempCounts();
+    refreshSysTempPanel();
+    if(stTimer) clearInterval(stTimer);
+    stTimer=setInterval(refreshSysTempPanel,5000);
+  }catch(e){}
+}
+async function refreshSysTempPanel(){
+  var panel=document.getElementById('sys-temp-panel');
+  if(!panel) return;
+  try{
+    var r=await fetch('/api/fan/sys_temp?_='+Date.now());
+    var j=await r.json();
+    var tEl=document.getElementById('st-live-temp');
+    if(tEl){ tEl.textContent=(j.source_temp!=null?j.source_temp+'°C':'N/A'); }
+    var live=document.getElementById('st-live-pwm');
+    if(live){ live.textContent=(j.computed_pwm!=null?j.computed_pwm+'%':'—'); }
+  }catch(e){}
+}
+async function saveSysTempConfig(){
+  var st=document.getElementById('st-save-state');
+  var en=document.getElementById('st-enabled'); var enabled=en?en.checked:false;
+  var srcRb=document.querySelector('input[name="st-source"]:checked'); var source=srcRb?srcRb.value:'cpu';
+  var fanCbs=[].slice.call(document.querySelectorAll('.st-fan:checked'));
+  var allFans=[].slice.call(document.querySelectorAll('.st-fan'));
+  var controlled_fans='all';
+  if(fanCbs.length && fanCbs.length<allFans.length){
+    controlled_fans=fanCbs.map(function(cb){return [cb.dataset.hwmon, parseInt(cb.dataset.idx)];});
+  }
+  var start=parseFloat(document.getElementById('st-start').value);
+  var full=parseFloat(document.getElementById('st-full').value);
+  var minp=parseFloat(document.getElementById('st-min').value);
+  var maxp=parseFloat(document.getElementById('st-max').value);
+  var rec=parseFloat(document.getElementById('st-recover').value);
+  if(!(full>start)){ if(st){ st.textContent='全速温度须大于开转温度'; st.className='dt-save-state'; } return; }
+  if(!(rec<start)){ if(st){ st.textContent='恢复自动温度须小于开转温度'; st.className='dt-save-state'; } return; }
+  if(st){ st.textContent='保存中…'; st.className='dt-save-state'; }
+  try{
+    var body={enabled:enabled,source:source,start_temp:start,full_temp:full,min_pwm:minp,max_pwm:maxp,recover_temp:rec,controlled_fans:controlled_fans};
+    var r=await fetch('/api/fan/sys_temp',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    var j=await r.json();
+    if(st){ st.textContent=j.ok?'已保存 ✓':'失败：'+(j.error||''); st.className=j.ok?'dt-save-state ok':'dt-save-state'; }
+    if(j.ok){ refreshSysTempPanel(); }
+  }catch(e){ if(st){ st.textContent='请求失败'; st.className='dt-save-state'; } }
+}
+
+function showBoardEdit(){ let b=document.getElementById('boardEditBox'); if(b) b.style.display='block'; }
+function hideBoardEdit(){ let b=document.getElementById('boardEditBox'); if(b) b.style.display='none'; }
+async function saveBoardModel(){
+  let inp=document.getElementById('boardModelInput'); if(!inp) return;
+  let model=inp.value.trim();
+  try{
+    let r=await fetch('/api/board/set',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:model})});
+    let j=await r.json();
+    if(j.ok){ hideBoardEdit(); loadData(); } else { alert('保存失败：'+(j.error||'')); }
+  }catch(e){ alert('请求失败'); }
+}
+async function clearBoardModel(){
+  try{
+    let r=await fetch('/api/board/set',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:''})});
+    let j=await r.json();
+    if(j.ok){ hideBoardEdit(); loadData(); } else { alert('清除失败：'+(j.error||'')); }
+  }catch(e){ alert('请求失败'); }
+}
+
+function renderStorage(st){
+  let raids = (st.raid_arrays||[]).map(a=>{
+    let ok = a.state==='active';
+    return `<tr><td>${a.name}</td><td><span class="badge ${ok?'b-ok':'b-bad'}">${a.level}</span></td><td>${a.state}</td><td>${a.size}</td><td>${(a.disks||[]).join(', ')}</td></tr>`;
+  }).join('');
+  let vols = (st.volumes||[]).map(v=>{
+    let pct = parseInt(v.pcent);
+    let col = pct>85?'var(--red)':pct>70?'var(--orange)':'var(--green)';
+    return `<tr><td>${v.mount}</td><td>${v.fstype}</td><td>${v.size}</td><td>${v.used} / ${v.avail}</td><td style="min-width:140px"><div class="progress"><div class="progress-fill" style="width:${pct}%;background:${col}">${pct}%</div></div></td></tr>`;
+  }).join('');
+  return `
+  <div class="section-title">RAID 阵列 (mdadm)</div>
+  <div class="card">
+    <table class="table"><thead><tr><th>阵列</th><th>级别</th><th>状态</th><th>容量</th><th>成员盘</th></tr></thead><tbody>${raids||'<tr><td colspan=5>无</td></tr>'}</tbody></table>
+  </div>
+  <div class="section-title">存储卷容量</div>
+  <div class="card">
+    <table class="table"><thead><tr><th>挂载点</th><th>文件系统</th><th>总容量</th><th>已用/可用</th><th>使用率</th></tr></thead><tbody>${vols||'<tr><td colspan=5>无</td></tr>'}</tbody></table>
+  </div>
+  <div class="section-title">存储拓扑 (lsblk)</div>
+  <div class="card"><pre>${(st.topology||'').replace(/</g,'&lt;')}</pre></div>`;
+}
+
+function renderDetect(D){
+  if(!D) return '';
+  let r = D.raid||{}, disks = D.disks||[], s = D.system||{}, st = D.storage||{}, dk = D.docker||{};
+  // 状态栏健康判定
+  let fans = (s.sensors&&s.sensors.fans)||[];
+  let fanOk = fans.length>0 && fans.every(f=>!(f.stopped||f.rpm<1));
+  let fanStr = fans.length===0 ? 'N/A' : (fanOk?'正常':'异常');
+  let raidOk = r.mode==='mega'||r.mode==='hba';
+  let raidStr = r.mode==='mega' ? '正常' : r.mode==='hba' ? '正常' : (r.mode==='mega_error'?'读取失败':'未配置');
+  let sasDisks = disks.filter(d=>(d.type||'').toUpperCase()==='SAS');
+  let sataDisks = disks.filter(d=>{let t=(d.type||'').toUpperCase(); return t==='SATA'||t==='ATA';});
+  let sasHealthy = sasDisks.filter(d=>d.health_ok).length;
+  let sataHealthy = sataDisks.filter(d=>d.health_ok).length;
+  let dockerStr = (dk.running||0)+' 运行中';
+  let statusBar = `
+  <div class="statusbar">
+    <div class="status-left"><span class="status-dot"></span><span>系统运行正常 · 最近检测 ${D.time||''}</span></div>
+    <div class="status-right">
+      <div class="status-item"><span class="k">散热风扇</span><span class="v" style="color:${fanOk?'var(--green)':'var(--red)'}">${fanStr}</span></div>
+      <div class="status-item"><span class="k">阵列卡</span><span class="v" style="color:${raidOk?'var(--green)':'var(--yellow)'}">${raidStr}</span></div>
+      ${sasDisks.length?`<div class="status-item"><span class="k">SAS硬盘</span><span class="v" style="color:${sasHealthy===sasDisks.length?'var(--green)':'var(--orange)'}">${sasHealthy+'/'+sasDisks.length} 健康</span></div>`:''}
+      ${sataDisks.length?`<div class="status-item"><span class="k">SATA硬盘</span><span class="v" style="color:${sataHealthy===sataDisks.length?'var(--green)':'var(--orange)'}">${sataHealthy+'/'+sataDisks.length} 健康</span></div>`:''}
+      <div class="status-item"><span class="k">Docker</span><span class="v" style="color:var(--blue)">${dockerStr}</span></div>
+    </div>
+  </div>`;
+  // 系统配置
+  let cpuPct = s.cpu_threads ? Math.min(Math.round(parseFloat((s.load&&s.load[0])||0)/s.cpu_threads*100),100) : 0;
+  let memMods = (s.memory_modules && s.memory_modules.modules) || [];
+  let memModRows = memMods.length ? memMods.map(m=>{
+    let stBadge = m.installed ? '<span class="badge b-ok">已用</span>' : '<span class="badge b-warn">空</span>';
+    return `<tr style="${m.installed?'':'opacity:.45'}">
+      <td>${m.locator||'-'}</td>
+      <td>${stBadge}</td>
+      <td>${m.brand||m.manufacturer||'-'}</td>
+      <td>${m.dram_manufacturer?('颗粒: '+m.dram_manufacturer):'-'}</td>
+      <td>${m.part||'-'}</td>
+      <td>${m.size||'-'}</td>
+      <td>${m.speed||'-'}</td>
+    </tr>`;
+  }).join('') : '<tr><td colspan=7>无 / 未安装 i2c-tools 或 dmidecode</td></tr>';
+  let mm = s.memory_modules;
+  let memSummary = mm ? (`插槽 ${mm.installed}/${mm.slots}` + (mm.brand_summary && mm.brand_summary!=='未知' ? ` · ${mm.brand_summary}` : '') + (mm.empty>0 ? ` · ${mm.empty} 空槽` : '')) : '';
+  let memCard = `
+  <div class="card" style="grid-column:1/-1">
+    <h3>内存</h3>
+    <div class="kv"><span class="k">总量</span><span class="v">${(s.memory&&s.memory.total)||'-'}</span></div>
+    <div class="kv"><span class="k">已用</span><span class="v">${(s.memory&&s.memory.used)||'-'}</span></div>
+    <div class="kv"><span class="k">占用率</span><span class="v" style="color:${s.memory&&s.memory.percent>70?'var(--orange)':'var(--green)'}">${(s.memory&&s.memory.percent)||0}%</span></div>
+    <div class="kv"><span class="k">内存插槽</span><span class="v">${memSummary||'-'}</span></div>
+    <div style="margin-top:8px;font-size:12px;color:var(--muted)">插槽含空槽；品牌取自 SPD 直读</div>
+    <div style="overflow-x:auto"><table class="table" style="font-size:12px"><thead><tr><th>插槽</th><th>状态</th><th>模组厂</th><th>颗粒厂</th><th>型号</th><th>容量</th><th>频率</th></tr></thead><tbody>${memModRows}</tbody></table></div>
+  </div>`;
+  let bm = (s.board && s.board.manufacturer) || "";
+  let boardOverride = s.board && s.board.override;
+  let boardHasDMI = bm && bm.toLowerCase() !== "default string" && bm.toLowerCase() !== "to be filled by o.e.m.";
+  let boardEdit = `
+    <span class="edit-pencil" title="标注/修改主板型号" onclick="showBoardEdit()">✎</span>`;
+  let boardCard = `
+  <div class="card">
+    <h3>主板 ${boardEdit}</h3>
+    ${boardHasDMI || boardOverride ? `
+    ${boardOverride ? '<div style="margin-bottom:6px"><span class="badge b-info">手动标注</span></div>' : ''}
+    <div class="kv"><span class="k">品牌</span><span class="v">${(s.board&&s.board.manufacturer)||'-'}</span></div>
+    <div class="kv"><span class="k">型号</span><span class="v">${(s.board&&s.board.product)||'-'}</span></div>
+    <div class="kv"><span class="k">版本</span><span class="v">${(s.board&&s.board.version)||'-'}</span></div>
+    <div class="kv"><span class="k">BIOS</span><span class="v">${(s.board&&s.board.bios_vendor)||'-'} ${(s.board&&s.board.bios_version)||''} (${(s.board&&s.board.bios_date)||''})</span></div>
+    <div class="kv"><span class="k">芯片组</span><span class="v">${(s.board&&s.board.chipset)||'未知'}</span></div>
+    ` : `
+    <div class="kv"><span class="k">芯片组</span><span class="v">${(s.board&&s.board.chipset)||'未知'}</span></div>
+    <div class="kv"><span class="k">说明</span><span class="v" style="font-size:12px;color:var(--orange)">${(s.board&&s.board.note)||'BIOS 未写入主板信息'}</span></div>
+    `}
+    <div id="boardEditBox" style="display:none;margin-top:10px">
+      <input id="boardModelInput" class="inp" placeholder="如 豆希 WB360" value="${(s.board&&s.board.product)||''}" style="width:100%;margin-bottom:6px">
+      <div style="display:flex;gap:8px">
+        <button class="btn-mini b-ok" onclick="saveBoardModel()">保存</button>
+        <button class="btn-mini" onclick="hideBoardEdit()">取消</button>
+        ${boardOverride ? '<button class="btn-mini b-bad" onclick="clearBoardModel()">清除标注</button>' : ''}
+      </div>
+    </div>
+  </div>`;
+  let sysInfoCard = `
+  <div class="card">
+    <h3>系统信息</h3>
+    <div class="kv"><span class="k">主机名</span><span class="v">${s.hostname||'-'}</span></div>
+    <div class="kv"><span class="k">系统</span><span class="v">${s.os||'-'}</span></div>
+    <div class="kv"><span class="k">内核</span><span class="v">${s.kernel||'-'}</span></div>
+    <div class="kv"><span class="k">运行时间</span><span class="v">${s.uptime||'-'}</span></div>
+  </div>`;
+  let netCard = `
+  <div class="card">
+    <h3>网络</h3>
+    ${(s.nics||[]).map(n=>{let sc=n.state==='up'?'var(--green)':'var(--red)';let sp=n.speed?n.speed+' Mbps':'N/A';return `<div class="kv"><span class="k">${n.name}</span><span class="v">${n.ip||'无IP'} · ${sp} · <span style="color:${sc}">${n.state}</span></span></div>`;}).join('')||'<div class="loading">未检测到</div>'}
+  </div>`;
+  let sysConfig = `
+  <div class="detect-cards">
+    <div class="card">
+      <h3>处理器</h3>
+      <div class="kv"><span class="k">型号</span><span class="v">${s.cpu_model||'-'}</span></div>
+      <div class="kv"><span class="k">核心/线程</span><span class="v">${s.cpu_cores||0}核 / ${s.cpu_threads||0}线程</span></div>
+      <div class="kv"><span class="k">CPU 温度</span><span class="v" style="color:${tempColor(s.cpu_temp,100)}">${s.cpu_temp!=null?s.cpu_temp+'°C':'N/A'}</span></div>
+      <div class="kv"><span class="k">负载占用</span><span class="v">${cpuPct}%</span></div>
+      ${(s.gpus&&s.gpus.length)?s.gpus.map(g=>`<div class="kv"><span class="k">显卡</span><span class="v">${g}</span></div>`).join(''):''}
+    </div>
+    ${boardCard}
+    ${memCard}
+    ${netCard}
+    ${sysInfoCard}
+  </div>`;
+  // 阵列卡 & 磁盘
+  let raidCard;
+  if(r.mode==='mega'){
+    raidCard = `
+    <div class="card">
+      <h3>RAID 控制器</h3>
+      <div class="kv"><span class="k">型号</span><span class="v">${r.model}</span></div>
+      <div class="kv"><span class="k">模式</span><span class="v"><span class="badge b-info">MegaRAID (IR)</span></span></div>
+      <div class="kv"><span class="k">状态</span><span class="v" style="color:var(--green)">✓ 正常</span></div>
+      <div class="kv"><span class="k">芯片温度</span><span class="v" style="color:${tempColor(r.controller_temp,85)}">${r.controller_temp!=null?r.controller_temp+'°C':'N/A'}</span></div>
+      <div class="kv"><span class="k">物理盘</span><span class="v">${r.drives?r.drives.length:0} 块</span></div>
+      <div class="kv"><span class="k">固件</span><span class="v">${r.fw_package||'-'}</span></div>
+    </div>`;
+  } else if(r.mode==='hba'){
+    raidCard = `
+    <div class="card">
+      <h3>控制器 (HBA 直通)</h3>
+      <div class="kv"><span class="k">型号</span><span class="v">${r.model}</span></div>
+      <div class="kv"><span class="k">模式</span><span class="v"><span class="badge b-info">IT 直通</span></span></div>
+      <div class="kv"><span class="k">状态</span><span class="v" style="color:var(--green)">✓ 正常工作</span></div>
+      <div class="kv"><span class="k">温度</span><span class="v" style="color:var(--muted)">卡无传感器 · 见「硬盘 SMART」</span></div>
+    </div>`;
+  } else {
+    raidCard = `<div class="card"><h3>阵列卡</h3><div class="loading">${r.note||'未检测到阵列卡'}</div></div>`;
+  }
+  let diskItem = d => {
+    let t = (d.type||'').toUpperCase();
+    let isSas = t==='SAS';
+    let typeBadge = `<span class="badge ${isSas?'b-sas':'b-sata'}">${isSas?'SAS':'SATA'}</span>`;
+    return `<div class="disk-mini">
+      <span>${typeBadge} ${d.dev} · ${d.brand?d.brand+' ':''}${d.vendor?d.vendor+' ':''}${d.model}${d.feature?` <span class="badge b-info">${d.feature}</span>`:''}</span>
+      <span><span style="color:${tempColor(d.temp,d.temp_trip||60)};font-weight:600">${d.temp!=null?d.temp+'°C':'N/A'}</span> · <span class="badge ${d.health_ok?'b-ok':'b-bad'}">${d.health}</span></span>
+    </div>`;
+  };
+  // 复用上方状态栏已声明的 sasDisks/sataDisks（同 filter 逻辑），避免 let 重复声明致 JS 解析崩溃
+  sasDisks = disks.filter(d=>(d.type||'').toUpperCase()==='SAS');
+  sataDisks = disks.filter(d=>{let t=(d.type||'').toUpperCase(); return t==='SATA'||t==='ATA';});
+  let otherDisks = disks.filter(d=>{let t=(d.type||'').toUpperCase(); return t!=='SAS'&&t!=='SATA'&&t!=='ATA';});
+  let diskMini = '';
+  if(sasDisks.length) diskMini += `<div class="disk-group-title">SAS 硬盘 (${sasDisks.length})</div>` + sasDisks.map(diskItem).join('');
+  if(sataDisks.length) diskMini += `<div class="disk-group-title">SATA 硬盘 (${sataDisks.length})</div>` + sataDisks.map(diskItem).join('');
+  if(otherDisks.length) diskMini += `<div class="disk-group-title">其他硬盘 (${otherDisks.length})</div>` + otherDisks.map(diskItem).join('');
+  if(!disks.length) diskMini = '<div class="loading">未检测到硬盘</div>';
+  let raidDisk = `
+  <div class="detect-cards">
+    ${raidCard}
+    <div class="card">
+      <h3>磁盘健康 (SMART)</h3>
+      ${diskMini}
+    </div>
+  </div>`;
+  // 存储卷、Docker 容器列表均已移至左侧独立标签页，硬件配置检测仅保留概览状态栏
+  return `
+  <div class="detect-title">硬件配置检测</div>
+  <div class="detect-sub">实时监测设备健康状态与硬件详情 · {{ APP_VERSION }}</div>
+  ${statusBar}
+  <div class="detect-title" style="font-size:16px;margin-bottom:10px">系统配置</div>
+  ${sysConfig}
+  <div class="detect-title" style="font-size:16px;margin:18px 0 10px">阵列卡 &amp; 磁盘</div>
+  ${raidDisk}
+  `;
+}
+
+function renderDocker(dk){
+  if(!dk) dk={};
+  let head = `
+  <div class="grid-2">
+    <div class="card">
+      <h3>容器概览</h3>
+      <div class="kv"><span class="k">运行中</span><span class="v" style="color:var(--green)">${dk.running||0}</span></div>
+      <div class="kv"><span class="k">总数</span><span class="v">${dk.total||0}</span></div>
+      <div class="kv"><span class="k">状态</span><span class="v" style="color:${dk.ok?'var(--green)':'var(--red)'}">${dk.ok?'正常':'读取失败'}</span></div>
+    </div>
+    <div class="card">
+      <h3>说明</h3>
+      <div style="font-size:13px;color:var(--muted);line-height:1.7">列出所有容器及其运行状态、占用内存与端口映射。内存仅对运行中容器有效；停止的容器显示 N/A。</div>
+    </div>
+  </div>`;
+  let rows = (dk.containers&&dk.containers.length) ? dk.containers.map(c=>{
+    let badge = c.running?'b-ok':'b-warn';
+    let stateTxt = c.running?'运行':'停止';
+    let mem = c.mem||'N/A';
+    let ports = c.ports||'-';
+    return `<tr>
+      <td><span class="badge ${badge}">${stateTxt}</span></td>
+      <td><b>${c.name}</b><br><span style="font-size:12px;color:var(--muted)">${c.image}</span></td>
+      <td style="white-space:nowrap">${mem}</td>
+      <td style="font-size:12px">${ports}</td>
+      <td style="font-size:12px;color:var(--muted)">${c.runtime}</td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="5" class="loading">未检测到 Docker / 无容器</td></tr>';
+  let table = `
+  <div class="section-title" style="margin-top:14px">容器列表</div>
+  <div class="card">
+    <table class="table"><thead><tr><th>状态</th><th>名称 / 镜像</th><th>内存占用</th><th>端口映射</th><th>运行时长</th></tr></thead><tbody>${rows}</tbody></table>
+  </div>`;
+  return head + table;
+}
+
+function renderAll(){
+  if(!DATA) return;
+  if(DATA.error){
+    document.querySelectorAll('.panel').forEach(p=>p.innerHTML='<div class="card"><div class="loading" style="color:var(--red)">加载失败: '+DATA.error+'</div></div>');
+    return;
+  }
+  document.getElementById('detect').innerHTML = renderDetect(DATA);
+  document.getElementById('raid').innerHTML = renderRaid(DATA.raid, DATA.disks);
+  document.getElementById('disks').innerHTML = renderDisks(DATA.disks);
+  document.getElementById('system').innerHTML = renderSystem(DATA.system);
+  let _fa=document.activeElement;
+  let _fanBusy = _fa && (_fa.classList.contains('fan-slider') || _fa.classList.contains('fan-custom-input'));
+  if(!_fanBusy){
+    document.getElementById('fan').innerHTML = renderFanControl();
+    bindFanSliders();
+  }
+  // 正在拖动滑块/编辑自定义占空比时跳过风扇页整页重建，避免打断操作；转速数值由 fetchFanStatus 每2秒刷新
+  document.getElementById('storage').innerHTML = renderStorage(DATA.storage);
+  document.getElementById('docker').innerHTML = renderDocker(DATA.docker);
+  document.getElementById('lastUpdate').textContent = '更新于 '+DATA.time+' ('+DATA.elapsed+'s)';
+  initDiskTemp();
+  initSysTemp();
+}
+
+async function loadData(){
+  document.getElementById('spin').style.display='inline-block';
+  try{
+    let r = await fetch('/api/all?_='+Date.now());
+    DATA = await r.json();
+    renderAll();
+  }catch(e){
+    document.getElementById('lastUpdate').textContent = '加载失败: '+e;
+  }
+  document.getElementById('spin').style.display='none';
+}
+
+var ar = document.getElementById('autoRefresh');
+ar.addEventListener('change', function(){
+  if(this.checked){ timer=setInterval(loadData, 30000); }
+  else if(timer){ clearInterval(timer); timer=null; }
+  try{ localStorage.setItem('nasdash_autorefresh', this.checked ? '1':'0'); }catch(e){}
+});
+try{
+  if(localStorage.getItem('nasdash_autorefresh') === '1'){
+    ar.checked = true;
+    timer = setInterval(loadData, 30000);
+  }
+}catch(e){}
+
+loadData();
+
+// ---------- 检测新版本 ----------
+let updateDismissed = false;
+async function checkUpdate(force){
+  const banner = document.getElementById('updateBanner');
+  if(!force && updateDismissed) return;
+  if(force){
+    const btn = document.getElementById('checkUpdateBtn');
+    if(btn){ btn.disabled = true; btn.textContent = '🔔 检查中…'; }
+  }
+  try{
+    const r = await fetch('/api/version' + (force ? '?force=1' : ''));
+    const d = await r.json();
+    const link = document.getElementById('updateLink');
+    if(d.update_available && d.latest){
+      document.getElementById('updateText').innerHTML = '发现新版本 <b>'+d.latest+'</b>（当前 '+d.current+'）';
+      link.href = d.url || 'https://github.com/han951meng/nasdash/releases';
+      link.style.display = '';
+      banner.classList.add('show');
+    } else {
+      banner.classList.remove('show');
+      link.style.display = 'none';
+      if(force){
+        if(d.error){
+          document.getElementById('updateText').textContent = '检查更新失败：' + d.error;
+        } else {
+          document.getElementById('updateText').textContent = '已是最新版本（'+d.current+'）';
+        }
+        banner.classList.add('show');
+        if(!d.error){ setTimeout(()=>banner.classList.remove('show'), 3500); }
+      }
+    }
+  }catch(e){
+    if(force){
+      document.getElementById('updateText').textContent = '检查更新出错：' + e;
+      banner.classList.add('show');
+    }
+  }finally{
+    if(force){
+      const btn = document.getElementById('checkUpdateBtn');
+      if(btn){ btn.disabled = false; btn.textContent = '🔔 检查更新'; }
+    }
+  }
+}
+function dismissUpdate(){ document.getElementById('updateBanner').classList.remove('show'); updateDismissed = true; }
+
+checkUpdate(false);
+</script>
+</body>
+</html>
