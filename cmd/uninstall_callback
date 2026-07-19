@@ -1,20 +1,36 @@
 #!/bin/bash
-# 卸载后回调：镜像用户配置到持久目录双保险 + 清理进程
-# 注意：自 v1.7.12 起，风扇/主板标注等用户配置由 app.py 直接写入 TRIM_PKGVAR（@appdata，
-# 卸载后保留），已天然重装不丢。此处仅再镜像一份到 config_backup 目录双保险。
+# 卸载后回调：按用户在向导中的选择，保留或彻底清除配置数据
 : "${TRIM_PKGVAR:=/usr/local/apps/@appdata/com.dashboard.nasdash}"
-mkdir -p "$TRIM_PKGVAR/config_backup"
-for f in fan_disk_temp.json fan_sys_temp.json fan_labels.json board_override.txt; do
-    if [ -f "$TRIM_PKGVAR/$f" ]; then
-        cp -f "$TRIM_PKGVAR/$f" "$TRIM_PKGVAR/config_backup/$f"
-        echo "[nasdash] 已镜像用户配置 $f" >> "${TRIM_TEMP_LOGFILE}"
-    fi
-done
 
+# 安全护栏：仅当路径确为本应用的 @appdata 目录时才允许删除，
+# 防止 TRIM_PKGVAR 变量异常（为空或指向系统目录）时误删重要数据
+case "$TRIM_PKGVAR" in
+    */com.dashboard.nasdash) : ;;
+    *) echo "[nasdash] 安全拦截：TRIM_PKGVAR 路径异常 ($TRIM_PKGVAR)，跳过删除" >> "${TRIM_TEMP_LOGFILE}"; exit 0 ;;
+esac
+
+wizard_delete_data="${wizard_delete_data:-no}"
+
+# 清理运行中的进程（无论保留还是删除都需执行）
 PID_FILE="${TRIM_PKGVAR}/app.pid"
 if [ -f "$PID_FILE" ]; then
     pid=$(cat "$PID_FILE" | tr -d '[:space:]')
     [ -n "$pid" ] && kill "$pid" 2>/dev/null
     rm -f "$PID_FILE"
+fi
+
+if [ "$wizard_delete_data" = "yes" ]; then
+    # 用户选择删除：彻底清除整个 @appdata 目录，零残留
+    rm -rf "$TRIM_PKGVAR"
+    echo "[nasdash] 已按用户选择彻底清除全部配置数据" >> "${TRIM_TEMP_LOGFILE}"
+else
+    # 用户选择保留：镜像用户配置到 config_backup 双保险（飞牛默认保留 var，此处再备一份）
+    mkdir -p "$TRIM_PKGVAR/config_backup"
+    for f in fan_disk_temp.json fan_sys_temp.json fan_labels.json board_override.txt; do
+        if [ -f "$TRIM_PKGVAR/$f" ]; then
+            cp -f "$TRIM_PKGVAR/$f" "$TRIM_PKGVAR/config_backup/$f"
+            echo "[nasdash] 已镜像用户配置 $f" >> "${TRIM_TEMP_LOGFILE}"
+        fi
+    done
 fi
 exit 0

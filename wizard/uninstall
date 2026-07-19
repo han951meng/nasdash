@@ -1,0 +1,33 @@
+[
+    {
+        "stepTitle": "卸载 NAS硬件监控面板",
+        "items": [
+            {
+                "type": "tips",
+                "helpText": "<p>卸载后应用将从飞牛桌面移除。下方可选择是否同时删除本应用产生的全部用户配置数据。</p><p>配置数据包含：风扇自定义标注、主板型号标注、硬盘/系统温控曲线等。这些数据保存在 NAS 的 @appdata 持久目录中。</p>"
+            },
+            {
+                "type": "radio",
+                "field": "wizard_delete_data",
+                "label": "是否删除应用配置数据？",
+                "initValue": "no",
+                "options": [
+                    {
+                        "label": "否，保留我的配置（重装后可恢复）",
+                        "value": "no"
+                    },
+                    {
+                        "label": "是，删除全部配置数据（不可恢复）",
+                        "value": "yes"
+                    }
+                ],
+                "rules": [
+                    {
+                        "required": true,
+                        "message": "请选择是否删除应用配置数据"
+                    }
+                ]
+            }
+        ]
+    }
+]
