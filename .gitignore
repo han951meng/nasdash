@@ -20,3 +20,5 @@ nasdash.fpk
 # 论坛发帖草稿等杂物（非源码）
 forum_post_*
 forum_reply_*
+
+sample_report.html

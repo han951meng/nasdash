@@ -4,7 +4,7 @@
         "items": [
             {
                 "type": "tips",
-                "helpText": "<p><b>NAS硬件监控面板（nasdash）</b></p><p>安装后将在飞牛桌面生成图标，点击即可打开监控面板；也可浏览器直接访问 NAS_IP:9800。</p><p>自动检测阵列卡类型：MegaRAID 卡显示型号 / 固件 / 物理盘 / 芯片温度（ROC Temperature）；HBA 直通卡（IT 模式）内联显示每块盘温度；纯 SATA 主板给出提示。</p><p>四个标签页：阵列卡 / 硬盘 SMART / 系统资源 / 存储卷。</p><p>依赖说明：smartmontools、lm-sensors、mdadm、Flask 安装时自动安装；LSI MegaRAID 卡需另装 storcli，HBA 直通卡与纯 SATA 主板无需 storcli。</p>"
+                "helpText": "<p><b>NAS 硬件监控面板（nasdash）</b></p><p>安装后将在飞牛桌面生成图标，点击即可打开监控面板；也可在浏览器直接访问 <b>NAS_IP:9800</b>（需先登录飞牛账号）。</p><p><b>主要功能</b></p><ul><li><b>硬件配置检测</b>：单页仪表盘（CPU / 显卡 / 主板 / 内存条品牌 / 网络 / 阵列卡与磁盘概览）</li><li><b>阵列卡</b>：自动识别 MegaRAID / HBA 直通 / 纯 SATA，显示型号、温度与物理盘</li><li><b>硬盘 SMART</b>：每块盘健康、温度、转速、品牌、容量</li><li><b>系统资源</b>：负载、内存、温度、风扇转速、电压、磁盘 I/O</li><li><b>风扇控制</b>：预设档调速 + 自定义「温度→PWM」曲线（静音 / 均衡 / 性能预设）</li><li><b>存储卷 / Docker</b>：RAID 状态、挂载点、容器资源与端口</li><li><b>历史趋势</b>：磁盘 I/O 折线图（24h / 7d / 30d）</li><li><b>控制与自动化</b>：温度 / 健康告警 + 一键健康报告导出</li></ul><p><b>依赖说明</b></p><p>安装时自动安装：smartmontools、lm-sensors、mdadm、Flask、dmidecode、i2c-tools。<br><b>storcli 已随包内置</b>：MegaRAID / HBA 卡用户无需手动下载，安装即落地到 /opt/MegaRAID/storcli。</p><p><b>访问提示</b></p><p>面板经飞牛统一网关暴露，需先登录飞牛账号；若从外部网络访问，请通过飞牛的远程访问 / 反向代理，不要直接暴露 9800 端口。</p>"
             }
         ]
     }

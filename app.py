@@ -6,7 +6,7 @@
 部署目录: /opt/fnos-dash/
 """
 import subprocess, json, re, os, time, socket, platform, shutil, sys, glob, functools, urllib.request, urllib.error
-from flask import Flask, jsonify, render_template, render_template_string, request
+from flask import Flask, jsonify, render_template, render_template_string, request, make_response, Response, stream_with_context
 from functools import wraps
 
 app = Flask(__name__)
@@ -280,6 +280,24 @@ def _apply_temp_curve(cfg, data, recover_max=100):
             cfg["controlled_fans"] = norm
         else:
             return jsonify({"ok": False, "error": "controlled_fans 需为 'all' 或 [[hwmon,idx],...]"}), 400
+    if "curve" in data:
+        # 自定义温度→PWM 曲线：[[温度, 占空比], ...]，至少 2 点；缺失时回退 start/full 线性
+        curve = data["curve"]
+        if not isinstance(curve, list):
+            return jsonify({"ok": False, "error": "curve 需为数组"}), 400
+        norm = []
+        for p in curve:
+            if not (isinstance(p, (list, tuple)) and len(p) == 2):
+                return jsonify({"ok": False, "error": "curve 每项需为 [温度, 占空比]"}), 400
+            try:
+                t = float(p[0]); pw = float(p[1])
+            except (TypeError, ValueError):
+                return jsonify({"ok": False, "error": "curve 温度/占空比需为数字"}), 400
+            if pw < 0 or pw > 100:
+                return jsonify({"ok": False, "error": "curve 占空比需在 0~100"}), 400
+            norm.append([t, pw])
+        norm.sort(key=lambda x: x[0])
+        cfg["curve"] = norm
     st, ft, rt = cfg.get("start_temp"), cfg.get("full_temp"), cfg.get("recover_temp")
     if ft is not None and st is not None and ft <= st:
         return jsonify({"ok": False, "error": "full_temp 必须大于 start_temp"}), 400
@@ -333,11 +351,95 @@ def _fan_write_raw(hwmon, idx, raw):
         return False
 
 def _fan_ext_service_running():
-    # 检测系统风扇服务（FanControlServer）是否在跑（恢复自动时优先交还）。
-    # 注意：pgrep -f 会把「模式串出现在自身命令行」也匹配上 → 永远返回 True（假阳性），
-    # 导致没装 FCS 的机器也误判为已安装、把风扇错误交还给主板原生自动（SYS_FAN2 等口曲线偏激进会狂转）。
-    # 用 [f]an... 括号技巧避免自匹配。
-    return bool(run_cmd(["pgrep", "-f", "[f]ancontrolserver"], 2).strip())
+    # 检测系统风扇服务（pwm-fancontrol，fnOS 自带）是否处于 active 状态。
+    # fnOS 的风扇服务是 oneshot 服务（跑完写一次 PWM 即退出，非常驻进程），
+    # 用 systemctl is-active 判断其 active(exited) 状态比 pgrep 进程更可靠。
+    out = run_cmd(["systemctl", "is-active", "pwm-fancontrol"], 2).strip().lower()
+    return out in ("active", "activating")
+
+# 接管 / 交还系统风扇服务（FanControlServer）：
+# 本应用与 fnOS 自带的 FanControlServer 都直接写 /sys/class/hwmon/.../pwmN，
+# 二者同时运行会抢控 → 风扇转速抖动甚至被对方覆盖。论坛亦有用户反馈此冲突。
+# 故采用「接管即停、全交还即恢复」策略：nasdash 真正在控速任意风扇时停掉 FCS，
+# 全部交还自动后重启 FCS，恢复 fnOS 原生控温。全程 best-effort，失败静默，
+# 绝不因停/启服务异常而中断风扇调速主流程。默认（用户未启用任何控速）不触碰 FCS。
+_FCS_TAKEN = {"v": False}
+# 用户可在面板「永久禁用」FanControlServer（stop+disable，重启不复活）；持久化到 @appdata。
+# 为 True 时，nasdash 交还自动控温后不再把 FCS 拉起来，尊重用户选择。
+FCS_STATE_FILE = os.path.join(_config_dir(), "fcs_state.json")
+
+def _fcs_disabled():
+    """用户是否已在面板永久禁用 FanControlServer（读持久化标志）。"""
+    return bool(_load_json_file(FCS_STATE_FILE, {}).get("disabled"))
+
+def _set_fcs_disabled(v):
+    return _save_json_file(FCS_STATE_FILE, {"disabled": bool(v)})
+
+def _fcs_installed_state():
+    """systemctl is-enabled 的原始结果（enabled/disabled/masked/static/...；未安装为空串）。"""
+    return run_cmd(["systemctl", "is-enabled", "pwm-fancontrol"], 3).strip().lower()
+
+def _fcs_status():
+    """汇总 FanControlServer 状态供面板展示：是否安装/是否开机自启/是否在跑/是否被用户永久禁用。"""
+    raw = _fcs_installed_state()
+    installed = raw in ("enabled", "disabled", "masked", "static", "indirect",
+                        "enabled-runtime", "linked", "generated", "alias")
+    return {
+        "installed": installed,
+        "enabled": raw == "enabled",
+        "running": _fan_ext_service_running(),
+        "disabled_by_user": _fcs_disabled(),
+        "raw": raw,
+    }
+
+def _fan_stop_ext_service():
+    """临时停止系统风扇服务 FanControlServer（接管窗口内，仅 best-effort）。"""
+    try:
+        sudo_cmd(["systemctl", "stop", "pwm-fancontrol"], 5)
+    except Exception:
+        pass
+    try:
+        sudo_cmd(["pkill", "-f", "pwm-fancontrol"], 2)
+    except Exception:
+        pass
+
+def _fan_start_ext_service():
+    """交还自动时重启系统风扇服务 FanControlServer（仅 best-effort）。
+    若用户已在面板「永久禁用」FCS，则不再拉起，尊重用户选择。"""
+    if _fcs_disabled():
+        return
+    try:
+        sudo_cmd(["systemctl", "start", "pwm-fancontrol"], 5)
+    except Exception:
+        pass
+
+def _fcs_disable():
+    """永久禁用 FanControlServer：stop + disable（重启不复活）+ 持久化标志。
+    即便 systemctl 命令异常也会写标志，确保 nasdash 交还逻辑不再拉起 FCS。"""
+    ok = False
+    try:
+        sudo_cmd(["systemctl", "disable", "--now", "pwm-fancontrol"], 8)
+        ok = True
+    except Exception:
+        pass
+    try:
+        sudo_cmd(["pkill", "-f", "pwm-fancontrol"], 2)  # 兜底杀非 systemd 残留进程
+    except Exception:
+        pass
+    _set_fcs_disabled(True)
+    _FCS_TAKEN["v"] = False
+    return ok
+
+def _fcs_enable():
+    """恢复 FanControlServer：清除持久化标志 + enable + start。"""
+    _set_fcs_disabled(False)
+    ok = False
+    try:
+        sudo_cmd(["systemctl", "enable", "--now", "pwm-fancontrol"], 8)
+        ok = True
+    except Exception:
+        pass
+    return ok
 
 def _fan_read_cpu_temp():
     try:
@@ -467,13 +569,14 @@ def fan_smooth_loop():
             dt = _load_fan_disk_temp()
             sys_claimed, disk_claimed = _select_temp_fans(all_fans, st, dt)
             controlled = sys_claimed | disk_claimed
+            controlling_any = False   # 本周期是否真正在写 PWM（接管 FCS 的依据）
             # 主板/CPU 温控（sys_temp）：优先级最高，先接管
             if st.get("enabled"):
                 T = _fan_read_sys_temp(st.get("source", "cpu"))
                 action, target = _fan_sys_temp_decision(T, st)
                 for (hwmon, idx) in sys_claimed:
                     if action == "control" and target is not None:
-                        _fan_smooth_step(hwmon, idx, target)
+                        _fan_smooth_step(hwmon, idx, target); controlling_any = True
                     elif action == "release":
                         _fan_release_auto(hwmon, idx)
                     # "hold" → 已交还自动，不再写入（避免与主板/内核抢控）
@@ -483,7 +586,7 @@ def fan_smooth_loop():
                 action, target = _fan_disk_temp_decision(states, dt)
                 for (hwmon, idx) in disk_claimed:
                     if action == "control" and target is not None:
-                        _fan_smooth_step(hwmon, idx, target)
+                        _fan_smooth_step(hwmon, idx, target); controlling_any = True
                     elif action == "release":
                         _fan_release_auto(hwmon, idx)
                     # "hold" → 已交还自动，不再写入
@@ -493,12 +596,18 @@ def fan_smooth_loop():
                     continue  # 已被温控接管
                 if cfg.get("mode") == "auto":
                     ct = _fan_cpu_temp_cached()
-                    _fan_smooth_step(hwmon, idx, _fan_auto_pwm(ct))
+                    _fan_smooth_step(hwmon, idx, _fan_auto_pwm(ct)); controlling_any = True
                 else:
                     tgt = cfg.get("target")
                     if tgt is None:
                         continue
-                    _fan_smooth_step(hwmon, idx, tgt)
+                    _fan_smooth_step(hwmon, idx, tgt); controlling_any = True
+            # 接管/交还系统风扇服务 FanControlServer：本应用真正控速任意风扇时停 FCS（避免抢控冲突），
+            # 全部交还自动后重启 FCS 恢复 fnOS 原生控温。状态机保证只在边界切换时执行一次。
+            if controlling_any and not _FCS_TAKEN["v"]:
+                _fan_stop_ext_service(); _FCS_TAKEN["v"] = True
+            elif not controlling_any and _FCS_TAKEN["v"]:
+                _fan_start_ext_service(); _FCS_TAKEN["v"] = False
         except Exception:
             pass
         time.sleep(0.6)
@@ -639,8 +748,40 @@ def _fan_read_sys_temp(source):
         pass
     return None
 
+def _fan_curve_pwm(T, cfg, default_min, default_max):
+    """自定义温度→PWM 曲线（分段线性）。cfg["curve"]=[[temp,pwm],...]（已按温度升序）。
+    返回 raw(0~255) 或 None（曲线无效/缺失→交由调用方回退线性）。"""
+    pts = cfg.get("curve")
+    if not isinstance(pts, list) or len(pts) < 2:
+        return None
+    try:
+        pts = sorted([(float(p[0]), float(p[1])) for p in pts if isinstance(p, (list, tuple)) and len(p) == 2], key=lambda x: x[0])
+    except Exception:
+        return None
+    if not pts:
+        return None
+    if T is None:
+        return None
+    mn = float(cfg.get("min_pwm", default_min))
+    mx = float(cfg.get("max_pwm", default_max))
+    start = float(cfg.get("start_temp", pts[0][0]))
+    if T < start:
+        return 0
+    if T >= pts[-1][0]:
+        return round(min(max(pts[-1][1], mn), mx) / 100 * 255)
+    for i in range(1, len(pts)):
+        if T <= pts[i][0]:
+            t0, p0 = pts[i-1]; t1, p1 = pts[i]
+            frac = (T - t0) / (t1 - t0) if t1 > t0 else 0
+            pw = p0 + frac * (p1 - p0)
+            return round(min(max(pw, mn), mx) / 100 * 255)
+    return round(min(max(pts[0][1], mn), mx) / 100 * 255)
+
 def _fan_sys_temp_pwm(T, cfg):
-    """按单值温度 T 算目标 raw(0~255)。T<start→0；start≤T<full→min~max 线性；T≥full→max。"""
+    """按单值温度 T 算目标 raw(0~255)。优先自定义曲线；否则 start/full 线性。"""
+    curve_raw = _fan_curve_pwm(T, cfg, 30, 100)
+    if curve_raw is not None:
+        return curve_raw
     start = float(cfg.get("start_temp", 45))
     full = float(cfg.get("full_temp", 70))
     minp = float(cfg.get("min_pwm", 30))
@@ -727,12 +868,8 @@ def get_disk_temps(devs):
 def _fan_disk_temp_pwm(states, cfg):
     """按硬盘温度算目标 raw(0~255)。
     - 所有监控盘休眠且 sleep_stop → 0（停转）
-    - 取最热盘温度 T：T<start → 0；start≤T<full → min~max 线性；T≥full → max
+    - 优先自定义温度→PWM 曲线；否则取最热盘温度 T：T<start → 0；start≤T<full → min~max 线性；T≥full → max
     """
-    start = float(cfg.get("start_temp", 40))
-    full = float(cfg.get("full_temp", 60))
-    minp = float(cfg.get("min_pwm", 30))
-    maxp = float(cfg.get("max_pwm", 70))
     sleep_stop = bool(cfg.get("sleep_stop", True))
     valid = [s for s in (states or {}).values() if isinstance(s, dict)]
     if not valid:
@@ -741,8 +878,18 @@ def _fan_disk_temp_pwm(states, cfg):
         return 0
     temps = [s["temp"] for s in valid if isinstance(s.get("temp"), (int, float))]
     if not temps:
-        return round(minp / 100 * 255)
+        # 无温度读数：有曲线则以曲线最低点兜底，否则回退 min_pwm
+        if cfg.get("curve"):
+            return _fan_curve_pwm(None, cfg, 30, 70)
+        return round(float(cfg.get("min_pwm", 30)) / 100 * 255)
     T = max(temps)
+    curve_raw = _fan_curve_pwm(T, cfg, 30, 70)
+    if curve_raw is not None:
+        return curve_raw
+    start = float(cfg.get("start_temp", 40))
+    full = float(cfg.get("full_temp", 60))
+    minp = float(cfg.get("min_pwm", 30))
+    maxp = float(cfg.get("max_pwm", 70))
     if T < start:
         return 0
     if T >= full:
@@ -1782,6 +1929,17 @@ def get_system():
                 if im and not ip:
                     ip = im.group(1).split("/")[0]
         nics.append({"name": name, "state": state, "mac": mac, "speed": speed, "ip": ip})
+    # 附加实时网速（来自采集 daemon 的 _metrics_cur，每 2s 刷新一次）
+    try:
+        with _METRICS_LOCK:
+            _net_rt = {n["name"]: n for n in _metrics_cur.get("net", [])}
+        for nic in nics:
+            rt = _net_rt.get(nic["name"])
+            if rt:
+                nic["rx_rate"] = rt.get("rx_rate", 0.0)
+                nic["tx_rate"] = rt.get("tx_rate", 0.0)
+    except Exception:
+        pass
     d["nics"] = nics
     # 主板 / 内存品牌型号（dmidecode），失败不影响其它采集
     try:
@@ -1981,8 +2139,36 @@ def _cn_status(status):
         return "已创建未启动"
     return s  # 兜底原串
 
+def _parse_docker_pct(s):
+    """'12.34%' -> 12.34 ; 其它(None/空/非数字) -> None"""
+    if not s or not isinstance(s, str):
+        return None
+    m = re.search(r"([\d.]+)", s)
+    return float(m.group(1)) if m else None
+
+def _docker_size_to_bytes(s):
+    """'120MiB' / '1.2kB' -> int 字节数 ; 无效 -> None"""
+    if not s or not isinstance(s, str):
+        return None
+    m = re.match(r"^\s*([\d.]+)\s*([kKmMgGtT]?)i?B\s*$", s.strip())
+    if not m:
+        return None
+    num = float(m.group(1))
+    unit = (m.group(2) or "").upper()
+    mult = {"": 1, "K": 1024, "M": 1024**2, "G": 1024**3, "T": 1024**4}
+    return int(num * mult.get(unit, 1))
+
+def _split_netio(s):
+    """'1.2kB / 3.4kB' -> (rx_bytes, tx_bytes)；无效 -> (None, None)"""
+    if not s or not isinstance(s, str):
+        return (None, None)
+    parts = [p.strip() for p in s.split("/") if p.strip()]
+    rx = _docker_size_to_bytes(parts[0]) if len(parts) >= 1 else None
+    tx = _docker_size_to_bytes(parts[1]) if len(parts) >= 2 else None
+    return (rx, tx)
+
 def get_docker():
-    """统计 Docker 容器数（运行中/总数），并自动探测每个容器真实监听端口"""
+    """统计 Docker 容器数（运行中/总数），并自动探测每个容器真实监听端口与资源占用"""
     try:
         out = sudo_cmd(["docker", "ps", "-a", "--format", "{{.Names}}|{{.Status}}|{{.Image}}"], 8)
         containers = []
@@ -1995,7 +2181,9 @@ def get_docker():
             status = parts[1].strip() if len(parts) > 1 else ""
             image = parts[2].strip() if len(parts) > 2 else ""
             running = status.lower().startswith("up") or "running" in status.lower()
-            containers.append({"name": name, "status": status, "image": image, "ports": "-", "running": running, "mem": None, "runtime": _cn_status(status)})
+            containers.append({"name": name, "status": status, "image": image, "ports": "-", "running": running,
+                               "mem": None, "cpu": None, "mem_pct": None, "mem_bytes": None,
+                               "net_rx": None, "net_tx": None, "runtime": _cn_status(status)})
         # 批量 inspect 取端口 / pid / 网络模式，自动探测端口
         try:
             ids = sudo_cmd(["docker", "ps", "-a", "-q"], 8).split()
@@ -2031,18 +2219,28 @@ def get_docker():
                         c["ports"] = pm.get(c["name"], "-")
             except Exception:
                 pass
-        # 运行中容器的内存占用（docker stats 仅对运行中容器有数据）
+        # 运行中容器的资源占用（docker stats 仅对运行中容器有数据）：CPU% / 内存% / 内存字节 / 网络 RX-TX
         try:
-            stat = sudo_cmd(["docker", "stats", "--no-stream", "--format", "{{.Name}}|{{.MemUsage}}"], 8)
+            stat = sudo_cmd(["docker", "stats", "--no-stream", "--format",
+                             "{{.Name}}|{{.CPUPerc}}|{{.MemPerc}}|{{.MemUsage}}|{{.NetIO}}"], 12)
             for line in stat.splitlines():
                 line = line.strip()
                 if not line or "|" not in line:
                     continue
-                cname, mem = line.split("|", 1)
+                parts = line.split("|")
+                if len(parts) < 5:
+                    continue
+                cname, cpu_s, memp_s, mem_s, net_s = parts[0], parts[1], parts[2], parts[3], parts[4]
                 cname = cname.strip()
+                rx, tx = _split_netio(net_s)
                 for c in containers:
                     if c["name"] == cname:
-                        c["mem"] = mem.strip()
+                        c["cpu"] = _parse_docker_pct(cpu_s)
+                        c["mem_pct"] = _parse_docker_pct(memp_s)
+                        c["mem"] = mem_s.strip()
+                        c["mem_bytes"] = _docker_size_to_bytes(mem_s.split("/")[0].strip()) if "/" in mem_s else _docker_size_to_bytes(mem_s.strip())
+                        c["net_rx"] = rx
+                        c["net_tx"] = tx
                         break
         except Exception:
             pass
@@ -2058,7 +2256,185 @@ def get_docker():
 # ===================== 路由 =====================
 @app.route("/")
 def index():
-    return render_template("index.html", APP_VERSION=APP_VERSION)
+    # no-store：防止浏览器/代理缓存 HTML，避免发版或重启后用户仍看到旧页面（曾导致 FCS 卡片永久“加载中”）
+    resp = make_response(render_template("index.html", APP_VERSION=APP_VERSION))
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
+
+# ===================== 采集层：实时指标（网络吞吐 / 磁盘 I/O / CPU 功耗） =====================
+# 这些指标需「两次采样差」才算速率，故由常驻 daemon 线程周期采样，/api/all 仅读最新值。
+# 模式复用 fan_smooth_loop 的 daemon 线程做法。
+_METRICS_LOCK = _threading.Lock()
+_metrics_prev = {"net": {}, "disk": {}, "rapl": None, "rapl_t": 0.0}
+_metrics_cur = {"net": [], "disk": [], "cpu_power_w": 0.0, "cpu_power_valid": False}
+_CPU_POWER_EMA = None
+
+def _read_net_bytes():
+    """返回 {iface: (rx_bytes, tx_bytes)}，过滤回环/虚拟接口"""
+    res = {}
+    try:
+        with open("/proc/net/dev") as f:
+            lines = f.readlines()[2:]
+        for line in lines:
+            if ":" not in line:
+                continue
+            name, data = line.split(":", 1)
+            name = name.strip()
+            if name == "lo" or name.startswith(("docker", "br-", "veth")):
+                continue
+            parts = data.split()
+            if len(parts) < 9:
+                continue
+            res[name] = (int(parts[0]), int(parts[8]))
+    except Exception:
+        pass
+    return res
+
+def _read_disk_sectors():
+    """返回 {dev: (rd_sectors, wr_sectors)}，过滤分区(数字结尾)与 loop/ram"""
+    res = {}
+    try:
+        with open("/proc/diskstats") as f:
+            for line in f:
+                cols = line.split()
+                if len(cols) < 11:
+                    continue
+                dev = cols[2]
+                if dev.startswith(("loop", "ram")) or dev[-1].isdigit():
+                    continue
+                res[dev] = (int(cols[5]), int(cols[9]))
+    except Exception:
+        pass
+    return res
+
+def _read_rapl_energy():
+    """读 CPU 封装能耗(微焦)，root 可读；返回 energy_uj 或 None。admin 无权限→None。"""
+    base = "/sys/class/powercap/intel-rapl/intel-rapl:0"
+    try:
+        return int(open(base + "/energy_uj").read().strip())
+    except Exception:
+        return None
+
+# ===================== 历史趋势：SQLite 存储（免维护，30天自清理） =====================
+import sqlite3 as _sqlite3
+_DB_PATH = os.path.join(_config_dir(), "history.db")
+_db_lock = _threading.Lock()
+_db_last_write = 0.0
+
+def _init_history_db():
+    try:
+        with _db_lock:
+            con = _sqlite3.connect(_DB_PATH)
+            con.execute("""CREATE TABLE IF NOT EXISTS samples(
+                ts INTEGER PRIMARY KEY,
+                disk_read REAL, disk_write REAL,
+                net_rx REAL, net_tx REAL, cpu_power REAL)""")
+            con.commit(); con.close()
+    except Exception:
+        pass
+
+def _write_history_sample():
+    """把当前实时指标聚合一行写入 SQLite；并删除 30 天前样本（自清理）。"""
+    global _db_last_write
+    try:
+        now = int(time.time())
+        with _METRICS_LOCK:
+            disk = _metrics_cur["disk"]; net = _metrics_cur["net"]
+            cpu = _metrics_cur.get("cpu_power_w", 0.0)
+        dr = sum((d.get("read_rate") or 0) for d in disk)
+        dw = sum((d.get("write_rate") or 0) for d in disk)
+        nr = sum((n.get("rx_rate") or 0) for n in net)
+        nw = sum((n.get("tx_rate") or 0) for n in net)
+        with _db_lock:
+            con = _sqlite3.connect(_DB_PATH)
+            con.execute(
+                "INSERT OR REPLACE INTO samples(ts,disk_read,disk_write,net_rx,net_tx,cpu_power) VALUES(?,?,?,?,?,?)",
+                (now, dr, dw, nr, nw, cpu))
+            cutoff = now - 30*86400
+            con.execute("DELETE FROM samples WHERE ts < ?", (cutoff,))
+            con.commit(); con.close()
+        _db_last_write = time.time()
+    except Exception:
+        pass
+
+_init_history_db()
+
+def metrics_collect_loop():
+    """daemon 线程：每 ~2s 采样一次，计算速率/功率并写入 _metrics_cur"""
+    global _CPU_POWER_EMA
+    while True:
+        try:
+            time.sleep(2)
+            now = time.time()
+            # 历史趋势：每 30s 聚合写一行 SQLite（免维护，超 30 天自动清理）
+            if now - _db_last_write >= 30:
+                _write_history_sample()
+            # 网络吞吐
+            net_now = _read_net_bytes()
+            net_out = []
+            with _METRICS_LOCK:
+                prev = _metrics_prev["net"]
+                for iface, (rx, tx) in net_now.items():
+                    prx, ptx = prev.get(iface, (rx, tx))
+                    dt = 2.0
+                    rx_rate = max(0.0, (rx - prx) / dt)
+                    tx_rate = max(0.0, (tx - ptx) / dt)
+                    net_out.append({
+                        "name": iface,
+                        "rx_rate": round(rx_rate, 1),   # bytes/s，前端动态格式化为 B/s/KB/s/MB/s
+                        "tx_rate": round(tx_rate, 1),
+                        "rx_total_mb": round(rx / 1048576, 1),
+                        "tx_total_mb": round(tx / 1048576, 1),
+                    })
+                _metrics_prev["net"] = net_now
+                _metrics_cur["net"] = net_out
+            # 磁盘 I/O
+            disk_now = _read_disk_sectors()
+            disk_out = []
+            with _METRICS_LOCK:
+                prev = _metrics_prev["disk"]
+                for dev, (rd, wr) in disk_now.items():
+                    prd, pwr = prev.get(dev, (rd, wr))
+                    dt = 2.0
+                    rd_rate = max(0.0, (rd - prd) * 512 / dt)
+                    wr_rate = max(0.0, (wr - pwr) * 512 / dt)
+                    disk_out.append({
+                        "device": dev,
+                        "read_rate": round(rd_rate, 1),   # bytes/s，前端动态格式化为 B/s/KB/s/MB/s
+                        "write_rate": round(wr_rate, 1),
+                    })
+                _metrics_prev["disk"] = disk_now
+                _metrics_cur["disk"] = disk_out
+            # CPU 封装功耗 (RAPL)：两次采样差算功率 + EMA 平滑
+            e = _read_rapl_energy()
+            with _METRICS_LOCK:
+                pe = _metrics_prev["rapl"]; pt = _metrics_prev["rapl_t"]
+                if e is not None and pe is not None and pt:
+                    dt = now - pt
+                    if dt > 0:
+                        w = (e - pe) / 1e6 / dt
+                        if 0 < w < 1000:   # 合理性过滤（微焦回绕/异常）
+                            _CPU_POWER_EMA = w if _CPU_POWER_EMA is None else (_CPU_POWER_EMA * 0.8 + w * 0.2)
+                            _metrics_cur["cpu_power_w"] = round(_CPU_POWER_EMA, 2)
+                            _metrics_cur["cpu_power_valid"] = True
+                _metrics_prev["rapl"] = e
+                _metrics_prev["rapl_t"] = now
+        except Exception:
+            time.sleep(2)
+
+_metrics_thread = _threading.Thread(target=metrics_collect_loop, daemon=True, name="metrics")
+_metrics_thread.start()
+
+def get_realtime_metrics():
+    with _METRICS_LOCK:
+        return {
+            "net": _metrics_cur["net"],
+            "disk": _metrics_cur["disk"],
+            "cpu_power_w": _metrics_cur["cpu_power_w"],
+            "cpu_power_valid": _metrics_cur["cpu_power_valid"],
+        }
 
 @app.route("/api/all")
 def api_all():
@@ -2081,9 +2457,69 @@ def api_all():
             "time": time.strftime("%Y-%m-%d %H:%M:%S"),
             "elapsed": round(time.time() - t0, 2),
         }
+        try:
+            rt = get_realtime_metrics()
+            result["net"] = rt["net"]
+            result["diskio"] = rt["disk"]
+            # 给 diskio 补上型号/容量/品牌等友好标识，方便用户识别 sda/sdb 对应哪块盘
+            disk_map = {d["dev"]: d for d in result.get("disks", [])}
+            for d in result["diskio"]:
+                info = disk_map.get(d["device"], {})
+                d["model"] = info.get("model", "")
+                d["size"] = info.get("size", "")
+                d["brand"] = info.get("brand", "")
+                d["type"] = info.get("type", "")
+                d["serial"] = info.get("serial", "")
+        except Exception:
+            pass
+        # 活动告警（复用已采集数据，无额外命令开销）
+        try:
+            result["alerts"] = _evaluate_alerts(result["system"], result["disks"], result["docker"])
+        except Exception:
+            result["alerts"] = []
     except Exception as e:
         result = {"error": str(e), "time": time.strftime("%Y-%m-%d %H:%M:%S")}
     return jsonify(result)
+
+@app.route("/api/metrics")
+def api_metrics():
+    """轻量实时指标：网络吞吐 + 磁盘 I/O。供前端高频(2s)轮询，不触发重型 /api/all(阵列卡/SMART等)。"""
+    try:
+        rt = get_realtime_metrics()
+        diskio = rt["disk"]
+        try:
+            disk_map = {d["dev"]: d for d in get_disks()}
+        except Exception:
+            disk_map = {}
+        for d in diskio:
+            info = disk_map.get(d["device"], {})
+            d["model"] = info.get("model", "")
+            d["size"] = info.get("size", "")
+            d["brand"] = info.get("brand", "")
+            d["type"] = info.get("type", "")
+        return jsonify({"net": rt["net"], "diskio": diskio})
+    except Exception as e:
+        return jsonify({"error": str(e)})
+
+@app.route("/api/history")
+def api_history():
+    """返回历史趋势降采样点（磁盘读/写速率），按 range 时间桶聚合，省流量。"""
+    try:
+        rng = request.args.get("range", "24h")
+        secs = {"24h": 86400, "7d": 7*86400, "30d": 30*86400}.get(rng, 86400)
+        end = int(time.time()); start = end - secs
+        bucket = max(60, secs // 240)
+        with _db_lock:
+            con = _sqlite3.connect(_DB_PATH)
+            rows = con.execute(
+                "SELECT (ts/?)*?*1000 AS bts, AVG(disk_read), AVG(disk_write) "
+                "FROM samples WHERE ts>=? GROUP BY bts ORDER BY bts",
+                (bucket, bucket, start)).fetchall()
+            con.close()
+        points = [{"ts": r[0], "disk_read": round(r[1] or 0, 1), "disk_write": round(r[2] or 0, 1)} for r in rows]
+        return jsonify({"range": rng, "points": points, "bucket_s": bucket})
+    except Exception as e:
+        return jsonify({"error": str(e), "points": []})
 
 @app.route("/api/fan/set", methods=["POST"])
 @require_admin()
@@ -2144,10 +2580,8 @@ def api_fan_set():
     return jsonify({"ok": True, "mode": "manual", "pwm": pct, "raw": raw})
 
 
-@app.route("/api/fan/status")
-def api_fan_status():
-    """轻量风扇状态：供前端高频轮询，实时显示转速/当前占空比/目标（常驻线程 2s tick）"""
-    import glob as _glob
+def get_fan_status():
+    """风扇实时状态列表（供前端轮询与硬件健康报告复用）。"""
     fans = []
     labels = _load_fan_labels()
     _dt = _load_fan_disk_temp()
@@ -2206,7 +2640,12 @@ def api_fan_status():
             # 用户可把「无风扇的幽灵通道」隐藏（持久化到 fan_labels.json）
             "hidden": bool(_lbl.get("hidden")),
         })
-    return jsonify({"fans": fans})
+    return fans
+
+@app.route("/api/fan/status")
+def api_fan_status():
+    """轻量风扇状态：供前端高频轮询，实时显示转速/当前占空比/目标（常驻线程 2s tick）"""
+    return jsonify({"fans": get_fan_status()})
 
 
 @app.route("/api/fan/disk_temp")
@@ -2289,6 +2728,31 @@ def api_fan_sys_temp_set():
 
 
 
+@app.route("/api/fan/fcs")
+def api_fan_fcs_get():
+    """FanControlServer 状态：是否安装 / 开机自启 / 运行中 / 被用户永久禁用。"""
+    return jsonify(_fcs_status())
+
+
+@app.route("/api/fan/fcs", methods=["POST"])
+@require_admin()
+def api_fan_fcs_post():
+    """永久禁用 / 恢复 FanControlServer。body: {"action": "disable"|"enable"}。
+    disable = systemctl stop + disable（重启不复活）+ 持久化标志；enable = enable + start。"""
+    try:
+        data = request.get_json(force=True) or {}
+    except Exception:
+        return jsonify({"ok": False, "error": "bad json"}), 400
+    action = data.get("action")
+    if action == "disable":
+        _fcs_disable()
+    elif action == "enable":
+        _fcs_enable()
+    else:
+        return jsonify({"ok": False, "error": "action 需为 disable 或 enable"}), 400
+    return jsonify({"ok": True, "status": _fcs_status()})
+
+
 @app.route("/api/fan/labels", methods=["GET"])
 def api_fan_labels_get():
     """返回用户标注的风扇名称/电压：key="hwmon::idx" -> {"name","voltage"}"""
@@ -2364,6 +2828,466 @@ def api_board_set():
             return jsonify({"ok": False, "error": str(e)}), 500
     return jsonify({"ok": True, "model": model or ""})
 
+
+# ===================== 控制与自动化：告警 + 健康报告 =====================
+ALERTS_FILE = os.path.join(_config_dir(), "alerts.json")
+_NOTIFY_LOG = os.path.join(_config_dir(), "notifications.log")
+
+def _load_alerts():
+    d = _load_json_file(ALERTS_FILE, {})
+    d.setdefault("enabled", True)
+    d.setdefault("temp", {"enabled": True, "cpu_max": 85, "mb_max": 75, "disk_max": 60})
+    d.setdefault("disk_health", True)
+    d.setdefault("memory_max", 90)
+    d.setdefault("channels", {
+        "system": True,
+        "telegram": {"enabled": False, "bot_token": "", "chat_id": ""},
+        "bark": {"enabled": False, "url": ""},
+        "email": {"enabled": False, "smtp_host": "", "smtp_port": 465, "user": "", "pass": "", "to": ""},
+    })
+    return d
+
+def _save_alerts(cfg):
+    return _save_json_file(ALERTS_FILE, cfg)
+
+def _mb_temp_from_sensors(sensors):
+    temps = (sensors or {}).get("temps", []) or []
+    cand = []
+    for t in temps:
+        name = (t.get("name") or "")
+        if any(k in name for k in ("主板", "PCH", "芯片组", "南桥", "PCIe", "System")):
+            try:
+                cand.append(float(t.get("value")))
+            except (TypeError, ValueError):
+                pass
+    return max(cand) if cand else None
+
+def _evaluate_alerts(system, disks, docker=None):
+    """扫描当前状态，返回活动告警列表（每项 {level, title, detail}）。纯内存计算，无命令执行。"""
+    alerts = []
+    if not system or not isinstance(system, dict):
+        return alerts
+    cfg = _load_alerts()
+    if not cfg.get("enabled"):
+        return alerts
+    tcfg = cfg.get("temp", {}) or {}
+    if tcfg.get("enabled") and tcfg.get("cpu_max"):
+        ct = system.get("cpu_temp")
+        try:
+            if ct is not None and float(ct) >= float(tcfg["cpu_max"]):
+                alerts.append({"level": "danger", "title": "CPU 温度过高", "detail": "CPU 封装温度 %s°C，超过阈值 %s°C" % (ct, tcfg["cpu_max"])})
+        except (TypeError, ValueError):
+            pass
+    if tcfg.get("enabled") and tcfg.get("mb_max"):
+        mt = _mb_temp_from_sensors(system.get("sensors"))
+        try:
+            if mt is not None and mt >= float(tcfg["mb_max"]):
+                alerts.append({"level": "danger", "title": "主板/芯片组温度过高", "detail": "温度 %s°C，超过阈值 %s°C" % (mt, tcfg["mb_max"])})
+        except (TypeError, ValueError):
+            pass
+    if tcfg.get("enabled") and tcfg.get("disk_max"):
+        for d in (disks or []):
+            if not isinstance(d, dict):
+                continue
+            dt = d.get("temp")
+            try:
+                if dt is not None and float(dt) >= float(tcfg["disk_max"]):
+                    alerts.append({"level": "warn", "title": "硬盘温度过高", "detail": "%s 温度 %s°C，超过阈值 %s°C" % (d.get("dev", "?"), dt, tcfg["disk_max"])})
+            except (TypeError, ValueError):
+                pass
+    if cfg.get("disk_health"):
+        for d in (disks or []):
+            if not isinstance(d, dict):
+                continue
+            h = d.get("health")
+            if d.get("health_ok") is False and h not in (None, "", "N/A", "UNKNOWN"):
+                alerts.append({"level": "danger", "title": "硬盘健康异常", "detail": "%s SMART 健康状态：%s" % (d.get("dev", "?"), h)})
+    mm = cfg.get("memory_max")
+    mem = system.get("memory") or {}
+    try:
+        if mm and mem.get("percent") is not None and float(mem["percent"]) >= float(mm):
+            alerts.append({"level": "warn", "title": "内存占用过高", "detail": "内存使用率 %s%%，超过阈值 %s%%" % (mem["percent"], mm)})
+    except (TypeError, ValueError):
+        pass
+    return alerts
+
+def _notify_log(msg):
+    try:
+        ts = time.strftime("%Y-%m-%d %H:%M:%S")
+        with open(_NOTIFY_LOG, "a", encoding="utf-8") as f:
+            f.write("[%s] %s\n" % (ts, msg))
+    except Exception:
+        pass
+
+def _send_telegram(token, chat_id, text):
+    try:
+        url = "https://api.telegram.org/bot%s/sendMessage" % token
+        req = urllib.request.Request(url, data=json.dumps({"chat_id": chat_id, "text": text}).encode("utf-8"),
+                                     headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return r.status == 200
+    except Exception as e:
+        return str(e)
+
+def _send_bark(url, text):
+    try:
+        if not url.endswith("/"):
+            url += "/"
+        req = urllib.request.Request(url + "push", data=json.dumps({"title": "nasdash 告警", "body": text}).encode("utf-8"),
+                                     headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return r.status in (200, 201)
+    except Exception as e:
+        return str(e)
+
+def _send_email(cfg, text):
+    try:
+        import smtplib
+        from email.mime.text import MimeText
+        msg = MimeText("nasdash 告警通知\n\n%s\n\n时间：%s" % (text, time.strftime("%Y-%m-%d %H:%M:%S")), "plain", "utf-8")
+        msg["Subject"] = "nasdash 告警"
+        msg["From"] = cfg.get("user", "")
+        msg["To"] = cfg.get("to", "")
+        with smtplib.SMTP_SSL(cfg.get("smtp_host"), int(cfg.get("smtp_port", 465)), timeout=10) as s:
+            s.login(cfg.get("user"), cfg.get("pass"))
+            s.sendmail(cfg.get("user"), [cfg.get("to")], msg.as_string())
+        return True
+    except Exception as e:
+        return str(e)
+
+def _dispatch_notifications(text, cfg):
+    """按配置把告警文本推送到各启用渠道，返回 {channel: ok|error}。"""
+    res = {}
+    ch = cfg.get("channels", {}) or {}
+    if ch.get("telegram", {}).get("enabled"):
+        t = ch["telegram"]
+        res["telegram"] = _send_telegram(t.get("bot_token", ""), t.get("chat_id", ""), text)
+    if ch.get("bark", {}).get("enabled"):
+        res["bark"] = _send_bark(ch["bark"].get("url", ""), text)
+    if ch.get("email", {}).get("enabled"):
+        res["email"] = _send_email(ch["email"], text)
+    if ch.get("system", True):
+        _notify_log("通知：" + text)
+        res["system"] = True
+    return res
+
+def build_health_report():
+    """汇总当前全部硬件状态 + 活动告警，生成健康报告快照。"""
+    try:
+        board = get_board()
+    except Exception:
+        board = {"manufacturer": "", "product": "", "version": ""}
+    try:
+        memory_modules = get_memory_modules()
+    except Exception:
+        memory_modules = {"modules": [], "total_gb": 0, "slots": 0, "brand_summary": ""}
+    raid = get_raid_card()
+    disks = get_disks()
+    system = get_system()
+    system_full = {**system, "board": board, "memory_modules": memory_modules}
+    storage = get_storage()
+    docker = get_docker()
+    try:
+        fans = get_fan_status()
+    except Exception:
+        fans = []
+    alerts = _evaluate_alerts(system_full, disks, docker)
+    return {
+        "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "version": APP_VERSION,
+        "host": system.get("hostname"),
+        "uptime": system.get("uptime"),
+        "raid": raid, "disks": disks, "system": system_full,
+        "storage": storage, "docker": docker, "fans": fans, "alerts": alerts,
+    }
+
+def _render_report_html(rep):
+    def esc(s):
+        return ("" if s is None else str(s)).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    def fmt(v, suffix=""):
+        if v is None or v == "":
+            return "—"
+        return esc(v) + suffix
+
+    # AIDA64 风样式（全部内嵌，下载后本地打开亦正常显示、可打印）
+    CSS = """
+    *{box-sizing:border-box}
+    body{font-family:'Segoe UI',Tahoma,Arial,'Microsoft YaHei',sans-serif;color:#1a1a1a;
+         max-width:1000px;margin:0 auto;padding:24px 28px;background:#fff;line-height:1.55;font-size:13px}
+    .rep-title{font-size:23px;font-weight:700;color:#1f4e79;margin:0 0 2px;letter-spacing:.3px}
+    .rep-sub{color:#5a6b7b;font-size:12.5px;margin:0 0 4px}
+    .rep-sub b{color:#1a1a1a;font-weight:600}
+    .cat{background:#1f4e79;color:#fff;font-weight:700;font-size:14px;
+         padding:7px 12px;margin:20px 0 0;border-radius:3px 3px 0 0;letter-spacing:.5px}
+    .cat:first-of-type{margin-top:0}
+    table.props{width:100%;border-collapse:collapse;border:1px solid #d4dce6;border-top:none;margin-bottom:4px}
+    table.props td.k{width:33%;background:#eef3f8;font-weight:600;
+         padding:6px 12px;border-bottom:1px solid #d4dce6;vertical-align:top;color:#243b53}
+    table.props td.v{padding:6px 12px;border-bottom:1px solid #d4dce6;vertical-align:top}
+    table.data{width:100%;border-collapse:collapse;border:1px solid #d4dce6;margin-bottom:4px}
+    table.data th{background:#336699;color:#fff;font-weight:600;text-align:left;
+         padding:6px 10px;font-size:12px;border:1px solid #336699;white-space:nowrap}
+    table.data td{padding:5px 10px;border:1px solid #d4dce6;vertical-align:top}
+    table.data tr:nth-child(even) td{background:#f4f8fb}
+    .empty{color:#5a6b7b;padding:9px 12px;border:1px solid #d4dce6;border-top:none;font-style:italic}
+    .note{background:#eef3f8;border:1px solid #d4dce6;border-top:none;padding:8px 12px;
+         color:#243b53;font-size:12px;margin-bottom:4px}
+    .alert-box{border:1px solid #d4dce6;border-top:none;padding:10px 14px}
+    .alert-box ul{margin:0;padding-left:20px}
+    .alert-box li{margin:3px 0}
+    .ok{color:#1a7f37} .warn{color:#b45309} .danger{color:#c0392b}
+    .footer{color:#5a6b7b;font-size:12px;margin-top:26px;border-top:1px solid #d4dce6;padding-top:10px}
+    @media print{body{padding:0}
+      .cat,table.data th{print-color-adjust:exact;-webkit-print-color-adjust:exact}}
+    """
+    def cat(title):
+        return f"<div class='cat'>{esc(title)}</div>"
+    def props(rows):
+        if not rows:
+            return "<div class='empty'>（无）</div>"
+        body = "".join(
+            f"<tr><td class='k'>{esc(k)}</td><td class='v'>{fmt(v)}</td></tr>"
+            for k, v in rows)
+        return f"<table class='props'>{body}</table>"
+    def data(headers, rows):
+        if not rows:
+            return "<div class='empty'>（无）</div>"
+        th = "".join(f"<th>{esc(h)}</th>" for h in headers)
+        body = "".join(
+            "<tr>" + "".join(f"<td>{esc(c)}</td>" for c in r) + "</tr>"
+            for r in rows)
+        return f"<table class='data'><tr>{th}</tr>{body}</table>"
+    def note(s):
+        return f"<div class='note'>{esc(s)}</div>"
+
+    alerts = rep.get("alerts", []) or []
+    sys_ = rep.get("system", {}) or {}
+    mem = sys_.get("memory", {}) or {}
+    swap = sys_.get("swap", {}) or {}
+    board = sys_.get("board", {}) or {}
+    mm = sys_.get("memory_modules", {}) or {}
+    sens = sys_.get("sensors", {}) or {}
+    nics = sys_.get("nics", []) or []
+    gpus = sys_.get("gpus", []) or []
+    disks = rep.get("disks", []) or []
+    raid = rep.get("raid", {}) or {}
+    storage = rep.get("storage", {}) or {}
+    docker = rep.get("docker", {}) or {}
+    fans = rep.get("fans", []) or []
+
+    # 告警
+    if alerts:
+        ar = "".join(
+            f"<li class='{('danger' if a.get('level')=='danger' else ('warn' if a.get('level')=='warn' else 'ok'))}'>"
+            f"[{esc(a.get('level','info'))}] {esc(a.get('title',''))} — {esc(a.get('detail',''))}</li>"
+            for a in alerts)
+        alert_box = f"<div class='alert-box'><ul>{ar}</ul></div>"
+    else:
+        alert_box = "<div class='alert-box'><span class='ok'>无活动告警 ✓</span></div>"
+
+    sys_rows = [
+        ["CPU 型号", fmt(sys_.get("cpu_model"))],
+        ["CPU 核心/线程", f"{fmt(sys_.get('cpu_cores'))} / {fmt(sys_.get('cpu_threads'))}"],
+        ["CPU 频率", fmt(sys_.get("cpu_freq"), " MHz")],
+        ["负载 (1/5/15)", " / ".join(fmt(x) for x in (sys_.get("load") or []))],
+        ["内存", f"{fmt(mem.get('used'))} / {fmt(mem.get('total'))}（{fmt(mem.get('percent'))}%）"],
+        ["交换分区", f"{fmt(swap.get('used'))} / {fmt(swap.get('total'))}"],
+        ["显卡", fmt("、".join(gpus) if gpus else "—")],
+    ]
+    board_rows = [
+        ["制造商", fmt(board.get("manufacturer"))],
+        ["型号", fmt(board.get("product"))],
+        ["版本", fmt(board.get("version"))],
+        ["BIOS 厂商", fmt(board.get("bios_vendor"))],
+        ["BIOS 版本", fmt(board.get("bios_version"))],
+        ["BIOS 日期", fmt(board.get("bios_date"))],
+        ["芯片组", fmt(board.get("chipset"))],
+    ]
+    if board.get("note"):
+        board_rows.append(["备注", fmt(board.get("note"))])
+    mm_rows = []
+    for m in (mm.get("modules") or []):
+        mm_rows.append([
+            fmt(m.get("locator")), "已装" if m.get("installed") else "空槽",
+            fmt(m.get("brand")), fmt(m.get("manufacturer")), fmt(m.get("part")),
+            fmt(m.get("size")), fmt(m.get("type")), fmt(m.get("speed")),
+        ])
+    mem_summary = "共 {s} 槽 ｜ 已装 {t} GB ｜ 品牌汇总：{b}".format(
+        s=fmt(mm.get("slots")), t=fmt(mm.get("total_gb")), b=fmt(mm.get("brand_summary")))
+    temp_rows = [[fmt(t.get("name")), fmt(t.get("value"), " ℃"), fmt(t.get("max"), " ℃"), fmt(t.get("crit"), " ℃")]
+                 for t in (sens.get("temps") or [])]
+    fan_sens_rows = [[fmt(f.get("name")), fmt(f.get("rpm"), " RPM"), fmt(f.get("mode")), fmt(f.get("pwm"), " %")]
+                     for f in (sens.get("fans") or [])]
+    volt_rows = [[fmt(v.get("name")), fmt(v.get("value"), " V")] for v in (sens.get("voltages") or [])]
+    fanctl_rows = []
+    for f in fans:
+        fanctl_rows.append([
+            fmt(f.get("name")), fmt(f.get("rpm"), " RPM"), fmt(f.get("pwm"), " %"),
+            fmt(f.get("mode")), (fmt(f.get("target_pct"), " %") if f.get("target_pct") is not None else "—"),
+            fmt(f.get("voltage")),
+        ])
+    nic_rows = [[fmt(n.get("name")), fmt(n.get("state")), fmt(n.get("mac")), fmt(n.get("speed"), " Mbps"),
+                 fmt(n.get("ip")),
+                 (f"↓{fmt(n.get('rx_rate'))} ↑{fmt(n.get('tx_rate'))}" if n.get("rx_rate") is not None else "—")]
+                for n in nics]
+    disk_rows = []
+    for d in disks:
+        rota = str(d.get("rota"))
+        rota_s = "机械盘" if rota == "1" else ("固态" if rota == "0" else fmt(d.get("rota")))
+        disk_rows.append([
+            fmt(d.get("dev")), fmt(d.get("brand")), fmt(d.get("model")), fmt(d.get("size")),
+            fmt(d.get("tran") or d.get("type")), rota_s,
+            (fmt(d.get("temp"), " ℃") if d.get("temp") is not None else "—"),
+            fmt(d.get("health")),
+            (fmt(d.get("power_on_hours"), " h") if d.get("power_on_hours") is not None else "—"),
+            (fmt(d.get("reallocated")) if d.get("reallocated") is not None else "—"),
+            (fmt(d.get("pending")) if d.get("pending") is not None else "—"),
+        ])
+    raid_rows = [[fmt(a.get("name")), fmt(a.get("level")), fmt(a.get("state")), fmt(a.get("size")),
+                  fmt("、".join(a.get("disks") or []))] for a in (storage.get("raid_arrays") or [])]
+    raid_info = "阵列卡：{m}（{mode}）".format(m=fmt(raid.get("model")), mode=fmt(raid.get("mode")))
+    if raid.get("note"):
+        raid_info += " ｜ " + fmt(raid.get("note"))
+    vol_rows = [[fmt(v.get("mount")), fmt(v.get("fstype")), fmt(v.get("size")), fmt(v.get("used")),
+                 fmt(v.get("avail")), fmt(v.get("pcent"))] for v in (storage.get("volumes") or [])]
+    c_rows = []
+    for c in (docker.get("containers") or []):
+        c_rows.append([
+            fmt(c.get("name")), fmt(c.get("image")), fmt(c.get("status")), fmt(c.get("ports")),
+            (fmt(c.get("cpu"), " %") if c.get("cpu") is not None else "—"),
+            (fmt(c.get("mem_pct"), " %") if c.get("mem_pct") is not None else "—"),
+            (fmt(c.get("mem")) if c.get("mem") else "—"),
+            (f"{fmt(c.get('net_rx'))} / {fmt(c.get('net_tx'))}" if c.get("net_rx") is not None else "—"),
+        ])
+    topology = storage.get("topology", "") or ""
+
+    body = (
+        "<!doctype html><html lang='zh-CN'><head><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<title>nasdash 硬件健康报告</title><style>" + CSS + "</style></head><body>"
+        f"<h1 class='rep-title'>nasdash 硬件健康报告</h1>"
+        f"<p class='rep-sub'>报告类型：HTML ｜ 生成时间 <b>{esc(rep.get('generated_at'))}</b> ｜ "
+        f"版本 <b>{esc(rep.get('version'))}</b> ｜ 主机 <b>{esc(rep.get('host'))}</b> ｜ "
+        f"运行时长 <b>{esc(rep.get('uptime'))}</b></p>"
+        # 计算机摘要（AIDA64 风：顶部概览）
+        + cat("计算机摘要")
+        + props([
+            ["计算机名称", sys_.get("hostname")],
+            ["操作系统 / 运行时长", fmt(sys_.get("uptime"))],
+            ["nasdash 版本", rep.get("version")],
+            ["CPU 温度", fmt(sys_.get("cpu_temp"), " ℃")],
+            ["内存使用率", fmt(mem.get("percent"), " %")],
+            ["硬盘数量", f"{len(disks)} 块"],
+            ["阵列卡", ("已识别：" + fmt(raid.get("model"))) if raid.get("model") else "无"],
+            ["Docker 容器", f"{docker.get('running',0)} / {docker.get('total',0)} 运行中"],
+            ["风扇数量", f"{len(fans)} 个"],
+            ["活动告警", f"{len(alerts)} 项"],
+        ])
+        + cat("活动告警")
+        + alert_box
+        + cat("系统")
+        + props(sys_rows)
+        + cat("主板 / BIOS")
+        + props(board_rows)
+        + cat("内存")
+        + note(mem_summary)
+        + data(["插槽", "状态", "品牌", "制造商", "部件号", "容量", "类型", "频率"], mm_rows)
+        + cat("传感器 — 温度")
+        + data(["传感器", "当前", "上限", "临界"], temp_rows)
+        + cat("传感器 — 风扇")
+        + data(["风扇", "转速", "模式", "占空比"], fan_sens_rows)
+        + cat("传感器 — 电压")
+        + data(["电压", "值"], volt_rows)
+        + cat("风扇控制状态")
+        + data(["风扇", "转速", "当前占空比", "模式", "目标占空比", "电压"], fanctl_rows)
+        + cat("网卡")
+        + data(["名称", "状态", "MAC", "速率", "IP", "实时速率"], nic_rows)
+        + cat("硬盘 SMART")
+        + data(["设备", "品牌", "型号", "容量", "接口", "类型", "温度", "健康", "通电", "重映射", "待映射"], disk_rows)
+        + cat("阵列卡 / RAID")
+        + note(raid_info)
+        + data(["阵列", "级别", "状态", "容量", "成员盘"], raid_rows)
+        + cat("存储卷")
+        + data(["挂载点", "文件系统", "总容量", "已用", "可用", "使用率"], vol_rows)
+        + cat("Docker 容器")
+        + note(f"运行中 {docker.get('running',0)} / 共 {docker.get('total',0)}")
+        + data(["名称", "镜像", "状态", "端口", "CPU", "内存%", "内存", "网络 RX/TX"], c_rows)
+        + (cat("存储拓扑 (lsblk)")
+           + f"<div class='note'><pre style='margin:0;white-space:pre-wrap;font-family:Consolas,Menlo,monospace;font-size:12px'>{esc(topology)}</pre></div>"
+           if topology.strip() else "")
+        + "<div class='footer'>本报告由 nasdash 自动生成，仅供硬件健康参考。</div>"
+        "</body></html>"
+    )
+    return make_response(body, 200, {"Content-Type": "text/html; charset=utf-8"})
+
+@app.route("/api/alerts")
+def api_alerts():
+    cfg = _load_alerts()
+    system = get_system()
+    disks = get_disks()
+    docker = get_docker()
+    system_full = {**system, "board": get_board(), "memory_modules": get_memory_modules()}
+    alerts = _evaluate_alerts(system_full, disks, docker)
+    return jsonify({"config": cfg, "alerts": alerts, "evaluated_at": time.strftime("%Y-%m-%d %H:%M:%S"), "ok": True})
+
+@app.route("/api/alerts/config", methods=["GET"])
+def api_alerts_config_get():
+    return jsonify(_load_alerts())
+
+@app.route("/api/alerts/config", methods=["POST"])
+@require_admin()
+def api_alerts_config_set():
+    data = request.get_json(force=True, silent=True) or {}
+    cfg = _load_alerts()
+    if "enabled" in data:
+        cfg["enabled"] = bool(data["enabled"])
+    if "disk_health" in data:
+        cfg["disk_health"] = bool(data["disk_health"])
+    if "memory_max" in data:
+        try:
+            cfg["memory_max"] = float(data["memory_max"])
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "memory_max 需为数字"}), 400
+    if "temp" in data and isinstance(data["temp"], dict):
+        t = cfg["temp"]; nt = data["temp"]
+        for k in ("cpu_max", "mb_max", "disk_max"):
+            if k in nt:
+                try:
+                    t[k] = float(nt[k])
+                except (TypeError, ValueError):
+                    return jsonify({"ok": False, "error": k + " 需为数字"}), 400
+        if "enabled" in nt:
+            t["enabled"] = bool(nt["enabled"])
+    if "channels" in data and isinstance(data["channels"], dict):
+        ch = cfg["channels"]; nc = data["channels"]
+        for name in ("telegram", "bark", "email"):
+            if name in nc and isinstance(nc[name], dict):
+                cur = ch.get(name, {})
+                for fld in ("enabled", "bot_token", "chat_id", "url", "smtp_host", "smtp_port", "user", "pass", "to"):
+                    if fld in nc[name]:
+                        cur[fld] = nc[name][fld]
+                ch[name] = cur
+        if "system" in nc:
+            ch["system"] = bool(nc["system"])
+    if _save_alerts(cfg):
+        return jsonify({"ok": True, "config": cfg})
+    return jsonify({"ok": False, "error": "写配置失败"}), 500
+
+@app.route("/api/alerts/test", methods=["POST"])
+@require_admin()
+def api_alerts_test():
+    cfg = _load_alerts()
+    text = "这是一条来自 nasdash 的测试通知（当前版本 %s）。若收到说明通知渠道配置正确。" % APP_VERSION
+    res = _dispatch_notifications(text, cfg)
+    return jsonify({"ok": True, "results": res})
+
+@app.route("/api/report")
+def api_report():
+    fmt = request.args.get("format", "json")
+    rep = build_health_report()
+    if fmt == "html":
+        return _render_report_html(rep)
+    return jsonify(rep)
 
 # ===================== 前端 =====================
 def _serve_gateway(app, socket_path):

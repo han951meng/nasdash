@@ -258,13 +258,13 @@ def test_detect_storage_controllers_includes_non_whitelisted_vendor(monkeypatch)
         "01:00.0 RAID bus controller: Areca Technology Corp. ARC-1882 SAS/SATA RAID Controller\n"
         "02:00.0 Non-Volatile memory controller: Samsung Electronics Co Ltd NVMe SSD Controller\n"
     )
-    monkeypatch.setattr(app, "run", lambda cmd, *a, **k: out if "lspci" in cmd else "")
+    monkeypatch.setattr(app, "run_cmd", lambda cmd, *a, **k: out if "lspci" in cmd else "")
     cs = app.detect_storage_controllers()
     assert any("Areca" in c["model"] for c in cs)
     assert any(c["is_hba"] for c in cs)
     # 仍正确识别 MegaRAID
     mega_out = "03:00.0 RAID bus controller: Broadcom / LSI MegaRAID SAS 9271-8i\n"
-    monkeypatch.setattr(app, "run", lambda cmd, *a, **k: mega_out if "lspci" in cmd else "")
+    monkeypatch.setattr(app, "run_cmd", lambda cmd, *a, **k: mega_out if "lspci" in cmd else "")
     cs2 = app.detect_storage_controllers()
     assert cs2 and cs2[0]["is_megaraid"]
 
@@ -272,18 +272,17 @@ def test_detect_storage_controllers_includes_non_whitelisted_vendor(monkeypatch)
 # ---------------- 磁盘枚举（多位盘名 / 分区 / 控制器过滤） ----------------
 def test_get_disks_includes_multi_letter_sata_names(monkeypatch):
     # 验证 sdaa / sdab 等多位盘名不被漏掉（原 ls /dev/sd? 只匹配单字母）
-    sd_out = "sda\nsdaa\nsdab\nsdb\n"
-    nvme_out = "nvme0\nnvme0n1\nnvme0n1p1\n"
+    def fake_glob(pattern):
+        if pattern == "/dev/sd*":
+            return ["/dev/sda", "/dev/sdaa", "/dev/sdab", "/dev/sdb"]
+        if pattern == "/dev/nvme*":
+            return ["/dev/nvme0", "/dev/nvme0n1", "/dev/nvme0n1p1"]
+        return []
 
-    def fake_run(cmd, *a, **k):
-        if "ls /dev/sd" in cmd:
-            return sd_out
-        if "ls /dev/nvme" in cmd:
-            return nvme_out
-        return ""
-
-    monkeypatch.setattr(app, "run", fake_run)
-    monkeypatch.setattr(app, "sudo", lambda *a, **k: "")
+    monkeypatch.setattr(app.glob, "glob", fake_glob)
+    # lsblk / smartctl 在测试环境无真实硬件，返回空即可（代码已容错）
+    monkeypatch.setattr(app, "run_cmd", lambda *a, **k: "")
+    monkeypatch.setattr(app, "sudo_cmd", lambda *a, **k: "")
     disks = app.get_disks()
     devs = [d["dev"] for d in disks]
     assert "sdaa" in devs and "sdab" in devs
@@ -301,7 +300,7 @@ def test_fan_read_sys_temp_cpu_prefers_package(monkeypatch):
         },
         "it8620-isa-0290": {"temp1_input": 40.0},
     })
-    monkeypatch.setattr(app, "run", lambda cmd, *a, **k: sens if "sensors -j" in cmd else "")
+    monkeypatch.setattr(app, "run_cmd", lambda cmd, *a, **k: sens if (isinstance(cmd, (list, tuple)) and "sensors" in cmd) else "")
     assert app._fan_read_sys_temp("cpu") == 55.0
 
 
@@ -314,7 +313,7 @@ def test_fan_read_sys_temp_cpu_amd_tdie(monkeypatch):
         },
         "it8620-isa-0290": {"temp1_input": 35.0},
     })
-    monkeypatch.setattr(app, "run", lambda cmd, *a, **k: sens if "sensors -j" in cmd else "")
+    monkeypatch.setattr(app, "run_cmd", lambda cmd, *a, **k: sens if (isinstance(cmd, (list, tuple)) and "sensors" in cmd) else "")
     assert app._fan_read_sys_temp("cpu") == 62.0
 
 
@@ -323,5 +322,187 @@ def test_fan_read_sys_temp_mb_excludes_coretemp(monkeypatch):
         "coretemp-isa-0000": {"Package id 0": {"temp1_input": 70.0}},
         "it8620-isa-0290": {"temp1_input": 38.0, "temp2_input": 41.0},
     })
-    monkeypatch.setattr(app, "run", lambda cmd, *a, **k: sens if "sensors -j" in cmd else "")
+    monkeypatch.setattr(app, "run_cmd", lambda cmd, *a, **k: sens if (isinstance(cmd, (list, tuple)) and "sensors" in cmd) else "")
     assert app._fan_read_sys_temp("mb") == 41.0  # 主板温度取 it86 最高，不含 coretemp
+
+
+# ---------------- Docker 资源解析（v1.10.0） ----------------
+def test_docker_size_to_bytes():
+    assert app._docker_size_to_bytes("120MiB") == 120 * 1024 ** 2
+    assert app._docker_size_to_bytes("1.5kB") == int(1.5 * 1024)
+    assert app._docker_size_to_bytes("2GiB") == 2 * 1024 ** 3
+    assert app._docker_size_to_bytes("N/A") is None
+    assert app._docker_size_to_bytes("") is None
+
+def test_split_netio():
+    rx, tx = app._split_netio("1.2kB / 3.4kB")
+    assert rx == int(1.2 * 1024) and tx == int(3.4 * 1024)
+    rx, tx = app._split_netio("N/A")
+    assert rx is None and tx is None
+
+def test_parse_docker_pct():
+    assert app._parse_docker_pct("12.34%") == 12.34
+    assert app._parse_docker_pct("0.00%") == 0.0
+    assert app._parse_docker_pct("N/A") is None
+
+
+# ---------------- 风扇曲线编辑器（v1.13.0） ----------------
+def test_fan_curve_pwm_uses_curve():
+    cfg = {"min_pwm": 30, "max_pwm": 100, "start_temp": 40, "curve": [[40, 30], [60, 60], [80, 100]]}
+    # T=50 -> 40(30)..60(60) 中点 -> 45%
+    assert app._fan_curve_pwm(50, cfg, 30, 100) == round(45 / 100 * 255)
+
+def test_fan_curve_pwm_below_start_is_zero():
+    cfg = {"min_pwm": 30, "max_pwm": 100, "start_temp": 40, "curve": [[40, 30], [60, 60]]}
+    assert app._fan_curve_pwm(35, cfg, 30, 100) == 0
+
+def test_fan_curve_pwm_above_last_clamped():
+    cfg = {"min_pwm": 30, "max_pwm": 100, "start_temp": 40, "curve": [[40, 30], [60, 60]]}
+    assert app._fan_curve_pwm(90, cfg, 30, 100) == round(60 / 100 * 255)
+
+def test_fan_curve_pwm_no_curve_returns_none():
+    cfg = {"min_pwm": 30, "max_pwm": 100}
+    assert app._fan_curve_pwm(50, cfg, 30, 100) is None
+
+
+# ---------------- 控制与自动化：告警评估（v1.11.0） ----------------
+def test_evaluate_alerts_cpu_temp_triggers():
+    system = {"cpu_temp": 90, "memory": {"percent": 50}, "sensors": {"temps": []}}
+    alerts = app._evaluate_alerts(system, [])
+    assert any(a["title"] == "CPU 温度过高" for a in alerts)
+
+def test_evaluate_alerts_disk_health_triggers():
+    system = {"cpu_temp": 40, "memory": {"percent": 30}, "sensors": {"temps": []}}
+    disks = [{"dev": "/dev/sda", "temp": 35, "health": "FAILING", "health_ok": False}]
+    alerts = app._evaluate_alerts(system, disks)
+    assert any(a["title"] == "硬盘健康异常" for a in alerts)
+
+def test_evaluate_alerts_all_clear():
+    system = {"cpu_temp": 40, "memory": {"percent": 30}, "sensors": {"temps": []}}
+    disks = [{"dev": "/dev/sda", "temp": 35, "health": "OK", "health_ok": True}]
+    alerts = app._evaluate_alerts(system, disks)
+    assert alerts == []
+
+def test_evaluate_alerts_na_health_not_alarm():
+    # health=N/A 不算异常（SMART 不可用），不应误报
+    system = {"cpu_temp": 40, "memory": {"percent": 30}, "sensors": {"temps": []}}
+    disks = [{"dev": "/dev/sda", "temp": 35, "health": "N/A", "health_ok": False}]
+    alerts = app._evaluate_alerts(system, disks)
+    assert not any(a["title"] == "硬盘健康异常" for a in alerts)
+
+
+# ---------------- FanControlServer 接管/交还（v1.8.0 论坛建议）----------------
+def test_fan_stop_ext_service_calls_systemctl_and_pkill(monkeypatch):
+    calls = []
+    def fake_sudo(cmd, *a, **k):
+        calls.append(list(cmd)); return ""
+    monkeypatch.setattr(app, "sudo_cmd", fake_sudo)
+    app._fan_stop_ext_service()
+    assert ["systemctl", "stop", "pwm-fancontrol"] in calls
+    assert ["pkill", "-f", "pwm-fancontrol"] in calls
+
+def test_fan_start_ext_service_calls_systemctl_start(monkeypatch):
+    calls = []
+    def fake_sudo(cmd, *a, **k):
+        calls.append(list(cmd)); return ""
+    monkeypatch.setattr(app, "sudo_cmd", fake_sudo)
+    app._fan_start_ext_service()
+    assert ["systemctl", "start", "pwm-fancontrol"] in calls
+
+def test_fan_ext_service_helpers_survive_sudo_failure(monkeypatch):
+    def fake_sudo(cmd, *a, **k):
+        raise RuntimeError("no systemctl on this box")
+    monkeypatch.setattr(app, "sudo_cmd", fake_sudo)
+    # 必须不抛异常（best-effort）
+    app._fan_stop_ext_service()
+    app._fan_start_ext_service()
+
+
+# ---------------- FanControlServer 永久禁用 / 恢复（面板开关）----------------
+def test_fcs_disable_stops_disables_and_sets_flag(monkeypatch):
+    calls = []
+    flag = {}
+    monkeypatch.setattr(app, "sudo_cmd", lambda cmd, *a, **k: (calls.append(list(cmd)), "")[1])
+    monkeypatch.setattr(app, "_set_fcs_disabled", lambda v: flag.__setitem__("v", v))
+    app._fcs_disable()
+    assert ["systemctl", "disable", "--now", "pwm-fancontrol"] in calls
+    assert flag.get("v") is True
+
+def test_fcs_enable_enables_and_clears_flag(monkeypatch):
+    calls = []
+    flag = {}
+    monkeypatch.setattr(app, "sudo_cmd", lambda cmd, *a, **k: (calls.append(list(cmd)), "")[1])
+    monkeypatch.setattr(app, "_set_fcs_disabled", lambda v: flag.__setitem__("v", v))
+    app._fcs_enable()
+    assert ["systemctl", "enable", "--now", "pwm-fancontrol"] in calls
+    assert flag.get("v") is False
+
+def test_fan_start_respects_user_disabled(monkeypatch):
+    """用户永久禁用 FCS 后，nasdash 交还自动温控时不再把 FCS 拉起来。"""
+    calls = []
+    monkeypatch.setattr(app, "sudo_cmd", lambda cmd, *a, **k: (calls.append(list(cmd)), "")[1])
+    monkeypatch.setattr(app, "_fcs_disabled", lambda: True)
+    app._fan_start_ext_service()
+    assert calls == []
+
+def test_fcs_disable_survives_sudo_failure(monkeypatch):
+    """systemctl 异常也必须写下禁用标志，确保交还逻辑不再拉起 FCS。"""
+    def boom(*a, **k):
+        raise RuntimeError("no systemctl on this box")
+    flag = {}
+    monkeypatch.setattr(app, "sudo_cmd", boom)
+    monkeypatch.setattr(app, "_set_fcs_disabled", lambda v: flag.__setitem__("v", v))
+    app._fcs_disable()  # 不抛异常
+    assert flag.get("v") is True
+
+def test_fcs_status_shape(monkeypatch):
+    monkeypatch.setattr(app, "_fcs_installed_state", lambda: "enabled")
+    monkeypatch.setattr(app, "_fan_ext_service_running", lambda: True)
+    monkeypatch.setattr(app, "_fcs_disabled", lambda: False)
+    s = app._fcs_status()
+    assert s["installed"] is True and s["enabled"] is True
+    assert s["running"] is True and s["disabled_by_user"] is False
+    # 未安装：is-enabled 返回空串
+    monkeypatch.setattr(app, "_fcs_installed_state", lambda: "")
+    assert app._fcs_status()["installed"] is False
+
+def test_index_has_fcs_switch():
+    """前端风扇页应含 FCS 开关（状态加载 + 禁用/恢复动作）。"""
+    with open("templates/index.html", encoding="utf-8") as f:
+        html = f.read()
+    assert "loadFcsStatus" in html
+    assert "api/fan/fcs" in html
+    assert "永久禁用 pwm-fancontrol" in html
+
+
+def test_build_health_report_contains_all_sections():
+    """硬件健康报告应完整：含风扇状态、各采集模块章节齐全、HTML 可渲染。"""
+    rep = app.build_health_report()
+    # 顶层字段完整
+    for k in ("generated_at", "version", "host", "uptime", "raid", "disks",
+              "system", "storage", "docker", "fans", "alerts"):
+        assert k in rep, f"report 缺字段 {k}"
+    assert isinstance(rep["fans"], list)
+    # HTML 渲染包含所有章节标题（make_response 需请求上下文）
+    with app.app.test_request_context('/'):
+        html = app._render_report_html(rep).get_data(as_text=True)
+    for sec in ["计算机摘要", "活动告警", "系统", "主板 / BIOS", "内存", "传感器",
+                "风扇控制状态", "网卡", "硬盘 SMART", "阵列卡 / RAID",
+                "存储卷", "Docker 容器"]:
+        assert sec in html, f"报告缺章节 {sec}"
+    # AIDA64 风排版标记：分类栏 / 属性双列 / 数据表
+    assert "class='cat'" in html
+    assert "class='props'" in html
+    assert "class='data'" in html
+    # HTML 不应再用 window.open（改为下载文件，不在浏览器查看）
+    assert "window.open" not in html
+
+
+def test_get_fan_status_returns_list():
+    """get_fan_status 应返回列表且元素含关键字段（即使枚举为空也不崩）。"""
+    fans = app.get_fan_status()
+    assert isinstance(fans, list)
+    for f in fans:
+        for key in ("name", "rpm", "pwm", "mode"):
+            assert key in f
+

@@ -17,6 +17,8 @@
   .container{max-width:1600px;margin:0 auto;padding:20px;display:flex;gap:20px;align-items:flex-start}
   .sidebar{width:210px;flex:0 0 210px;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:8px;box-shadow:0 1px 3px rgba(0,0,0,.06);position:sticky;top:20px}
   .sidebar-title{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;padding:6px 10px 10px}
+  .sb-group{font-size:11px;color:var(--muted);padding:11px 10px 3px;letter-spacing:.5px;border-top:1px solid var(--border);margin-top:6px}
+  .sb-group:first-of-type{border-top:none;margin-top:0}
   .tabs{display:flex;flex-direction:column;gap:4px}
   .tab{width:100%;padding:12px 14px;text-align:left;cursor:pointer;border-radius:8px;font-size:14px;font-weight:500;color:var(--muted);transition:all .2s;border:none;background:none;display:flex;align-items:center;gap:10px}
   .tab:hover{background:#f3f4f6}
@@ -65,6 +67,8 @@
   .pill{display:inline-block;padding:1px 8px;border-radius:6px;font-size:11px;margin-left:6px}
   .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
   .grid-auto{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px}
+  .sys-grid{display:flex;flex-wrap:wrap;gap:14px;align-items:stretch}
+  .sys-grid .card{flex:1 1 280px;min-width:280px;max-width:100%;box-sizing:border-box;display:flex;flex-direction:column}
   .detect-title{font-size:22px;font-weight:700;margin-bottom:2px}
   .detect-sub{font-size:13px;color:var(--muted);margin-bottom:18px}
   .statusbar{display:flex;justify-content:space-between;align-items:center;background:var(--card);border:1px solid var(--border);border-radius:12px;padding:10px 18px;margin-bottom:20px;box-shadow:0 1px 3px rgba(0,0,0,.06)}
@@ -94,6 +98,7 @@
     .detect-cards,.cards{grid-template-columns:1fr;gap:12px}
     .detect-cards>*,.cards>*{grid-column:auto!important}
     .grid-2,.grid-auto{grid-template-columns:1fr}
+    .sys-grid .card{flex:1 1 100%;min-width:100%}
     .card{padding:14px}
     .kv{gap:8px}
     .kv .v{word-break:break-word;overflow-wrap:anywhere}
@@ -118,6 +123,14 @@
   .inp{padding:6px 8px;font-size:13px;border:1px solid var(--border);border-radius:6px;background:#fff;color:var(--text)}
   /* 风扇控制独立页面 */
   .fan-page{display:flex;flex-direction:column;gap:16px}
+  .fcs-card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px}
+  .fcs-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px}
+  .fcs-head b{font-size:14px;color:var(--text)}
+  .fcs-desc{font-size:12.5px;color:var(--muted);line-height:1.6;margin:6px 0 10px}
+  .fcs-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .fcs-msg{font-size:12.5px;color:var(--muted)}
+  .btn-mini.danger{border-color:#f0a3a3;color:#b91c1c;background:#fff5f5}
+  .btn-mini.danger:hover{background:#b91c1c;color:#fff;border-color:#b91c1c}
   .fan-presets{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:14px;background:var(--card);border:1px solid var(--border);border-radius:10px}
   .fan-presets .label{font-size:13px;color:var(--muted);margin-right:2px}
   .preset-btn{padding:8px 13px;font-size:13px;font-weight:600;border:1px solid var(--border);border-radius:8px;background:var(--bg);cursor:pointer;color:var(--text);transition:.15s}
@@ -183,6 +196,44 @@
   .update-banner a{color:#fff;text-decoration:underline;font-weight:700;white-space:nowrap}
   .update-banner .ub-close{background:rgba(255,255,255,.22);border:none;color:#fff;cursor:pointer;border-radius:6px;padding:3px 11px;font-size:13px}
   .update-banner .ub-close:hover{background:rgba(255,255,255,.35)}
+  /* 历史趋势时间范围切换 */
+  .seg{display:inline-flex;gap:6px;margin:2px 0 4px}
+  .seg-btn{background:var(--bg);color:var(--muted);border:1px solid var(--border);border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;transition:.15s}
+  .seg-btn:hover{color:var(--text)}
+  .seg-btn.active{background:var(--accent,#3a7afe);color:#fff;border-color:var(--accent,#3a7afe)}
+  /* 告警横幅 */
+  .alert-banner{display:none;align-items:flex-start;gap:12px;background:linear-gradient(135deg,#b91c1c,#ef4444);color:#fff;padding:11px 18px;border-radius:10px;margin-bottom:16px;box-shadow:0 2px 10px rgba(185,28,28,.28);font-size:14px;line-height:1.6}
+  .alert-banner.show{display:flex}
+  .alert-banner .ab-close{background:rgba(255,255,255,.22);border:none;color:#fff;cursor:pointer;border-radius:6px;padding:3px 11px;font-size:13px;margin-left:auto}
+  .alert-banner .ab-list{margin:0;padding-left:18px}
+  /* 控制与自动化（浅色主题，与全站 .card / .dt-field 一致） */
+  .auto-head{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;margin-bottom:16px;flex-wrap:wrap}
+  .auto-head h2{margin:0;font-size:18px;color:var(--text)}
+  .auto-head .auto-sub{font-size:12px;color:var(--muted);margin-top:3px}
+  .auto-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px 18px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.06)}
+  .auto-card h3{margin:0 0 14px;font-size:15px;color:var(--text);display:flex;align-items:center;gap:8px}
+  .auto-alerts{list-style:none;padding:0;margin:0}
+  .auto-alerts li{padding:9px 12px;border-radius:8px;margin-bottom:8px;font-size:13px;line-height:1.5;color:var(--text)}
+  .auto-alerts li.danger{background:rgba(239,68,68,.12);color:#b91c1c;border-left:3px solid #ef4444}
+  .auto-alerts li.warn{background:rgba(245,158,11,.15);color:#b45309;border-left:3px solid #f59e0b}
+  .auto-alerts li.ok{background:rgba(34,197,94,.1);color:#15803d;border-left:3px solid #22c55e}
+  .auto-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px}
+  .auto-field{display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--muted)}
+  .auto-field input[type=number],.auto-field input[type=text]{width:100%;padding:7px 9px;background:#fff;border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px}
+  .auto-field .unit{font-size:11px;color:var(--muted)}
+  .dt-toggle{display:flex;align-items:center;gap:8px;font-size:13px;margin:8px 0;cursor:pointer;color:var(--text)}
+  .dt-toggle input{width:16px;height:16px;accent-color:var(--accent,#3a7afe)}
+  .chan{background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:12px}
+  .chan h4{margin:0 0 10px;font-size:13px;color:var(--text);display:flex;align-items:center;gap:8px}
+  .chan-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}
+  .auto-actions{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap;align-items:center}
+  .dt-save-state{font-size:12px;color:var(--muted)}
+  .dt-save-state.ok{color:var(--green,#22c55e)}
+  /* 风扇曲线编辑器 */
+  .curve-presets{display:flex;gap:6px;margin:6px 0 10px;flex-wrap:wrap}
+  .curve-pt{display:flex;gap:6px;align-items:center;margin-bottom:6px}
+  .curve-pt input{width:80px}
+  .curve-canvas{width:100%;height:150px;background:var(--bg);border:1px solid var(--border);border-radius:8px;margin-top:8px;display:block}
 </style>
 </head>
 <body>
@@ -202,12 +253,17 @@
     <div class="sidebar-title">监控模块</div>
     <div class="tabs">
       <button class="tab active" onclick="switchTab('detect',this)">🔧 硬件配置检测</button>
+      <div class="sb-group">资源监控</div>
+      <button class="tab" onclick="switchTab('system',this)">📊 系统资源</button>
+      <button class="tab" onclick="switchTab('sys-hist',this)">📈 历史趋势</button>
+      <div class="sb-group">存储</div>
       <button class="tab" onclick="switchTab('raid',this)">💾 阵列卡</button>
       <button class="tab" onclick="switchTab('disks',this)">💿 硬盘 SMART</button>
-      <button class="tab" onclick="switchTab('system',this)">📊 系统资源</button>
-      <button class="tab" onclick="switchTab('fan',this)">🌀 风扇控制</button>
       <button class="tab" onclick="switchTab('storage',this)">🗄️ 存储卷</button>
+      <div class="sb-group">其他</div>
+      <button class="tab" onclick="switchTab('fan',this)">🌀 风扇控制</button>
       <button class="tab" onclick="switchTab('docker',this)">🐳 Docker</button>
+      <button class="tab" onclick="switchTab('automation',this)">🔔 控制与自动化</button>
     </div>
   </aside>
   <main class="content">
@@ -218,13 +274,19 @@
         <button class="ub-close" onclick="dismissUpdate()">✕</button>
       </div>
     </div>
+    <div id="alertBanner" class="alert-banner">
+      <div style="flex:1">⚠️ <span id="alertText"></span><ul class="ab-list" id="alertList"></ul></div>
+      <button class="ab-close" onclick="dismissAlerts()">✕</button>
+    </div>
     <div id="detect" class="panel active"><div class="loading">加载中…</div></div>
     <div id="raid" class="panel"><div class="loading">加载中…</div></div>
     <div id="disks" class="panel"><div class="loading">加载中…</div></div>
     <div id="system" class="panel"><div class="loading">加载中…</div></div>
+    <div id="sys-hist" class="panel"><div class="loading">加载中…</div></div>
     <div id="fan" class="panel"><div class="loading">加载中…</div></div>
     <div id="storage" class="panel"><div class="loading">加载中…</div></div>
     <div id="docker" class="panel"><div class="loading">加载中…</div></div>
+    <div id="automation" class="panel"><div class="loading">加载中…</div></div>
   </main>
 </div>
 
@@ -248,6 +310,9 @@ function switchTab(id, btn){
   document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
   btn.classList.add('active');
   document.getElementById(id).classList.add('active');
+  if(id==='sys-hist'){ initHistory(); loadHistory(); }  // 面板打开时才绘制，避免隐藏时宽度=0 画布空白
+  if(id==='automation'){ initAutomation(); }
+  if(id==='fan'){ drawCurve('dt'); drawCurve('st'); loadFcsStatus(); }  // 风扇面板打开后按真实宽度重绘曲线，避免隐藏时绘制的图被拉伸变形；并刷新 FCS 状态
 }
 function badge(ok, okText='正常', badText='异常'){
   return `<span class="badge ${ok?'b-ok':'b-bad'}">${ok?okText:badText}</span>`;
@@ -394,6 +459,12 @@ function renderDisks(disks){
 }
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function fmtSpeed(bps){
+  if(bps==null || isNaN(bps)) return '-';
+  if(bps < 1024) return bps.toFixed(0) + ' B/s';
+  if(bps < 1048576) return (bps/1024).toFixed(1) + ' KB/s';
+  return (bps/1048576).toFixed(2) + ' MB/s';
+}
 
 function renderSystem(s){
   let memPct = s.memory.percent;
@@ -416,9 +487,10 @@ function renderSystem(s){
     return `<div class="kv"><span class="k">${fanName}${voltBadge}${modeStr}</span><span class="v" style="color:${color}">${rpmStr}${pwmStr}</span></div>`;
   }).join('');
   let voltsHtml = (sens.voltages||[]).map(v=>`<div class="kv"><span class="k">${v.name}</span><span class="v">${v.value} V</span></div>`).join('');
+  let diskHtml = fmtDiskRows(DATA.diskio);
   let loadColor = (l)=>parseFloat(l)>s.cpu_threads?'var(--red)':parseFloat(l)>s.cpu_threads*0.7?'var(--orange)':'var(--green)';
   return `
-  <div class="grid-2">
+  <div class="sys-grid">
     <div class="card">
       <h3>负载</h3>
       <div class="kv"><span class="k">1 分钟</span><span class="v" style="color:${loadColor(s.load[0])}">${s.load[0]}</span></div>
@@ -433,8 +505,6 @@ function renderSystem(s){
       <div class="kv"><span class="k">可用</span><span class="v">${s.memory.available}</span></div>
       <div style="margin-top:8px"><div class="progress"><div class="progress-fill" style="width:${memPct}%;background:${memColor}">${memPct}%</div></div></div>
     </div>
-  </div>
-  <div class="grid-auto" style="margin-top:14px">
     <div class="card">
       <h3>温度传感器</h3>
       ${tempsHtml||'<div class="loading">无数据</div>'}
@@ -447,7 +517,18 @@ function renderSystem(s){
       <h3>电压</h3>
       ${voltsHtml||'<div class="loading">无数据</div>'}
     </div>
+    <div class="card">
+      <h3>磁盘 I/O</h3>
+      ${diskHtml||'<div class="loading">采样中…</div>'}
+    </div>
   </div>`;
+}
+
+function fmtDiskRows(diskio){
+  return (diskio||[]).map(d=>{
+    let label = [d.brand, d.model, d.size].filter(Boolean).join(' · ') || '';
+    return `<div class="kv"><span class="k">${esc(d.device)}${label?'<br><small style="color:var(--muted)">'+esc(label)+'</small>':''}</span><span class="v" style="font-size:12px">读${fmtSpeed(d.read_rate)} / 写${fmtSpeed(d.write_rate)}</span></div>`;
+  }).join('') || '<div class="loading">无数据</div>';
 }
 
 function renderFanControls(fans){
@@ -529,7 +610,59 @@ function renderFanControl(){
       <span class="fan-global-state" id="fan-global-state"></span>
     </div>
     <div class="fan-grid">${gridInner}</div>
+    <div class="card fcs-card" id="fcs-panel"><div class="loading">加载系统风扇服务状态…</div></div>
   </div>`;
+}
+// ===== 系统风扇服务（pwm-fancontrol）永久禁用 / 恢复 =====
+async function loadFcsStatus(){
+  let box=document.getElementById('fcs-panel');
+  // 风扇页为惰性渲染：switchTab 调本函数时 fcs-panel 可能尚未进 DOM。
+  // 不存在则短暂轮询等待，待 renderFans 生成该元素后再发请求（避免永久“加载中”）。
+  if(!box){ if((loadFcsStatus._r=(loadFcsStatus._r||0)+1)<=40) setTimeout(loadFcsStatus,200); return; }
+  loadFcsStatus._r=0;
+  let s;
+  try{
+    const ctrl=new AbortController();
+    const t=setTimeout(()=>ctrl.abort(),8000);
+    const r=await fetch('/api/fan/fcs',{signal:ctrl.signal});
+    clearTimeout(t);
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    s=await r.json();
+  }
+  catch(e){
+    if(box.dataset.fcsTried) { box.innerHTML='<div class="loading">系统风扇服务状态读取失败（请刷新页面重试）</div>'; return; }
+    box.dataset.fcsTried='1';
+    box.innerHTML='<div class="loading">读取超时，<a href="javascript:loadFcsStatus()">点此重试</a></div>';
+    return;
+  }
+  box.dataset.fcsTried='';
+  let pill, desc, actions;
+  if(!s.installed){
+    pill='<span class="pill" style="background:#e5e7eb;color:#6b7280">未检测到</span>';
+    desc='本机未检测到 fnOS 系统风扇服务（pwm-fancontrol），无需处理——nasdash 是唯一的风扇控制器。';
+    actions='';
+  }else if(s.disabled_by_user){
+    pill='<span class="pill" style="background:#fee2e2;color:#b91c1c">已永久禁用</span>';
+    desc='系统风扇服务（pwm-fancontrol）已被永久禁用（已停止且重启不再自启）。当前仅由 nasdash 管理风扇。如需恢复系统原生控温，可点下方按钮。';
+    actions='<button class="btn-mini" onclick="toggleFcs(\'enable\')">恢复 pwm-fancontrol</button>';
+  }else{
+    pill='<span class="pill" style="background:#dcfce7;color:#15803d">'+(s.running?'运行中':'已安装')+(s.enabled?' · 开机自启':'')+'</span>';
+    desc='nasdash 控速时会自动临时接管（停止 pwm-fancontrol），交还自动温控后再自动拉起，二者不冲突。若你确认永远只用 nasdash 管风扇，可永久禁用它（停止 + 关闭开机自启，重启不复活）。';
+    actions='<button class="btn-mini danger" onclick="toggleFcs(\'disable\')">永久禁用 pwm-fancontrol</button>';
+  }
+  box.innerHTML='<div class="fcs-head"><b>系统风扇服务（pwm-fancontrol）</b>'+pill+'</div>'
+    +'<p class="fcs-desc">'+desc+'</p>'
+    +'<div class="fcs-actions">'+actions+'<span class="fcs-msg" id="fcs-msg"></span></div>';
+}
+async function toggleFcs(action){
+  let msg=document.getElementById('fcs-msg');
+  if(action==='disable' && !confirm('确定永久禁用系统风扇服务（pwm-fancontrol）吗？\n将停止该服务并关闭开机自启（重启后不再启动），风扇改由 nasdash 独立管理。\n可随时点「恢复」还原。')) return;
+  if(msg) msg.textContent=(action==='disable'?'正在禁用…':'正在恢复…');
+  try{
+    let r=await (await fetch('/api/fan/fcs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action})})).json();
+    if(r.ok){ if(msg) msg.textContent='已'+(action==='disable'?'禁用':'恢复'); await loadFcsStatus(); }
+    else{ if(msg) msg.textContent='操作失败：'+(r.error||'未知错误'); }
+  }catch(e){ if(msg) msg.textContent='请求失败（需管理员登录）'; }
 }
 async function applyFanPreset(val){
   let gs=document.getElementById('fan-global-state');
@@ -722,6 +855,7 @@ function renderDiskTempPanel(){
         +'<label class="dt-toggle"><input type="checkbox" id="dt-sleep" checked> 监控盘全部休眠时停转风扇</label>'
       +'</div>'
     +'</div>'
+    + renderCurveEditor('dt')
     +'<div class="dt-actions">'
       +'<button class="btn-mini" id="dt-save" onclick="saveDiskTempConfig()">保存配置</button>'
       +'<span class="dt-live">当前计算目标占空比：<b id="dt-live-pwm">—</b></span>'
@@ -747,6 +881,7 @@ async function initDiskTemp(){
     var mn=document.getElementById('dt-min'); if(mn) mn.value=(c.min_pwm!=null?c.min_pwm:30);
     var mx=document.getElementById('dt-max'); if(mx) mx.value=(c.max_pwm!=null?c.max_pwm:100);
     var rc=document.getElementById('dt-recover'); if(rc) rc.value=(c.recover_temp!=null?c.recover_temp:35);
+    var cd=document.getElementById('dt-curve-data'); if(cd){ cd.value=JSON.stringify(c.curve||[]); renderCurvePoints('dt'); drawCurve('dt'); }
     var sl=document.getElementById('dt-sleep'); if(sl) sl.checked=(c.sleep_stop!==false);
     (c.disks||[]).forEach(function(dev){
       var shortDev=String(dev).replace(/^\/dev\//,'');
@@ -814,7 +949,7 @@ async function saveDiskTempConfig(){
   if(!(rec<start)){ if(st){ st.textContent='恢复自动温度须小于开转温度'; st.className='dt-save-state'; } return; }
   if(st){ st.textContent='保存中…'; st.className='dt-save-state'; }
   try{
-    var body={enabled:enabled,disks:devs,start_temp:start,full_temp:full,min_pwm:minp,max_pwm:maxp,recover_temp:rec,sleep_stop:sleep,controlled_fans:controlled_fans};
+    var body={enabled:enabled,disks:devs,start_temp:start,full_temp:full,min_pwm:minp,max_pwm:maxp,recover_temp:rec,sleep_stop:sleep,controlled_fans:controlled_fans,curve:readCurve('dt')};
     var r=await fetch('/api/fan/disk_temp',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     var j=await r.json();
     if(st){ st.textContent=j.ok?'已保存 ✓':'失败：'+(j.error||''); st.className=j.ok?'dt-save-state ok':'dt-save-state'; }
@@ -860,6 +995,7 @@ function renderSysTempPanel(){
         +'<div class="dt-field"><label>恢复自动温度</label><input type="number" id="st-recover" min="20" max="90" value="40"><span class="unit">°C</span></div>'
       +'</div>'
     +'</div>'
+    + renderCurveEditor('st')
     +'<div class="dt-actions">'
       +'<button class="btn-mini" id="st-save" onclick="saveSysTempConfig()">保存配置</button>'
       +'<span class="dt-live">当前<span id="st-src-label">CPU</span>温度：<b id="st-live-temp">—</b> · 计算目标占空比：<b id="st-live-pwm">—</b></span>'
@@ -889,6 +1025,7 @@ async function initSysTemp(){
     var mn=document.getElementById('st-min'); if(mn) mn.value=(c.min_pwm!=null?c.min_pwm:30);
     var mx=document.getElementById('st-max'); if(mx) mx.value=(c.max_pwm!=null?c.max_pwm:100);
     var rc=document.getElementById('st-recover'); if(rc) rc.value=(c.recover_temp!=null?c.recover_temp:40);
+    var cd=document.getElementById('st-curve-data'); if(cd){ cd.value=JSON.stringify(c.curve||[]); renderCurvePoints('st'); drawCurve('st'); }
     var cf=c.controlled_fans||'all';
     var fanCbs=document.querySelectorAll('.st-fan');
     if(cf==='all' && fanCbs.length){ fanCbs.forEach(function(cb){cb.checked=true;}); }
@@ -945,12 +1082,119 @@ async function saveSysTempConfig(){
   if(!(rec<start)){ if(st){ st.textContent='恢复自动温度须小于开转温度'; st.className='dt-save-state'; } return; }
   if(st){ st.textContent='保存中…'; st.className='dt-save-state'; }
   try{
-    var body={enabled:enabled,source:source,start_temp:start,full_temp:full,min_pwm:minp,max_pwm:maxp,recover_temp:rec,controlled_fans:controlled_fans};
+    var body={enabled:enabled,source:source,start_temp:start,full_temp:full,min_pwm:minp,max_pwm:maxp,recover_temp:rec,controlled_fans:controlled_fans,curve:readCurve('st')};
     var r=await fetch('/api/fan/sys_temp',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     var j=await r.json();
     if(st){ st.textContent=j.ok?'已保存 ✓':'失败：'+(j.error||''); st.className=j.ok?'dt-save-state ok':'dt-save-state'; }
     if(j.ok){ refreshSysTempPanel(); }
   }catch(e){ if(st){ st.textContent='请求失败'; st.className='dt-save-state'; } }
+}
+
+// ===== 风扇温度→PWM 曲线编辑器（自定义多点曲线 + 预设档）=====
+var CURVE_PRESETS={
+  silent:   [[30,20],[45,30],[60,45],[75,70]],
+  balanced: [[30,30],[45,45],[60,65],[75,90]],
+  perf:     [[30,45],[45,65],[60,85],[75,100]]
+};
+function renderCurveEditor(prefix){
+  return `<div class="dt-section">
+    <div class="dt-section-title">自定义温度→PWM 曲线 <span class="badge b-info">可选</span></div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:6px">不设置则使用上方「开转/全速」线性映射。设了曲线后，按曲线分段插值调速（点击预设一键生成，可再微调每个节点）。</div>
+    <div class="curve-presets">
+      <button class="preset-btn" onclick="applyCurvePreset('${prefix}','silent')">静音</button>
+      <button class="preset-btn" onclick="applyCurvePreset('${prefix}','balanced')">均衡</button>
+      <button class="preset-btn" onclick="applyCurvePreset('${prefix}','perf')">性能</button>
+      <button class="preset-btn" onclick="applyCurvePreset('${prefix}','clear')">清除曲线</button>
+    </div>
+    <input type="hidden" id="${prefix}-curve-data" value="[]">
+    <div id="${prefix}-curve-pts"></div>
+    <button class="btn-mini" onclick="addCurvePoint('${prefix}')">+ 添加节点</button>
+    <canvas id="${prefix}-curve-canvas" class="curve-canvas"></canvas>
+  </div>`;
+}
+function applyCurvePreset(prefix, kind){
+  var data=document.getElementById(prefix+'-curve-data'); if(!data) return;
+  var pts = kind==='clear' ? [] : (CURVE_PRESETS[kind]||[]).map(function(p){return p.slice();});
+  data.value=JSON.stringify(pts);
+  renderCurvePoints(prefix);
+  drawCurve(prefix);
+}
+function renderCurvePoints(prefix){
+  var data=document.getElementById(prefix+'-curve-data');
+  var box=document.getElementById(prefix+'-curve-pts');
+  if(!data||!box) return;
+  var pts=[]; try{ pts=JSON.parse(data.value||'[]'); }catch(e){}
+  if(!pts.length){ box.innerHTML='<div class="dt-empty" style="padding:6px">未设置曲线，使用线性映射</div>'; return; }
+  box.innerHTML=pts.map(function(p,i){
+    return '<div class="curve-pt"><input type="number" class="cp-temp" data-i="'+i+'" value="'+p[0]+'" min="20" max="95" step="1">°C'+
+           '<input type="number" class="cp-pwm" data-i="'+i+'" value="'+p[1]+'" min="0" max="100" step="1">%'+
+           '<button class="btn-mini" onclick="removeCurvePoint(\''+prefix+'\','+i+')">✕</button></div>';
+  }).join('');
+  box.querySelectorAll('input').forEach(function(inp){
+    inp.addEventListener('change', function(){
+      var i=parseInt(inp.dataset.i);
+      var tEl=box.querySelector('.cp-temp[data-i="'+i+'"]');
+      var pEl=box.querySelector('.cp-pwm[data-i="'+i+'"]');
+      try{
+        var arr=JSON.parse(data.value||'[]');
+        arr[i]=[parseFloat(tEl.value)||0, parseFloat(pEl.value)||0];
+        data.value=JSON.stringify(arr);
+      }catch(e){}
+      drawCurve(prefix);
+    });
+  });
+}
+function addCurvePoint(prefix){
+  var data=document.getElementById(prefix+'-curve-data'); if(!data) return;
+  var pts=[]; try{ pts=JSON.parse(data.value||'[]'); }catch(e){}
+  var last = pts.length ? pts[pts.length-1][0]+10 : 50;
+  if(last>92) last=92;
+  pts.push([last, 60]);
+  data.value=JSON.stringify(pts);
+  renderCurvePoints(prefix);
+  drawCurve(prefix);
+}
+function removeCurvePoint(prefix, i){
+  var data=document.getElementById(prefix+'-curve-data'); if(!data) return;
+  var pts=[]; try{ pts=JSON.parse(data.value||'[]'); }catch(e){}
+  if(i>=0 && i<pts.length) pts.splice(i,1);
+  data.value=JSON.stringify(pts);
+  renderCurvePoints(prefix);
+  drawCurve(prefix);
+}
+function readCurve(prefix){
+  try{ return JSON.parse(document.getElementById(prefix+'-curve-data').value||'[]'); }catch(e){ return []; }
+}
+function drawCurve(prefix){
+  var cv=document.getElementById(prefix+'-curve-canvas'); if(!cv) return;
+  var data=document.getElementById(prefix+'-curve-data'); if(!data) return;
+  var pts=[]; try{ pts=JSON.parse(data.value||'[]'); }catch(e){}
+  var dpr=window.devicePixelRatio||1;
+  var cssW=cv.clientWidth, cssH=cv.clientHeight;
+  if(!cssW||!cssH) return;   // 面板隐藏时 clientWidth=0，跳过绘制，避免用兜底尺寸画出被 CSS 拉伸变形的图
+  cv.width=Math.round(cssW*dpr); cv.height=Math.round(cssH*dpr);
+  var ctx=cv.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0); ctx.clearRect(0,0,cssW,cssH);
+  ctx.strokeStyle='rgba(128,128,128,.18)'; ctx.lineWidth=1;
+  ctx.strokeRect(22,10,cssW-32,cssH-30);
+  ctx.fillStyle='#8a93a6'; ctx.font='10px sans-serif';
+  ctx.fillText('PWM%',4,16); ctx.fillText('温度℃',cssW-44,cssH-4);
+  if(pts.length){
+    var minT=20,maxT=95;
+    var sorted=pts.slice().sort(function(a,b){return a[0]-b[0];});
+    ctx.strokeStyle='#4aa3ff'; ctx.lineWidth=2; ctx.beginPath();
+    sorted.forEach(function(p,i){
+      var x=22+(cssW-32)*((Math.min(Math.max(p[0],minT),maxT)-minT)/(maxT-minT));
+      var y=10+(cssH-30)*(1-p[1]/100);
+      i?ctx.lineTo(x,y):ctx.moveTo(x,y);
+    });
+    ctx.stroke();
+    ctx.fillStyle='#ff7a59';
+    sorted.forEach(function(p){
+      var x=22+(cssW-32)*((Math.min(Math.max(p[0],minT),maxT)-minT)/(maxT-minT));
+      var y=10+(cssH-30)*(1-p[1]/100);
+      ctx.beginPath(); ctx.arc(x,y,3,0,Math.PI*2); ctx.fill();
+    });
+  }
 }
 
 function showBoardEdit(){ let b=document.getElementById('boardEditBox'); if(b) b.style.display='block'; }
@@ -1086,7 +1330,14 @@ function renderDetect(D){
   let netCard = `
   <div class="card">
     <h3>网络</h3>
-    ${(s.nics||[]).map(n=>{let sc=n.state==='up'?'var(--green)':'var(--red)';let sp=n.speed?n.speed+' Mbps':'N/A';return `<div class="kv"><span class="k">${n.name}</span><span class="v">${n.ip||'无IP'} · ${sp} · <span style="color:${sc}">${n.state}</span></span></div>`;}).join('')||'<div class="loading">未检测到</div>'}
+    ${(s.nics||[]).map(n=>{
+      let sc=n.state==='up'?'var(--green)':'var(--red)';
+      let sp=n.speed?n.speed+' Mbps':'N/A';
+      let rx=(n.rx_rate!=null)?fmtSpeed(n.rx_rate):'—';
+      let tx=(n.tx_rate!=null)?fmtSpeed(n.tx_rate):'—';
+      return `<div class="kv"><span class="k">${n.name}</span><span class="v">${n.ip||'无IP'} · ${sp} · <span style="color:${sc}">${n.state}</span></span></div>
+              <div class="kv" style="padding-left:10px"><span class="k" style="color:var(--muted);font-size:12px">实时流量</span><span class="v" style="font-size:12px">↓ ${rx} / ↑ ${tx}</span></div>`;
+    }).join('')||'<div class="loading">未检测到</div>'}
   </div>`;
   let sysConfig = `
   <div class="detect-cards">
@@ -1189,18 +1440,208 @@ function renderDocker(dk){
     return `<tr>
       <td><span class="badge ${badge}">${stateTxt}</span></td>
       <td><b>${c.name}</b><br><span style="font-size:12px;color:var(--muted)">${c.image}</span></td>
-      <td style="white-space:nowrap">${mem}</td>
+      <td style="white-space:nowrap;text-align:right">${c.cpu!=null?c.cpu.toFixed(1)+'%':'—'}</td>
+      <td style="white-space:nowrap">${mem}${c.mem_pct!=null?'<br><small style="color:var(--muted)">'+c.mem_pct.toFixed(1)+'%</small>':''}</td>
+      <td style="font-size:12px;white-space:nowrap">↓${fmtSpeed(c.net_rx)}<br>↑${fmtSpeed(c.net_tx)}</td>
       <td style="font-size:12px">${ports}</td>
       <td style="font-size:12px;color:var(--muted)">${c.runtime}</td>
     </tr>`;
-  }).join('') : '<tr><td colspan="5" class="loading">未检测到 Docker / 无容器</td></tr>';
+  }).join('') : '<tr><td colspan="7" class="loading">未检测到 Docker / 无容器</td></tr>';
   let table = `
   <div class="section-title" style="margin-top:14px">容器列表</div>
   <div class="card">
-    <table class="table"><thead><tr><th>状态</th><th>名称 / 镜像</th><th>内存占用</th><th>端口映射</th><th>运行时长</th></tr></thead><tbody>${rows}</tbody></table>
+    <table class="table"><thead><tr><th>状态</th><th>名称 / 镜像</th><th>CPU</th><th>内存</th><th>网络 (↓收/↑发)</th><th>端口映射</th><th>运行时长</th></tr></thead><tbody>${rows}</tbody></table>
   </div>`;
   return head + table;
 }
+
+// ===================== 控制与自动化 =====================
+let AUTOMATION_INITED=false, autoTimer=null, lastAlerts=[];
+function renderAutomation(){
+  return `<div class="auto-head">
+    <div>
+      <h2>🔔 控制与自动化</h2>
+      <div class="auto-sub">温度 / 硬盘健康告警、外部通知与一键健康报告导出</div>
+    </div>
+    <button class="btn-mini" onclick="exportReport('html')">📄 导出健康报告</button>
+  </div>
+  <div class="auto-card">
+    <h3>🔍 活动告警 <span class="badge b-info">每 15 秒刷新</span></h3>
+    <ul class="auto-alerts" id="auto-alert-list"><li class="ok">加载中…</li></ul>
+  </div>
+  <div class="auto-card">
+    <h3>⚙️ 告警规则</h3>
+    <label class="dt-toggle"><input type="checkbox" id="au-enabled"> 启用告警监控</label>
+    <div class="auto-grid" style="margin:12px 0">
+      <div class="auto-field"><label>CPU 最高温度</label><input type="number" id="au-cpu-max" min="40" max="100" value="85"><span class="unit">°C</span></div>
+      <div class="auto-field"><label>主板/芯片组最高</label><input type="number" id="au-mb-max" min="40" max="100" value="75"><span class="unit">°C</span></div>
+      <div class="auto-field"><label>硬盘最高温度</label><input type="number" id="au-disk-max" min="30" max="90" value="60"><span class="unit">°C</span></div>
+      <div class="auto-field"><label>内存占用上限</label><input type="number" id="au-mem-max" min="50" max="100" value="90"><span class="unit">%</span></div>
+    </div>
+    <label class="dt-toggle"><input type="checkbox" id="au-temp-enabled"> 启用温度告警</label>
+    <label class="dt-toggle"><input type="checkbox" id="au-disk-health"> 启用硬盘健康告警（SMART pre-fail / 异常）</label>
+  </div>
+  <div class="auto-card">
+    <h3>📡 通知渠道</h3>
+    <label class="dt-toggle" style="margin-bottom:12px"><input type="checkbox" id="au-ch-system" checked> 面板内提示（始终记录到应用通知日志）</label>
+    <div class="chan">
+      <h4>✈️ Telegram</h4>
+      <label class="dt-toggle"><input type="checkbox" id="au-tg-en"> 启用</label>
+      <div class="chan-grid">
+        <div class="auto-field"><label>Bot Token</label><input type="text" id="au-tg-token" placeholder="123456:ABCdef..."></div>
+        <div class="auto-field"><label>Chat ID</label><input type="text" id="au-tg-chat" placeholder="123456789"></div>
+      </div>
+    </div>
+    <div class="chan">
+      <h4>🔔 Bark</h4>
+      <label class="dt-toggle"><input type="checkbox" id="au-bark-en"> 启用</label>
+      <div class="chan-grid"><div class="auto-field"><label>推送地址</label><input type="text" id="au-bark-url" placeholder="https://api.day.app/你的Key"></div></div>
+    </div>
+    <div class="chan">
+      <h4>📧 邮件 (SMTP)</h4>
+      <label class="dt-toggle"><input type="checkbox" id="au-em-en"> 启用</label>
+      <div class="chan-grid">
+        <div class="auto-field"><label>SMTP 服务器</label><input type="text" id="au-em-host" placeholder="smtp.qq.com"></div>
+        <div class="auto-field"><label>端口</label><input type="number" id="au-em-port" value="465"></div>
+        <div class="auto-field"><label>账号</label><input type="text" id="au-em-user"></div>
+        <div class="auto-field"><label>密码/授权码</label><input type="password" id="au-em-pass"></div>
+        <div class="auto-field"><label>接收地址</label><input type="text" id="au-em-to"></div>
+      </div>
+    </div>
+    <div class="auto-actions">
+      <button class="btn-mini" onclick="saveAutomationConfig()">💾 保存配置</button>
+      <button class="btn-mini" onclick="testNotify()">📤 发送测试通知</button>
+      <span id="au-save-state" class="dt-save-state"></span>
+    </div>
+  </div>
+  <div class="auto-card">
+    <h3>📊 一键健康报告</h3>
+    <div style="font-size:13px;color:var(--muted);margin-bottom:12px">汇总全部硬件状态与活动告警，导出供排查留档。JSON 可直接查看，HTML 为排版报告。</div>
+    <div class="auto-actions">
+      <button class="btn-mini" onclick="exportReport('json')">导出 JSON</button>
+      <button class="btn-mini" onclick="exportReport('html')">导出 HTML 报告</button>
+    </div>
+  </div>`;
+}
+async function loadAutomationConfig(){
+  try{
+    var r=await fetch('/api/alerts?_='+Date.now());
+    var j=await r.json();
+    fillAutomationConfig(j.config||{});
+    lastAlerts=j.alerts||[];
+    renderAutomationAlerts(lastAlerts);
+  }catch(e){}
+}
+function fillAutomationConfig(c){
+  c=c||{};
+  var el=document.getElementById('au-enabled'); if(el) el.checked=!!c.enabled;
+  var t=c.temp||{};
+  el=document.getElementById('au-temp-enabled'); if(el) el.checked=(t.enabled!==false);
+  el=document.getElementById('au-cpu-max'); if(el) el.value=(t.cpu_max!=null?t.cpu_max:85);
+  el=document.getElementById('au-mb-max'); if(el) el.value=(t.mb_max!=null?t.mb_max:75);
+  el=document.getElementById('au-disk-max'); if(el) el.value=(t.disk_max!=null?t.disk_max:60);
+  el=document.getElementById('au-disk-health'); if(el) el.checked=!!c.disk_health;
+  el=document.getElementById('au-mem-max'); if(el) el.value=(c.memory_max!=null?c.memory_max:90);
+  var ch=c.channels||{};
+  el=document.getElementById('au-ch-system'); if(el) el.checked=(ch.system!==false);
+  var tg=ch.telegram||{}; el=document.getElementById('au-tg-en'); if(el) el.checked=!!tg.enabled;
+  el=document.getElementById('au-tg-token'); if(el) el.value=(tg.bot_token||'');
+  el=document.getElementById('au-tg-chat'); if(el) el.value=(tg.chat_id||'');
+  var bk=ch.bark||{}; el=document.getElementById('au-bark-en'); if(el) el.checked=!!bk.enabled;
+  el=document.getElementById('au-bark-url'); if(el) el.value=(bk.url||'');
+  var em=ch.email||{}; el=document.getElementById('au-em-en'); if(el) el.checked=!!em.enabled;
+  el=document.getElementById('au-em-host'); if(el) el.value=(em.smtp_host||'');
+  el=document.getElementById('au-em-port'); if(el) el.value=(em.smtp_port!=null?em.smtp_port:465);
+  el=document.getElementById('au-em-user'); if(el) el.value=(em.user||'');
+  el=document.getElementById('au-em-pass'); if(el) el.value=(em.pass||'');
+  el=document.getElementById('au-em-to'); if(el) el.value=(em.to||'');
+}
+function renderAutomationAlerts(alerts){
+  var ul=document.getElementById('auto-alert-list');
+  if(!ul) return;
+  if(!alerts||!alerts.length){ ul.innerHTML='<li class="ok">✓ 当前无活动告警</li>'; return; }
+  ul.innerHTML=alerts.map(function(a){
+    return '<li class="'+(a.level==='danger'?'danger':'warn')+'"><b>'+esc(a.title)+'</b> — '+esc(a.detail)+'</li>';
+  }).join('');
+}
+async function initAutomation(){
+  var box=document.getElementById('automation');
+  if(!box) return;
+  box.innerHTML=renderAutomation();
+  await loadAutomationConfig();
+  if(autoTimer) clearInterval(autoTimer);
+  autoTimer=setInterval(refreshAutomationAlerts, 15000);
+}
+async function refreshAutomationAlerts(){
+  try{
+    var r=await fetch('/api/alerts?_='+Date.now());
+    var j=await r.json();
+    lastAlerts=j.alerts||[];
+    renderAutomationAlerts(lastAlerts);
+  }catch(e){}
+}
+async function saveAutomationConfig(){
+  var st=document.getElementById('au-save-state');
+  var g=function(id){var e=document.getElementById(id);return e?e.checked:false;};
+  var v=function(id){var e=document.getElementById(id);return e?e.value:'';};
+  var cfg={
+    enabled:g('au-enabled'),
+    disk_health:g('au-disk-health'),
+    memory_max:parseFloat(v('au-mem-max'))||90,
+    temp:{enabled:g('au-temp-enabled'), cpu_max:parseFloat(v('au-cpu-max'))||85, mb_max:parseFloat(v('au-mb-max'))||75, disk_max:parseFloat(v('au-disk-max'))||60},
+    channels:{
+      system:g('au-ch-system'),
+      telegram:{enabled:g('au-tg-en'), bot_token:v('au-tg-token'), chat_id:v('au-tg-chat')},
+      bark:{enabled:g('au-bark-en'), url:v('au-bark-url')},
+      email:{enabled:g('au-em-en'), smtp_host:v('au-em-host'), smtp_port:parseInt(v('au-em-port'))||465, user:v('au-em-user'), pass:v('au-em-pass'), to:v('au-em-to')}
+    }
+  };
+  if(st){ st.textContent='保存中…'; st.className='dt-save-state'; }
+  try{
+    var r=await fetch('/api/alerts/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});
+    var j=await r.json();
+    if(st){ st.textContent=j.ok?'已保存 ✓':'失败：'+(j.error||''); st.className=j.ok?'dt-save-state ok':'dt-save-state'; }
+  }catch(e){ if(st){ st.textContent='请求失败'; st.className='dt-save-state'; } }
+}
+async function testNotify(){
+  var st=document.getElementById('au-save-state');
+  if(st){ st.textContent='发送中…'; st.className='dt-save-state'; }
+  try{
+    var r=await fetch('/api/alerts/test',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+    var j=await r.json();
+    if(st){ st.textContent='已尝试（'+(JSON.stringify(j.results||{}))+'）'; st.className='dt-save-state ok'; }
+  }catch(e){ if(st){ st.textContent='请求失败'; st.className='dt-save-state'; } }
+}
+async function exportReport(fmt){
+  try{
+    var ts=new Date().toISOString().slice(0,19).replace(/[:T]/g,'-');
+    var r=await fetch('/api/report?format='+fmt+'&_='+Date.now());
+    if(fmt==='json'){
+      var j=await r.json();
+      var blob=new Blob([JSON.stringify(j,null,2)],{type:'application/json'});
+      var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='nasdash-report-'+ts+'.json'; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(function(){ URL.revokeObjectURL(a.href); }, 1000);
+    } else {
+      var html=await r.text();
+      var blob=new Blob([html],{type:'text/html;charset=utf-8'});
+      var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='nasdash-report-'+ts+'.html'; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(function(){ URL.revokeObjectURL(a.href); }, 1000);
+    }
+  }catch(e){ alert('导出失败：'+e); }
+}
+// 全局告警横幅
+let alertsDismissed=false;
+function showAlerts(alerts){
+  var banner=document.getElementById('alertBanner');
+  if(!banner) return;
+  alerts=alerts||[];
+  if(!alerts.length || alertsDismissed){ banner.classList.remove('show'); return; }
+  var txt=document.getElementById('alertText'); if(txt) txt.textContent='检测到 '+alerts.length+' 项告警：';
+  var ul=document.getElementById('alertList');
+  if(ul) ul.innerHTML=alerts.map(function(a){return '<li>'+esc(a.title)+'：'+esc(a.detail)+'</li>';}).join('');
+  banner.classList.add('show');
+}
+function dismissAlerts(){ alertsDismissed=true; var b=document.getElementById('alertBanner'); if(b) b.classList.remove('show'); }
 
 function renderAll(){
   if(!DATA) return;
@@ -1217,6 +1658,9 @@ function renderAll(){
   if(!_fanBusy){
     document.getElementById('fan').innerHTML = renderFanControl();
     bindFanSliders();
+    // 重渲染会把 fcs-panel 重置为静态“加载中”，必须重新拉取一次 FCS 状态，
+    // 否则首次轮询数据回来后卡片会永久卡在“加载系统风扇服务状态…”。
+    loadFcsStatus();
   }
   // 正在拖动滑块/编辑自定义占空比时跳过风扇页整页重建，避免打断操作；转速数值由 fetchFanStatus 每2秒刷新
   document.getElementById('storage').innerHTML = renderStorage(DATA.storage);
@@ -1224,6 +1668,83 @@ function renderAll(){
   document.getElementById('lastUpdate').textContent = '更新于 '+DATA.time+' ('+DATA.elapsed+'s)';
   initDiskTemp();
   initSysTemp();
+  showAlerts(DATA.alerts);
+}
+
+// ===================== 历史趋势图 =====================
+let histRange = '24h';
+let _histInited = false;
+function fmtTime(ts){
+  const d = new Date(ts);
+  const p = n => String(n).padStart(2,'0');
+  return `${p(d.getMonth()+1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+function getCSS(v){ return (getComputedStyle(document.documentElement).getPropertyValue(v)||'').trim(); }
+function initHistory(){
+  const box = document.getElementById('sys-hist');
+  if(box && !_histInited){
+    box.innerHTML = `
+      <div class="section-title">磁盘 I/O 历史趋势</div>
+      <div class="card">
+        <div class="seg">
+          <button class="seg-btn active" data-range="24h">24小时</button>
+          <button class="seg-btn" data-range="7d">7天</button>
+          <button class="seg-btn" data-range="30d">30天</button>
+        </div>
+        <canvas id="hist-canvas" style="width:100%;height:170px;margin-top:10px;display:block"></canvas>
+        <div style="font-size:12px;color:var(--muted);margin-top:6px">读 <span style="color:#4aa3ff">■</span> &nbsp; 写 <span style="color:#ff7a59">■</span> &nbsp; 速率自适应 B/s·KB/s·MB/s（数据自部署起累积，自动保留 30 天）</div>
+      </div>`;
+    box.querySelectorAll('.seg-btn').forEach(b=>{
+      b.onclick = ()=>{
+        box.querySelectorAll('.seg-btn').forEach(x=>x.classList.remove('active'));
+        b.classList.add('active');
+        histRange = b.dataset.range;
+        loadHistory();
+      };
+    });
+    _histInited = true;
+  }
+}
+function drawHist(d){
+  const cv = document.getElementById('hist-canvas');
+  if(!cv) return;
+  const pts = (d && d.points) || [];
+  const dpr = window.devicePixelRatio || 1;
+  const cssW = cv.clientWidth || 600, cssH = 170;
+  cv.width = Math.round(cssW*dpr); cv.height = Math.round(cssH*dpr);
+  const ctx = cv.getContext('2d');
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.clearRect(0,0,cssW,cssH);
+  const muted = getCSS('--muted') || '#8a93a6';
+  if(!pts.length){
+    ctx.fillStyle = muted; ctx.font='13px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText('暂无数据（需运行一段时间后才会有历史记录）', cssW/2, cssH/2);
+    return;
+  }
+  const maxV = Math.max(1, ...pts.map(p=>Math.max(p.disk_read||0, p.disk_write||0)));
+  const padL=46, padR=10, padT=10, padB=20;
+  const X = i => padL + (cssW-padL-padR)*(i/((pts.length-1)||1));
+  const Y = v => (cssH-padB) - (cssH-padB-padT)*(v/maxV);
+  ctx.strokeStyle='rgba(128,128,128,0.15)'; ctx.lineWidth=1;
+  ctx.fillStyle=muted; ctx.font='10px sans-serif'; ctx.textAlign='right'; ctx.textBaseline='middle';
+  for(let g=0; g<=3; g++){
+    const yy = padT + (cssH-padT-padB)*(g/3);
+    ctx.beginPath(); ctx.moveTo(padL, yy); ctx.lineTo(cssW-padR, yy); ctx.stroke();
+    ctx.fillText(fmtSpeed(maxV*(1-g/3)), padL-4, yy);
+  }
+  const line=(key,color)=>{ ctx.strokeStyle=color; ctx.lineWidth=1.6; ctx.beginPath(); pts.forEach((p,i)=>{ const xx=X(i), yy=Y(p[key]||0); i?ctx.lineTo(xx,yy):ctx.moveTo(xx,yy);}); ctx.stroke(); };
+  line('disk_read','#4aa3ff');
+  line('disk_write','#ff7a59');
+  ctx.fillStyle=muted; ctx.textBaseline='alphabetic';
+  ctx.textAlign='left'; ctx.fillText(fmtTime(pts[0].ts), padL, cssH-6);
+  ctx.textAlign='right'; ctx.fillText(fmtTime(pts[pts.length-1].ts), cssW-padR, cssH-6);
+}
+async function loadHistory(){
+  try{
+    let r = await fetch('/api/history?range='+histRange+'&_='+Date.now());
+    let d = await r.json();
+    drawHist(d);
+  }catch(e){}
 }
 
 async function loadData(){
@@ -1232,6 +1753,8 @@ async function loadData(){
     let r = await fetch('/api/all?_='+Date.now());
     DATA = await r.json();
     renderAll();
+    initHistory();
+    loadHistory();
   }catch(e){
     document.getElementById('lastUpdate').textContent = '加载失败: '+e;
   }
