@@ -4,11 +4,20 @@
 set -e
 cd "$(dirname "$0")"
 
+# 跨平台 md5：macOS 用 `md5 -q`，Linux 用 `md5sum`
+md5_of() {
+  if command -v md5 >/dev/null 2>&1; then
+    md5 -q "$1"
+  else
+    md5sum "$1" | awk '{print $1}'
+  fi
+}
+
 echo "=== verify.sh: 发版前一致性校验 ==="
 
-APP_MD5=$(md5 -q app.tgz)
+APP_MD5=$(md5_of app.tgz)
 MAN_MD5=$(grep '^checksum' manifest | awk -F'= ' '{print $2}' | tr -d ' ')
-FPK_MD5=$(tar -xzOf nasdash.fpk app.tgz 2>/dev/null | md5 -q)
+FPK_MD5=$(tar -xzOf nasdash.fpk app.tgz 2>/dev/null | md5_of /dev/stdin)
 echo "app.tgz md5      = $APP_MD5"
 echo "manifest checksum= $MAN_MD5"
 echo "fpk inner app.tgz= $FPK_MD5"
