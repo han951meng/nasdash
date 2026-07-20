@@ -25,13 +25,27 @@ print("manifest checksum ->", md5)
 PY
 
 # 3. 重建 fpk（图标为已生成的高清版，不进 app.tgz）
-#    注意：本版【恢复 wizard/ 打包】—— 安装/卸载各带一个向导页
-#    （install 安装说明 / uninstall 可选保留或删除配置数据）。
-#    代价：fpk 含 wizard 后，trim-cli(app-center) 装/卸都会报
-#    requires custom wizard parameters，CLI 标准自动部署流程失效，
-#    必须走飞牛应用中心 Web UI 或 SSH 手动带 wizard 参数安装。
-#    此为用户 2026-07-20 明确选定的方案 A。
-tar $TAR_FMT -czf nasdash.fpk app.tgz cmd config ICON.PNG ICON_256.PNG manifest wizard
+#    双模式（用户 2026-07-20 确认的工作流）：
+#      build.sh              → 默认【无向导 / wizard-free】，用于本地开发测试，
+#                              可直接走 trim-cli 一键部署 stop→uninstall→install-fpk→start。
+#      build.sh --with-wizard → 【带向导】，用于发布到 GitHub，
+#                              飞牛应用中心 Web UI 安装时显示安装说明页、卸载时可选保留/删除配置。
+#    关键：wizard 只在 fpk 根层（不进 app.tgz），故两种模式的 app.tgz / manifest / checksum
+#          完全一致，只是 fpk 根多/少一个 wizard/ 目录——发布版与测试版应用代码逐字节相同。
+WITH_WIZARD=0
+for _a in "$@"; do
+  case "$_a" in
+    --with-wizard) WITH_WIZARD=1 ;;
+  esac
+done
+
+if [ "$WITH_WIZARD" = "1" ]; then
+  tar $TAR_FMT -czf nasdash.fpk app.tgz cmd config ICON.PNG ICON_256.PNG manifest wizard
+  echo "[build] 含 wizard/（发布版，供 Web UI 安装/卸载向导页）"
+else
+  tar $TAR_FMT -czf nasdash.fpk app.tgz cmd config ICON.PNG ICON_256.PNG manifest
+  echo "[build] 无 wizard/（测试版，可 trim-cli 一键部署）"
+fi
 
 ls -la nasdash.fpk app.tgz
 

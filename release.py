@@ -9,7 +9,7 @@
   1. 校验新版本号大于当前版本号
   2. 更新 manifest: version / changelog(开头插入) / desc(插入新的「更新亮点」块到最前)
   3. 更新 README.md: 当前版本行 + 更新日志插入 ### vX.Y.Z 小节
-  4. 调用 build.sh 重建 fpk 并跑 verify.sh
+  4. 调用 build.sh --with-wizard 重建【带向导发布版】fpk 并跑 verify.sh
 发版后的 commit/tag/push/Release 由你手动执行（见末尾提示）。
 """
 import re
@@ -93,8 +93,8 @@ if len(_secs) > README_KEEP:
 
 open(RD, "w", encoding="utf-8").write(r)
 
-print("manifest / README 已更新，开始重建 fpk ...")
-subprocess.check_call(["bash", "build.sh"])
+print("manifest / README 已更新，开始重建【带向导发布版】fpk ...")
+subprocess.check_call(["bash", "build.sh", "--with-wizard"])
 
 print(f"\n发版准备完成：{NEWV}")
 print("后续手动步骤：")
