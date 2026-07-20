@@ -25,6 +25,9 @@
   .tab.active{background:var(--blue);color:#fff}
   .content{flex:1;min-width:0}
   .panel{display:none}
+  /* 移动端抽屉导航（桌面隐藏，仅手机显示汉堡按钮） */
+  .menu-toggle{display:none}
+  .nav-overlay{display:none;position:fixed;inset:0;background:rgba(15,23,42,.4);z-index:45}
   .panel.active{display:block}
   .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}
   .card{background:var(--card);border-radius:10px;padding:16px;box-shadow:0 1px 3px rgba(0,0,0,.06);border:1px solid var(--border)}
@@ -90,8 +93,12 @@
     .header h1{font-size:18px}
     .meta{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
     .container{flex-direction:column;padding:12px 14px 20px;gap:14px}
-    .sidebar{width:100%;flex:auto;position:static}
-    .content{min-width:0}
+    .menu-toggle{display:inline-flex;align-items:center;gap:6px}
+    .nav-overlay.show{display:block}
+    .sidebar{position:fixed;top:0;left:0;bottom:0;height:100%;width:248px;max-width:80vw;background:var(--card);transform:translateX(-100%);transition:transform .25s ease;z-index:50;border-radius:0;overflow-y:auto;box-shadow:2px 0 14px rgba(0,0,0,.2);padding:10px}
+    .sidebar.open{transform:translateX(0)}
+    .content{width:100%;min-width:0}
+    html,body{overflow-x:hidden}
     .statusbar{flex-direction:column;align-items:stretch;gap:10px;padding:12px 14px;margin-bottom:14px}
     .status-right{flex-wrap:wrap;width:100%;gap:12px 18px}
     .status-item{min-width:42%}
@@ -104,7 +111,7 @@
     .kv .v{word-break:break-word;overflow-wrap:anywhere}
     .detect-title{font-size:18px}
     .detect-sub{margin-bottom:12px}
-    .table{font-size:12px}
+    .table{font-size:12px;display:block;overflow-x:auto;max-width:100%}
     .table th,.table td{padding:7px 8px}
   }
   .fan-ctrl-wrap{margin-top:10px;border-top:1px dashed var(--border);padding-top:10px}
@@ -170,11 +177,12 @@
   .dt-section-title{font-size:13px;font-weight:600;color:var(--muted);margin-bottom:10px;display:flex;align-items:center;gap:8px}
   .dt-section-title .count{font-size:11px;color:var(--blue);background:var(--bg);padding:2px 8px;border-radius:10px;border:1px solid var(--border)}
   .dt-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px}
-  .dt-opt{display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--bg);border:1px solid var(--border);border-radius:8px;cursor:pointer;transition:.15s}
+  .dt-opt{display:flex;align-items:flex-start;gap:8px;padding:8px 10px;background:var(--bg);border:1px solid var(--border);border-radius:8px;cursor:pointer;transition:.15s}
   .dt-opt:hover{border-color:var(--blue)}
-  .dt-opt input[type=checkbox]{margin:0;accent-color:var(--blue);flex-shrink:0}
-  .dt-opt .dt-name{font-size:13px;font-weight:500;color:var(--text);flex:1}
-  .dt-opt .dt-meta{font-size:11px;color:var(--muted);white-space:nowrap}
+  .dt-opt input[type=checkbox]{margin:0;margin-top:2px;accent-color:var(--blue);flex-shrink:0}
+  .dt-opt .dt-txt{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}
+  .dt-opt .dt-name{font-size:13px;font-weight:500;color:var(--text);word-break:break-all;line-height:1.35}
+  .dt-opt .dt-meta{font-size:11px;color:var(--muted);white-space:normal;word-break:break-word;line-height:1.4}
   .dt-empty{padding:18px;text-align:center;color:var(--muted);font-size:13px;background:var(--bg);border:1px dashed var(--border);border-radius:8px}
   .dt-thresholds{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px}
   .dt-field{display:flex;align-items:center;gap:8px;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 12px}
@@ -240,6 +248,7 @@
 <div class="header">
   <h1>🖥️ 飞牛 NAS 硬件监控</h1>
   <div class="meta">
+    <button class="btn menu-toggle" id="menuToggle" onclick="toggleSidebar()">☰ 模块</button>
     <span id="lastUpdate">加载中…</span>
     <span><span class="spinner" id="spin"></span></span>
     <label class="switch"><input type="checkbox" id="autoRefresh"><span class="slider"></span>自动刷新</label>
@@ -249,7 +258,7 @@
 </div>
 
 <div class="container">
-  <aside class="sidebar">
+  <aside class="sidebar" id="sidebar">
     <div class="sidebar-title">监控模块</div>
     <div class="tabs">
       <button class="tab active" onclick="switchTab('detect',this)">🔧 硬件配置检测</button>
@@ -289,6 +298,7 @@
     <div id="automation" class="panel"><div class="loading">加载中…</div></div>
   </main>
 </div>
+<div class="nav-overlay" id="navOverlay" onclick="closeSidebar()"></div>
 
 <script>
 // 统一网关适配：页面位于 /app/{appname} 路径下时，自动为所有绝对根路径 fetch 补上前缀；
@@ -305,6 +315,17 @@
   };
 })();
 let DATA=null, timer=null;
+// 移动端：抽屉式侧栏开合（桌面端 .menu-toggle 隐藏，此函数无副作用）
+function toggleSidebar(){
+  var s=document.getElementById('sidebar'), o=document.getElementById('navOverlay');
+  var open=s.classList.toggle('open');
+  if(o) o.classList.toggle('show', open);
+}
+function closeSidebar(){
+  var s=document.getElementById('sidebar'), o=document.getElementById('navOverlay');
+  if(s) s.classList.remove('open');
+  if(o) o.classList.remove('show');
+}
 function switchTab(id, btn){
   document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
   document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
@@ -313,6 +334,7 @@ function switchTab(id, btn){
   if(id==='sys-hist'){ initHistory(); }  // 面板打开时才初始化，避免隐藏时宽度=0 画布空白
   if(id==='automation'){ initAutomation(); }
   refreshPanel(id);  // 切换导航即拉取该板块最新数据（点哪个刷哪个）
+  closeSidebar();  // 手机端选完模块自动收起抽屉
 }
 // 当前处于激活状态的板块 id（无独立状态变量，直接从 DOM 读取，最鲁棒）
 function currentTab(){ var p=document.querySelector('.panel.active'); return p?p.id:'detect'; }
@@ -870,7 +892,7 @@ function renderDiskTempPanel(){
       var id='dt-fan-'+f.hwmon+'-'+f.idx;
       var label=esc((f.label||f.name||('风扇'+f.idx))).replace(/</g,'&lt;');
       var meta=(f.rpm||0)+' RPM';
-      return '<label class="dt-opt" for="'+id+'"><input type="checkbox" class="dt-fan" id="'+id+'" data-hwmon="'+f.hwmon+'" data-idx="'+f.idx+'"> <span class="dt-name">'+label+'</span><span class="dt-meta">'+meta+'</span></label>';
+      return '<label class="dt-opt" for="'+id+'"><input type="checkbox" class="dt-fan" id="'+id+'" data-hwmon="'+f.hwmon+'" data-idx="'+f.idx+'"> <span class="dt-txt"><span class="dt-name">'+label+'</span><span class="dt-meta">'+meta+'</span></span></label>';
     }).join('');
   }else{
     fanOptsHtml='<div class="dt-empty">未检测到可调控风扇</div>';
@@ -882,7 +904,7 @@ function renderDiskTempPanel(){
       var name=esc(shortDev);
       var meta='';
       if(d.model||d.vendor) meta=esc((d.vendor||'')+' '+(d.model||'')).trim();
-      return '<label class="dt-opt" for="'+id+'"><input type="checkbox" class="dt-disk" id="'+id+'" value="'+d.dev+'"> <span class="dt-name">'+name+'</span><span class="dt-meta" id="dt-temp-'+shortDev+'">'+(meta?meta:'')+'</span></label>';
+      return '<label class="dt-opt" for="'+id+'"><input type="checkbox" class="dt-disk" id="'+id+'" value="'+d.dev+'"> <span class="dt-txt"><span class="dt-name">'+name+'</span><span class="dt-meta" id="dt-temp-'+shortDev+'">'+(meta?meta:'')+'</span></span></label>';
     }).join('');
   }else{
     diskOptsHtml='<div class="dt-empty">未检测到硬盘</div>';
