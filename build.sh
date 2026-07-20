@@ -25,10 +25,13 @@ print("manifest checksum ->", md5)
 PY
 
 # 3. 重建 fpk（图标为已生成的高清版，不进 app.tgz）
-#    注意：不打包 wizard/ —— fnOS 的 trim-cli(app-center) 只要 fpk 含 wizard
-#    就拒绝 install/uninstall（报 requires custom wizard parameters），导致 CLI 标准
-#    部署流程完全走不通。去掉后 CLI 装/卸全通。安装说明文字请见 README / manifest desc。
-tar $TAR_FMT -czf nasdash.fpk app.tgz cmd config ICON.PNG ICON_256.PNG manifest
+#    注意：本版【恢复 wizard/ 打包】—— 安装/卸载各带一个向导页
+#    （install 安装说明 / uninstall 可选保留或删除配置数据）。
+#    代价：fpk 含 wizard 后，trim-cli(app-center) 装/卸都会报
+#    requires custom wizard parameters，CLI 标准自动部署流程失效，
+#    必须走飞牛应用中心 Web UI 或 SSH 手动带 wizard 参数安装。
+#    此为用户 2026-07-20 明确选定的方案 A。
+tar $TAR_FMT -czf nasdash.fpk app.tgz cmd config ICON.PNG ICON_256.PNG manifest wizard
 
 ls -la nasdash.fpk app.tgz
 
