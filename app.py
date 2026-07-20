@@ -441,6 +441,25 @@ def _fcs_enable():
         pass
     return ok
 
+# ===================== 风扇模式持久化（启动自动恢复，避免重启后全速）=====================
+# 按 idx（非 hwmon 路径）持久化，抗 hwmon 跨重启漂移。结构：{str(idx): {"mode":"auto"|"manual", "target":0-255}}
+FAN_MODE_FILE = os.path.join(_config_dir(), "fan_mode.json")
+
+def _load_fan_modes():
+    return _load_json_file(FAN_MODE_FILE, {})
+
+def _save_fan_modes(modes):
+    return _save_json_file(FAN_MODE_FILE, modes)
+
+def _save_fan_mode(idx, mode, target):
+    """用户经 UI 设过某风扇模式后调用，持久化以便重启自动恢复。"""
+    try:
+        modes = _load_fan_modes()
+        modes[str(int(idx))] = {"mode": mode, "target": (int(target) if target is not None else None)}
+        _save_fan_modes(modes)
+    except Exception:
+        pass
+
 def _fan_read_cpu_temp():
     try:
         out = run_cmd(["sensors", "-j"], 5)
@@ -485,6 +504,7 @@ def _fan_auto_pwm(cpu_temp):
     return max(76, min(178, raw))
 
 def _fan_smooth_step(hwmon, idx, target):
+    _fan_set_enable(hwmon, idx, 1)   # 接管写 pwm 前确保软件控（enable=1）；否则硬件 enable=2 时写 pwm 被内核忽略→全速
     cur = _fan_read_raw(hwmon, idx)
     if cur is None:
         return
@@ -558,10 +578,91 @@ def _select_temp_fans(all_fans, sys_cfg, disk_cfg):
             disk_claimed.add((hwmon, idx))
     return sys_claimed, disk_claimed
 
+def _restore_fan_modes():
+    """nasdash 启动后自动恢复风扇模式，避免重启后 FAN_TARGETS 空导致风扇保持硬件全速：
+    - 有持久化配置：按用户上次选择恢复（auto 接管；若 FCS 在控则交还 enable=2；manual 恢复固定值）。
+    - 无配置（首次/清配置）：若系统风扇服务 FCS 未在控，默认将所有可控风扇设为 auto 接管，
+      消除开机全速；若 FCS 在控则交还、不强行接管（尊重 fnOS 原生控温）。"""
+    try:
+        enum = _enumerate_fans()
+        idx2hw = {i: h for (h, i) in enum}
+        if not idx2hw:
+            return
+        fcs = _fan_ext_service_running()
+        modes = _load_fan_modes()
+        if not modes:
+            # 首次/无配置：FCS 未控则默认接管 auto；FCS 在控则交还、不抢
+            if not fcs:
+                for idx, hwmon in idx2hw.items():
+                    with FAN_LOCK:
+                        FAN_TARGETS[(hwmon, idx)] = {"mode": "auto", "target": None}
+            else:
+                for idx, hwmon in idx2hw.items():
+                    try:
+                        with open(f"{hwmon}/pwm{idx}_enable", "w") as f:
+                            f.write("2")
+                    except Exception:
+                        pass
+            return
+        # 已有配置：按用户上次选择恢复
+        for sidx, m in modes.items():
+            try:
+                idx = int(sidx)
+            except Exception:
+                continue
+            if idx not in idx2hw:
+                continue
+            hwmon = idx2hw[idx]
+            mode = m.get("mode")
+            if mode == "auto":
+                if fcs:
+                    try:
+                        with open(f"{hwmon}/pwm{idx}_enable", "w") as f:
+                            f.write("2")
+                    except Exception:
+                        pass
+                else:
+                    with FAN_LOCK:
+                        FAN_TARGETS[(hwmon, idx)] = {"mode": "auto", "target": None}
+            elif mode == "manual":
+                tgt = m.get("target")
+                if tgt is None:
+                    continue
+                with FAN_LOCK:
+                    FAN_TARGETS[(hwmon, idx)] = {"mode": "manual", "target": int(tgt)}
+        # 配置未列出、但本机枚举到的可控风扇（启动期 hwmon 晚注册 / 新装风扇），
+        # 默认接管为 auto（FCS 未控时），避免留下「失控 / 开机狂转」的风扇。
+        if not fcs:
+            for idx, hwmon in idx2hw.items():
+                with FAN_LOCK:
+                    if (hwmon, idx) not in FAN_TARGETS:
+                        FAN_TARGETS[(hwmon, idx)] = {"mode": "auto", "target": None}
+    except Exception:
+        pass
+
+def _fan_ensure_all_claimed():
+    """每轮兜底：把枚举到的、尚未被接管的可控风扇默认设为 auto 接管。
+    解决硬重启时序（hwmon 晚于 nasdash 自启注册、启动期枚举不全）与 fan_mode.json 不完整
+    导致的「部分风扇失控、开机狂转」。已显式设为 manual 的风扇在 FAN_TARGETS 中会被跳过，不被覆盖。"""
+    try:
+        if _fan_ext_service_running():
+            return
+        enum = _enumerate_fans()
+        with FAN_LOCK:
+            for (hwmon, idx) in enum:
+                if (hwmon, idx) not in FAN_TARGETS:
+                    FAN_TARGETS[(hwmon, idx)] = {"mode": "auto", "target": None}
+    except Exception:
+        pass
+
 def fan_smooth_loop():
     # daemon 线程：每 ~0.6s 把风扇当前 pwm 朝目标平滑过渡（常驻线程 tick + 缓变）
     while True:
         try:
+            # 自愈：每轮确保本机枚举到的每个可控风扇都被接管为 auto（除非用户显式设为 manual）。
+            # 解决硬重启时序（hwmon 晚于 nasdash 自启注册、启动期枚举不全）与 fan_mode.json 不完整
+            # 导致的「部分风扇失控、开机狂转」。FCS 在控时不抢（交还原生控温）。
+            _fan_ensure_all_claimed()
             with FAN_LOCK:
                 overrides = dict(FAN_TARGETS)   # 每风扇手动/自动覆盖（仅用户经 UI 调过的风扇）
             all_fans = _enumerate_fans()          # 本机真实风扇全集（it87/nct）
@@ -612,6 +713,7 @@ def fan_smooth_loop():
             pass
         time.sleep(0.6)
 
+_restore_fan_modes()   # 启动即恢复风扇模式（或首次默认接管自动控温），避免重启后全速
 _fan_thread = _threading.Thread(target=fan_smooth_loop, daemon=True, name="fan-smooth")
 _fan_thread.start()
 
@@ -901,14 +1003,23 @@ def _fan_disk_temp_pwm(states, cfg):
 # 硬盘温控滞回状态：None=未初始化, True=nasdash 接管控速, False=已交还主板自动
 _dt_engaged = {"v": None}
 
-def _fan_release_auto(hwmon, idx):
-    """把风扇交还主板/内核自动控速（pwm_enable=2）。FCS 若存在会重新接管。"""
+_FAN_ENABLE_CACHE = {}   # (hwmon, idx) -> 上次写入的 pwm_enable 值，避免每个 tick 重复写 sysfs
+def _fan_set_enable(hwmon, idx, val):
+    """设置 pwm_enable：1=软件接管控速（nasdash 写 pwm 生效）；2=交还主板/内核自动。带缓存，值不变则不写。"""
+    key = (hwmon, idx)
+    if _FAN_ENABLE_CACHE.get(key) == val:
+        return True
     try:
         with open(f"{hwmon}/pwm{idx}_enable", "w") as f:
-            f.write("2")
+            f.write(str(val))
+        _FAN_ENABLE_CACHE[key] = val
         return True
     except Exception:
         return False
+
+def _fan_release_auto(hwmon, idx):
+    """把风扇交还主板/内核自动控速（pwm_enable=2）。FCS 若存在会重新接管。"""
+    return _fan_set_enable(hwmon, idx, 2)
 
 def _fan_disk_temp_decision(states, cfg):
     """硬盘温控滞回状态机。返回 (action, pwm)：
@@ -2562,10 +2673,12 @@ def api_fan_set():
                 pass
             with FAN_LOCK:
                 FAN_TARGETS.pop(key, None)
+            _save_fan_mode(idx, "auto", None)
             return jsonify({"ok": True, "mode": "auto", "owner": "ext_service"})
         # 系统风扇服务未运行：nasdash 自带保守温控曲线接管
         with FAN_LOCK:
             FAN_TARGETS[key] = {"mode": "auto", "target": None}
+        _save_fan_mode(idx, "auto", None)
         return jsonify({"ok": True, "mode": "auto", "owner": "nasdash"})
     try:
         pct = int(pwm)
@@ -2577,6 +2690,7 @@ def api_fan_set():
     # 仅设为目标值，由缓变线程平滑过渡（不再瞬间写 255，避免突然全速）
     with FAN_LOCK:
         FAN_TARGETS[key] = {"mode": "manual", "target": raw}
+    _save_fan_mode(idx, "manual", raw)
     return jsonify({"ok": True, "mode": "manual", "pwm": pct, "raw": raw})
 
 

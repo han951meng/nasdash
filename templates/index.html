@@ -552,7 +552,15 @@ function renderFanControls(fans){
 // ===== 风扇控制独立页面（预设档位 + 实时转速卡片）=====
 let FAN_LIST=[];
 let SHOW_HIDDEN_FANS=false;
-function toggleShowHiddenFans(){ SHOW_HIDDEN_FANS=!SHOW_HIDDEN_FANS; if(typeof loadData==='function'){ loadData(); } }
+// 仅重渲染风扇面板（本地缓存 DATA，无需全量 loadData，避免点击「显示/隐藏通道」时卡顿等待整页刷新）
+function refreshFanPanel(){
+  let box=document.getElementById('fan');
+  if(!box) return;
+  box.innerHTML=renderFanControl();
+  bindFanSliders();
+  loadFcsStatus();   // 重渲染会重置 fcs-panel 为「加载中」，需重新拉取
+}
+function toggleShowHiddenFans(){ SHOW_HIDDEN_FANS=!SHOW_HIDDEN_FANS; refreshFanPanel(); }
 function renderFanControl(){
   let allFans=(DATA.system&&DATA.system.sensors&&DATA.system.sensors.fans||[]).filter(f=>f.controllable);
   let hiddenCount=allFans.filter(f=>f.hidden).length;
@@ -780,8 +788,12 @@ async function toggleFanHidden(hwmon, idx, hide){
     let k=hwmon+'::'+idx; let e=cur[k]||{};
     e.hidden=!!hide; cur[k]=e;
     await fetch('/api/fan/labels',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cur)});
+    // 本地即时更新缓存并重渲染面板，避免走全量 loadData 导致点击后卡顿等待整页刷新
+    if(DATA && DATA.system && DATA.system.sensors && DATA.system.sensors.fans){
+      DATA.system.sensors.fans.forEach(f=>{ if(f.hwmon===hwmon && f.idx===idx) f.hidden=!!hide; });
+    }
     if(!hide){ SHOW_HIDDEN_FANS=true; }  // 取消隐藏后确保该风扇仍可见
-    if(typeof loadData==='function'){ loadData(); }
+    refreshFanPanel();
   }catch(e){}
 }
 function bindFanSliders(){
