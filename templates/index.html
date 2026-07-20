@@ -312,7 +312,7 @@ function switchTab(id, btn){
   document.getElementById(id).classList.add('active');
   if(id==='sys-hist'){ initHistory(); }  // 面板打开时才初始化，避免隐藏时宽度=0 画布空白
   if(id==='automation'){ initAutomation(); }
-  refreshPanel(id);  // 方案B：切换导航即拉取该板块最新数据（点哪个刷哪个）
+  refreshPanel(id);  // 切换导航即拉取该板块最新数据（点哪个刷哪个）
 }
 // 当前处于激活状态的板块 id（无独立状态变量，直接从 DOM 读取，最鲁棒）
 function currentTab(){ var p=document.querySelector('.panel.active'); return p?p.id:'detect'; }
@@ -1819,7 +1819,7 @@ async function loadData(){
   document.getElementById('spin').style.display='none';
 }
 
-// 方案B：定时刷新只刷「当前正在看的板块」，不再每 30s 全量 /api/all
+// 定时刷新只刷「当前正在看的板块」，不再每 30s 全量 /api/all
 function autoRefreshTick(){ refreshPanel(currentTab()); }
 var ar = document.getElementById('autoRefresh');
 ar.addEventListener('change', function(){

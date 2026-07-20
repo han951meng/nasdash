@@ -2594,7 +2594,7 @@ def api_all():
         result = {"error": str(e), "time": time.strftime("%Y-%m-%d %H:%M:%S")}
     return jsonify(result)
 
-# ===================== 按板块独立接口（方案B：切换导航只拉当前板块，避免全量 /api/all）=====================
+# ===================== 按板块独立接口（切换导航只拉当前板块，避免全量 /api/all）=====================
 def _panel_time():
     return time.strftime("%Y-%m-%d %H:%M:%S")
 
