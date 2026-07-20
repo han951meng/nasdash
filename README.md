@@ -1,6 +1,6 @@
 # nasdash
 
-**当前版本：v1.8.1** · [下载最新 fpk](https://github.com/han951meng/nasdash/releases/latest)
+**当前版本：v1.8.2** · [下载最新 fpk](https://github.com/han951meng/nasdash/releases/latest)
 
 飞牛OS（fnOS）NAS 硬件监控面板 —— FPK 应用包
 
@@ -180,6 +180,10 @@
 > 本应用仅在以上硬件完成完整实测；其他主板/阵列卡组合功能可能不同，欢迎在 Issues 反馈。
 
 ## 更新日志
+
+### v1.8.2
+- 性能优化：切换导航只刷新当前板块，重型采集(阵列卡/SMART)加缓存，大幅减少全量刷新卡顿
+
 
 ### v1.8.1
 - 风扇开机自动接管含CPU风扇修复；隐藏通道切换卡顿已修复

@@ -1189,6 +1189,7 @@ def _parse_roc_temp(text):
     return int(m.group(1)) if m else None
 
 
+@_ttl_cache(12)
 def get_raid_card():
     data = {"ok": False, "mode": "none", "model": "未检测到",
             "drives": [], "raw": "", "note": "", "controllers": []}
@@ -1415,6 +1416,7 @@ def parse_nvme_smart(text):
     d["data_units_written"] = (m.group(1) + (m.group(2) or "")).strip() if m else None
     return d
 
+@_ttl_cache(12)
 def get_disks():
     """采集所有块设备 + SMART（SD/SAS 用 ls /dev/sd*，NVMe 用 ls /dev/nvme*；再用正则过滤掉分区/控制器，
     支持多位盘名 sdaa/sdab 与多控制器 nvme10n1 等；smartctl 拿详情，不依赖 lsblk 字段对齐）"""
@@ -2591,6 +2593,65 @@ def api_all():
     except Exception as e:
         result = {"error": str(e), "time": time.strftime("%Y-%m-%d %H:%M:%S")}
     return jsonify(result)
+
+# ===================== 按板块独立接口（方案B：切换导航只拉当前板块，避免全量 /api/all）=====================
+def _panel_time():
+    return time.strftime("%Y-%m-%d %H:%M:%S")
+
+@app.route("/api/system")
+def api_system():
+    """系统资源板块（CPU/内存/温度/风扇/GPU/网卡 + 主板/内存条），供 #system 与 #fan 按需刷新。"""
+    t0 = time.time()
+    try:
+        try:
+            board = get_board()
+        except Exception:
+            board = {"manufacturer": "", "product": "", "version": ""}
+        try:
+            memory_modules = get_memory_modules()
+        except Exception:
+            memory_modules = {"modules": [], "total_gb": 0, "slots": 0, "brand_summary": ""}
+        system = {**get_system(), "board": board, "memory_modules": memory_modules}
+        return jsonify({"system": system, "time": _panel_time(), "elapsed": round(time.time() - t0, 2)})
+    except Exception as e:
+        return jsonify({"error": str(e), "time": _panel_time()})
+
+@app.route("/api/raid")
+def api_raid():
+    """阵列卡板块。#raid 渲染同时依赖 raid + disks，故一并返回（两者均带 12s 缓存）。"""
+    t0 = time.time()
+    try:
+        return jsonify({"raid": get_raid_card(), "disks": get_disks(),
+                        "time": _panel_time(), "elapsed": round(time.time() - t0, 2)})
+    except Exception as e:
+        return jsonify({"error": str(e), "time": _panel_time()})
+
+@app.route("/api/disks")
+def api_disks():
+    """硬盘 SMART 板块。"""
+    t0 = time.time()
+    try:
+        return jsonify({"disks": get_disks(), "time": _panel_time(), "elapsed": round(time.time() - t0, 2)})
+    except Exception as e:
+        return jsonify({"error": str(e), "time": _panel_time()})
+
+@app.route("/api/storage")
+def api_storage():
+    """存储卷板块（mdadm/lsblk/df，均为本地快速命令）。"""
+    t0 = time.time()
+    try:
+        return jsonify({"storage": get_storage(), "time": _panel_time(), "elapsed": round(time.time() - t0, 2)})
+    except Exception as e:
+        return jsonify({"error": str(e), "time": _panel_time()})
+
+@app.route("/api/docker")
+def api_docker():
+    """Docker 容器板块。"""
+    t0 = time.time()
+    try:
+        return jsonify({"docker": get_docker(), "time": _panel_time(), "elapsed": round(time.time() - t0, 2)})
+    except Exception as e:
+        return jsonify({"error": str(e), "time": _panel_time()})
 
 @app.route("/api/metrics")
 def api_metrics():

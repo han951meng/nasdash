@@ -310,9 +310,55 @@ function switchTab(id, btn){
   document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
   btn.classList.add('active');
   document.getElementById(id).classList.add('active');
-  if(id==='sys-hist'){ initHistory(); loadHistory(); }  // 面板打开时才绘制，避免隐藏时宽度=0 画布空白
+  if(id==='sys-hist'){ initHistory(); }  // 面板打开时才初始化，避免隐藏时宽度=0 画布空白
   if(id==='automation'){ initAutomation(); }
-  if(id==='fan'){ drawCurve('dt'); drawCurve('st'); loadFcsStatus(); }  // 风扇面板打开后按真实宽度重绘曲线，避免隐藏时绘制的图被拉伸变形；并刷新 FCS 状态
+  refreshPanel(id);  // 方案B：切换导航即拉取该板块最新数据（点哪个刷哪个）
+}
+// 当前处于激活状态的板块 id（无独立状态变量，直接从 DOM 读取，最鲁棒）
+function currentTab(){ var p=document.querySelector('.panel.active'); return p?p.id:'detect'; }
+// 按板块拉取 → 合并进全局 DATA → 只重渲该板块，避免每次都全量 /api/all
+var PANEL_ENDPOINT={system:'/api/system', fan:'/api/system', raid:'/api/raid', disks:'/api/disks', storage:'/api/storage', docker:'/api/docker'};
+async function refreshPanel(id){
+  if(!DATA){ return; }  // 首屏尚未 loadData 完成时不介入
+  var spin=document.getElementById('spin'); if(spin) spin.style.display='inline-block';
+  try{
+    if(id==='detect'){ // 硬件配置检测是全局概览，需要所有数据 → 走全量
+      var rr=await fetch('/api/all?_='+Date.now()); DATA=await rr.json(); renderAll(); return;
+    }
+    if(id==='sys-hist'){ loadHistory(); return; }
+    if(id==='automation'){ if(typeof refreshAutomationAlerts==='function') refreshAutomationAlerts(); return; }
+    var url=PANEL_ENDPOINT[id];
+    if(!url) return;
+    var r=await fetch(url+'?_='+Date.now());
+    var d=await r.json();
+    if(!d || d.error) return;
+    if(d.system!==undefined) DATA.system=d.system;
+    if(d.raid!==undefined) DATA.raid=d.raid;
+    if(d.disks!==undefined) DATA.disks=d.disks;
+    if(d.storage!==undefined) DATA.storage=d.storage;
+    if(d.docker!==undefined) DATA.docker=d.docker;
+    if(d.time) DATA.time=d.time;
+    if(d.elapsed!==undefined) DATA.elapsed=d.elapsed;
+    renderPanel(id);
+  }catch(e){}
+  finally{ if(spin) spin.style.display='none'; }
+}
+// 只重渲指定板块（不碰其他面板 DOM）
+function renderPanel(id){
+  if(!DATA || DATA.error) return;
+  if(id==='raid'){ document.getElementById('raid').innerHTML=renderRaid(DATA.raid, DATA.disks); }
+  else if(id==='disks'){ document.getElementById('disks').innerHTML=renderDisks(DATA.disks); }
+  else if(id==='system'){ document.getElementById('system').innerHTML=renderSystem(DATA.system); }
+  else if(id==='storage'){ document.getElementById('storage').innerHTML=renderStorage(DATA.storage); }
+  else if(id==='docker'){ document.getElementById('docker').innerHTML=renderDocker(DATA.docker); }
+  else if(id==='fan'){
+    // 正在拖动滑块/编辑占空比时跳过整页重建，避免打断操作（转速数值由 fetchFanStatus 每2秒刷新）
+    var _fa=document.activeElement;
+    var _busy=_fa&&(_fa.classList.contains('fan-slider')||_fa.classList.contains('fan-custom-input'));
+    if(!_busy){ refreshFanPanel(); initDiskTemp(); initSysTemp(); drawCurve('dt'); drawCurve('st'); }
+  }
+  var lu=document.getElementById('lastUpdate');
+  if(lu && DATA.time) lu.textContent='更新于 '+DATA.time+(DATA.elapsed!==undefined?' ('+DATA.elapsed+'s)':'');
 }
 function badge(ok, okText='正常', badText='异常'){
   return `<span class="badge ${ok?'b-ok':'b-bad'}">${ok?okText:badText}</span>`;
@@ -1773,20 +1819,22 @@ async function loadData(){
   document.getElementById('spin').style.display='none';
 }
 
+// 方案B：定时刷新只刷「当前正在看的板块」，不再每 30s 全量 /api/all
+function autoRefreshTick(){ refreshPanel(currentTab()); }
 var ar = document.getElementById('autoRefresh');
 ar.addEventListener('change', function(){
-  if(this.checked){ timer=setInterval(loadData, 30000); }
+  if(this.checked){ timer=setInterval(autoRefreshTick, 30000); }
   else if(timer){ clearInterval(timer); timer=null; }
   try{ localStorage.setItem('nasdash_autorefresh', this.checked ? '1':'0'); }catch(e){}
 });
 try{
   if(localStorage.getItem('nasdash_autorefresh') === '1'){
     ar.checked = true;
-    timer = setInterval(loadData, 30000);
+    timer = setInterval(autoRefreshTick, 30000);
   }
 }catch(e){}
 
-loadData();
+loadData();  // 首屏仍全量拉取一次，打底填充所有板块 DATA
 
 // ---------- 检测新版本 ----------
 let updateDismissed = false;
