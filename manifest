@@ -19,4 +19,4 @@ service_port          = 9800
 checkport             = false
 disable_authorization_path = true
 changelog             = 1.8.1: 风扇开机自动接管含CPU风扇修复；隐藏通道切换卡顿已修复 1.8.0: 磁盘I/O监控(每盘读写速率自适应+品牌型号容量)；历史趋势图(24h/7d/30d自动保留30天)；风扇曲线编辑器(温度→PWM多点+静音/均衡/性能预设)；Docker每容器CPU%/内存/网络RX-TX/端口映射；控制与自动化(温度/硬盘健康告警+面板提示/Telegram/Bark/邮件+一键JSON/HTML健康报告)；版本自检(面板显示当前/最新)；网卡实时↓收↑发速率；系统风扇服务安全接管(接管时停pwm-fancontrol交还后重启+面板一键永久禁用/恢复)；健康报告完整版+AIDA64排版+可下载；布局/浅色主题/画布变形修复/安装说明重排；FCS状态卡renderAll重渲染修复+前端超时保底
-checksum              = 02d4a942373e72ff32239803f6c45772
+checksum              = 13f04583255b178eec5c0e3a54e5eaf8
