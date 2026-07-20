@@ -1,6 +1,6 @@
 # nasdash
 
-**当前版本：v1.8.4** · [下载最新 fpk](https://github.com/han951meng/nasdash/releases/latest)
+**当前版本：v1.8.5** · [下载最新 fpk](https://github.com/han951meng/nasdash/releases/latest)
 
 飞牛OS（fnOS）NAS 硬件监控面板 —— FPK 应用包
 
@@ -16,8 +16,8 @@
 ### 安装步骤
 1. 下载 `nasdash.fpk`（GitHub Releases 或项目附件）
 2. 打开飞牛OS **应用中心 → 右上角「+ 手动安装」**，上传 `nasdash.fpk`
-3. 按向导确认，**依赖自动安装**：smartmontools / lm-sensors / mdadm / Flask / dmidecode / i2c-tools
-4. 安装完成后，桌面出现「NAS硬件监控」图标，点击即可打开；或浏览器访问 `http://NAS_IP:9800`
+3. 确认安装（无向导步骤），**依赖自动安装**：smartmontools / lm-sensors / mdadm / Flask / dmidecode / i2c-tools
+4. 安装完成后，桌面出现「NAS硬件监控」图标，点击即可打开（经飞牛统一网关，需登录飞牛账号）
 
 > **storcli 已随包内置**：LSI MegaRAID / HBA 直通卡用户无需从 Broadcom 官网手动下载，安装即自动落地到 `/opt/MegaRAID/storcli` 并建软链。
 > 旧版手动装过依赖的机器：直接覆盖安装即可，`install_callback` 会跳过已装工具。
@@ -181,6 +181,10 @@
 
 ## 更新日志
 
+### v1.8.5
+- 修复应用中心更新日志不显示的问题
+
+
 ### v1.8.4
 - 移动端适配(抽屉式导航+宽表横向滚动)与风扇页硬盘名称竖排堆叠显示修复
 
@@ -195,17 +199,3 @@
 
 ### v1.8.1
 - 风扇开机自动接管含CPU风扇修复；隐藏通道切换卡顿已修复
-
-
-### v1.8.0
-- **磁盘 I/O 监控**：每块盘实时读/写速率（B/s·KB/s·MB/s 自适应）+ 品牌/型号/容量标识
-- **历史趋势图**：磁盘 I/O 折线图，支持 24h / 7d / 30d 范围切换，SQLite 本地存储自动保留 30 天
-- **风扇曲线编辑器**：自定义「温度→PWM」多点曲线 + 静音/均衡/性能一键预设，持久化到 @appdata
-- **Docker 容器详细监控**：每容器 CPU 占用率、内存占用（字节+百分比）、网络 RX/TX 速率、端口映射、运行时长
-- **控制与自动化**：温度/硬盘健康告警（面板提示 + 可选 Telegram/Bark/邮件），一键导出 JSON / HTML 健康报告
-- **版本自检**：面板显示「当前 / 最新」版本与更新提示
-- **网卡实时速率**：硬件配置检测内直接显示每块网卡 ↓收/↑发速率
-- **FanControlServer 安全接管**：nasdash 接管风扇时自动停止 FCS，全部交还自动温控后自动重启，规避两者抢写 PWM 的冲突
-- **健康报告升级**：完整版硬件状态 + 活动告警；HTML 采用 AIDA64 风格排版（深蓝分类栏/属性表/数据表/计算机摘要/可打印），JSON/HTML 均支持下载保存
-- **布局与体验优化**：卡片 flex 自适应；移除首页与侧栏重复的版本提示、移除突兀的网络吞吐/CPU 功耗实验卡片；控制与自动化面板改浅色主题；修复风扇曲线空图变形；安装说明重排
-- **Bug 修复**：补 `make_response` 导入；修正 Docker 网络速率 `_split_netio` 解析；历史测试 monkeypatch 适配；系统风扇服务名对齐（代码原假设 `fancontrolserver`→真机实测为 `pwm-fancontrol`，oneshot 一次性服务）；FCS 状态卡「一直加载中」真因修复（`renderAll` 每 30s 重渲染风扇页后未重调 `loadFcsStatus`，现已补调）；FCS 加载加 DOM 就绪轮询 + 8s 超时保底；首页 `/` 加 `Cache-Control: no-store` 防发版后浏览器看到旧面板

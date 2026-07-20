@@ -47,15 +47,25 @@ s = re.sub(r"^version\s*=\s*\S+", f"version               = {NEW}", s, flags=re.
 # 2) manifest changelog：在开头插入 NEW:
 s = re.sub(r"^changelog\s*=\s*", f"changelog             = {NEW}: {HEAD} ", s, flags=re.M)
 
-# 3) manifest desc：在第一个「更新亮点」块前插入新块
-new_block = f"<p><b>{NEWV} 更新亮点</b></p><ul><li>{HEAD}</li></ul>"
-s = re.sub(r"<p><b>v[^<]*?更新亮点</b></p>", new_block + r"\g<0>", s, count=1)
-
-# 3a) 裁剪 desc：只保留最近 DESC_KEEP 个「更新亮点」块（连续位于 desc 末尾）
-_blocks = list(re.finditer(r"<p><b>v[\d.]+\s*更新亮点</b></p><ul>.*?</ul>", s))
-if len(_blocks) > DESC_KEEP:
-    for m in reversed(_blocks[DESC_KEEP:]):
-        s = s[:m.start()] + s[m.end():]
+# 3) manifest desc：用哨兵注释维护「最近更新」区块（应用中心介绍可见），保留 DESC_KEEP 条。
+#    旧版靠正则匹配「更新亮点」块插入，一旦 desc 被手工重写删掉该块，正则永远失配、更新日志再也不会进 desc。
+#    现改为在 desc 末尾用 <!--APP_CHANGELOG_START/END--> 哨兵包裹，每次发版由 changelog 字段重算生成，幂等可靠。
+CL_START = "<!--APP_CHANGELOG_START-->"
+CL_END = "<!--APP_CHANGELOG_END-->"
+_cl = re.search(r"^changelog\s*=\s*(.*)$", s, re.M)
+_cl_val = _cl.group(1) if _cl else ""
+_cl_entries = re.split(r"\s+(?=\d+\.\d+\.\d+:)", _cl_val.strip())[:DESC_KEEP]
+_cl_items = "".join(
+    f"<li><b>{e.split(':', 1)[0]}</b> {e.split(':', 1)[1].strip()}</li>"
+    for e in _cl_entries if e.strip()
+)
+_cl_block = f"{CL_START}<p><b>最近更新</b></p><ul>{_cl_items}</ul>{CL_END}"
+if CL_START in s:
+    s = re.sub(re.escape(CL_START) + r".*?" + re.escape(CL_END), _cl_block, s, flags=re.S)
+else:
+    s = re.sub(r"(^desc\s*=\s*)(.*)$", lambda m: f"{m.group(1)}{m.group(2)}{_cl_block}", s, flags=re.M)
+# 防御：清理旧版「更新亮点」块（若存在）
+s = re.sub(r"<p><b>v[\d.]+\s*更新亮点</b></p><ul>.*?</ul>", "", s)
 
 # 3b) 裁剪 changelog：单行只保留最近 CHANGELOG_KEEP 条（按 "X.Y.Z:" 版本标记切分）
 _cl = re.search(r"^(changelog\s*=\s*)(.*)$", s, re.M)
