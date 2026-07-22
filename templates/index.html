@@ -218,9 +218,9 @@
   .alert-banner .ab-close{background:rgba(255,255,255,.22);border:none;color:#fff;cursor:pointer;border-radius:6px;padding:3px 11px;font-size:13px;margin-left:auto}
   .alert-banner .ab-list{margin:0;padding-left:18px}
   /* 控制与自动化（浅色主题，与全站 .card / .dt-field 一致） */
-  .auto-head{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;margin-bottom:16px;flex-wrap:wrap}
-  .auto-head h2{margin:0;font-size:18px;color:var(--text)}
-  .auto-head .auto-sub{font-size:12px;color:var(--muted);margin-top:3px}
+  .auto-head,.manual-head{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;margin-bottom:16px;flex-wrap:wrap}
+  .auto-head h2,.manual-head h2{margin:0;font-size:18px;color:var(--text)}
+  .auto-head .auto-sub,.manual-head .auto-sub{font-size:12px;color:var(--muted);margin-top:3px}
   .auto-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px 18px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.06)}
   .auto-card h3{margin:0 0 14px;font-size:15px;color:var(--text);display:flex;align-items:center;gap:8px}
   .auto-alerts{list-style:none;padding:0;margin:0}
@@ -300,6 +300,16 @@
     <div id="storage" class="panel"><div class="loading">加载中…</div></div>
     <div id="docker" class="panel"><div class="loading">加载中…</div></div>
     <div id="automation" class="panel"><div class="loading">加载中…</div></div>
+
+    <div class="card" id="manual-card" style="grid-column:1/-1">
+      <div class="manual-head">
+        <div>
+          <h2>📘 操作手册</h2>
+          <div class="auto-sub">完整使用说明：各模块功能、风扇曲线编辑、硬盘温控的 SAS/SSD/休眠停转逻辑、自动化告警配置、常见排错。离线可读，不联网。</div>
+        </div>
+        <button class="btn-mini" onclick="window.open('/manual','_blank')">📘 打开操作手册</button>
+      </div>
+    </div>
   </main>
 </div>
 <div class="nav-overlay" id="navOverlay" onclick="closeSidebar()"></div>
@@ -1655,13 +1665,6 @@ function renderAutomation(){
     <div class="auto-actions">
       <button class="btn-mini" onclick="exportReport('json')">导出 JSON</button>
       <button class="btn-mini" onclick="exportReport('html')">导出 HTML 报告</button>
-    </div>
-  </div>
-  <div class="auto-card">
-    <h3>📘 操作手册</h3>
-    <div style="font-size:13px;color:var(--muted);margin-bottom:12px">完整使用说明：各模块功能、风扇曲线编辑、硬盘温控的 SAS/SSD/休眠停转逻辑、自动化告警配置、常见排错。离线可读，不联网。</div>
-    <div class="auto-actions">
-      <button class="btn-mini" onclick="window.open('/manual','_blank')">📘 打开操作手册</button>
     </div>
   </div>`;
 }
