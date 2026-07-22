@@ -951,7 +951,7 @@ function renderDiskTempPanel(){
     +'<label class="dt-toggle" style="margin-bottom:14px"><input type="checkbox" id="dt-enabled"> 启用硬盘温控</label>'
     +'<div class="dt-section">'
       +'<div class="dt-section-title">监控硬盘 <span class="count" id="dt-disk-count">0</span></div>'
-      +'<div class="dt-hint">每块盘右侧会显示：<b>温度</b>=当前实时温度 · <b>休眠</b>=盘已停转省电 · <b>常驻</b>=SAS 企业盘或固态盘(SSD)，厂商为数据安全锁定不休眠，因此不参与「全部休眠→停风扇」判断（但它若发烫仍会触发风扇散热）</div>'
+      +'<div class="dt-hint">每块盘右侧会显示：<b>温度</b>=当前实时温度 · <b>休眠</b>=盘已停转省电 · <b>常驻</b>=SAS 企业盘或固态盘(SSD)，厂商为数据安全锁定不休眠，因此不参与「全部休眠→停风扇」判断（但它若发烫仍会触发风扇散热）。<br><b>提示</b>：勾选某块盘＝它的温度<b>参与风扇曲线控速</b>——勾了 SAS/固态，它们一发烧受控风扇就会提速；不勾则完全不监控、也不影响停转功能。</div>'
       +'<div class="dt-grid">'+diskOptsHtml+'</div>'
     +'</div>'
     +'<div class="dt-section">'
@@ -1599,6 +1599,7 @@ function renderAutomation(){
       <div class="auto-sub">温度 / 硬盘健康告警、外部通知与一键健康报告导出</div>
     </div>
     <button class="btn-mini" onclick="exportReport('html')">📄 导出健康报告</button>
+    <button class="btn-mini" onclick="window.open('/manual','_blank')">📘 操作手册</button>
   </div>
   <div class="auto-card">
     <h3>🔍 活动告警 <span class="badge b-info">每 15 秒刷新</span></h3>

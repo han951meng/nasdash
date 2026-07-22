@@ -2441,6 +2441,127 @@ def index():
     resp.headers["Expires"] = "0"
     return resp
 
+# ===================== 操作手册（/manual 路由，离线可读） =====================
+_MANUAL_CSS = """
+:root{
+  --text:#1f2933; --muted:#64748b; --bg:#f1f5f9; --card:#ffffff;
+  --border:#e2e8f0; --blue:#2563eb; --code-bg:#1e293b; --code-fg:#e2e8f0;
+}
+* { box-sizing:border-box; }
+body{ margin:0; background:var(--bg); color:var(--text);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  line-height:1.75; }
+.wrap{ max-width:920px; margin:0 auto; padding:32px 20px 80px; }
+h1{ font-size:26px; margin:0 0 6px; }
+h2{ font-size:21px; margin:34px 0 10px; padding-bottom:6px; border-bottom:2px solid var(--border); }
+h3{ font-size:17px; margin:24px 0 8px; color:#0f172a; }
+h4{ font-size:15px; margin:18px 0 6px; }
+p{ margin:10px 0; }
+ul,ol{ margin:10px 0; padding-left:24px; }
+li{ margin:5px 0; }
+a{ color:var(--blue); }
+code{ background:var(--code-bg); color:var(--code-fg); padding:2px 6px; border-radius:5px;
+  font-size:13px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+pre{ background:var(--code-bg); color:var(--code-fg); padding:14px; border-radius:8px;
+  overflow-x:auto; font-size:13px; }
+blockquote{ background:#fff7ed; border-left:4px solid #f59e0b; margin:12px 0;
+  padding:10px 16px; border-radius:6px; color:#92400e; }
+hr{ border:none; border-top:1px solid var(--border); margin:28px 0; }
+.man-table{ border-collapse:collapse; width:100%; margin:12px 0; font-size:14px;
+  display:table; overflow:visible; }
+.man-table th,.man-table td{ border:1px solid var(--border); padding:8px 12px; text-align:left; }
+.man-table th{ background:var(--card); font-weight:600; }
+.man-table tbody tr:nth-child(even){ background:#f8fafc; }
+.topbar{ position:sticky; top:0; background:var(--card); border-bottom:1px solid var(--border);
+  padding:10px 20px; font-size:13px; color:var(--muted); z-index:10; }
+.topbar b{ color:var(--text); }
+"""
+
+def _md_inline(text):
+    """行内：转义 HTML + **粗体** + `代码`。"""
+    text = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+    text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
+    text = re.sub(r'`([^`]+?)`', r'<code>\1</code>', text)
+    return text
+
+def _render_markdown(md):
+    """极简 markdown → HTML，覆盖手册用到的：标题/段落/列表/表格/引用/分隔线/粗体/行内代码。"""
+    lines = md.split('\n')
+    out = []
+    in_list = False; list_type = None
+    table_rows = []; in_table = False
+
+    def close_list():
+        nonlocal in_list, list_type
+        if in_list:
+            out.append('</%s>' % list_type); in_list = False; list_type = None
+    def close_table():
+        nonlocal in_table, table_rows
+        if in_table:
+            out.append('</tbody></table>'); in_table = False; table_rows = []
+
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        s = line.strip()
+        # 表格
+        if s.startswith('|') and s.count('|') >= 2:
+            if not in_table:
+                in_table = True; table_rows = []
+            cells = [c.strip() for c in s.strip('|').split('|')]
+            if cells and all(set(c) <= set('-: ') and c for c in cells):
+                i += 1; continue  # 分隔行
+            table_rows.append(cells)
+            nxt = lines[i+1].strip() if i+1 < len(lines) else ''
+            if not (nxt.startswith('|') and nxt.count('|') >= 2):
+                close_list()
+                out.append('<table class="man-table"><thead><tr>'
+                           + ''.join('<th>%s</th>' % _md_inline(c) for c in table_rows[0])
+                           + '</tr></thead><tbody>')
+                for r in table_rows[1:]:
+                    out.append('<tr>' + ''.join('<td>%s</td>' % _md_inline(c) for c in r) + '</tr>')
+                out.append('</tbody></table>')
+                in_table = False; table_rows = []
+            i += 1; continue
+        close_table()
+        if s == '---':
+            close_list(); out.append('<hr>'); i += 1; continue
+        if s.startswith('#'):
+            close_list(); lvl = len(s) - len(s.lstrip('#'))
+            out.append('<h%d>%s</h%d>' % (lvl, _md_inline(s.lstrip('#').strip()), lvl)); i += 1; continue
+        if s.startswith('>'):
+            close_list(); out.append('<blockquote>%s</blockquote>' % _md_inline(s.lstrip('>').strip())); i += 1; continue
+        st = line.lstrip()
+        if st.startswith('- ') or st.startswith('* '):
+            if not in_list or list_type != 'ul':
+                close_list(); out.append('<ul>'); in_list = True; list_type = 'ul'
+            out.append('<li>%s</li>' % _md_inline(st[2:].strip())); i += 1; continue
+        m = re.match(r'^\d+\.\s+(.*)$', st)
+        if m:
+            if not in_list or list_type != 'ol':
+                close_list(); out.append('<ol>'); in_list = True; list_type = 'ol'
+            out.append('<li>%s</li>' % _md_inline(m.group(1))); i += 1; continue
+        if not s:
+            close_list(); i += 1; continue
+        close_list(); out.append('<p>%s</p>' % _md_inline(s)); i += 1
+    close_list(); close_table()
+    return '\n'.join(out)
+
+@app.route("/manual")
+def manual():
+    p = os.path.join(APP_DIR, "docs", "使用手册.md")
+    try:
+        md = open(p, "r", encoding="utf-8").read()
+    except Exception as e:
+        return "<h1>操作手册未找到</h1><p>%s</p>" % _md_inline(str(e)), 404
+    body = _render_markdown(md)
+    return ("<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">"
+            "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+            "<title>nasdash 操作手册</title><style>%s</style></head>"
+            "<body><div class=\"topbar\">nasdash 操作手册 · <b>v%s</b> · "
+            "<a href=\"/\">← 返回面板</a></div>"
+            "<div class=\"wrap\">%s</div></body></html>") % (_MANUAL_CSS, APP_VERSION, body)
+
 # ===================== 采集层：实时指标（网络吞吐 / 磁盘 I/O / CPU 功耗） =====================
 # 这些指标需「两次采样差」才算速率，故由常驻 daemon 线程周期采样，/api/all 仅读最新值。
 # 模式复用 fan_smooth_loop 的 daemon 线程做法。

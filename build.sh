@@ -10,8 +10,8 @@ case "$(uname -s)" in
   *)      TAR_FMT="" ;;
 esac
 
-# 1. 重建 app.tgz（含 app.py / ui / config / bin / templates）
-tar $TAR_FMT -czf app.tgz app.py ui config bin templates
+# 1. 重建 app.tgz（含 app.py / ui / config / bin / templates / docs 操作手册）
+tar $TAR_FMT -czf app.tgz app.py ui config bin templates docs
 
 # 2. 同步 manifest.checksum（GNU tar 把 mtime 嵌进归档，md5 必漂移，必须重算）
 python3 - <<'PY'
