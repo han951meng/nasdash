@@ -277,6 +277,7 @@
       <button class="tab" onclick="switchTab('fan',this)">🌀 风扇控制</button>
       <button class="tab" onclick="switchTab('docker',this)">🐳 Docker</button>
       <button class="tab" onclick="switchTab('automation',this)">🔔 控制与自动化</button>
+      <button class="tab" onclick="window.open('/manual','_blank')">📘 操作手册</button>
     </div>
   </aside>
   <main class="content">
@@ -300,16 +301,6 @@
     <div id="storage" class="panel"><div class="loading">加载中…</div></div>
     <div id="docker" class="panel"><div class="loading">加载中…</div></div>
     <div id="automation" class="panel"><div class="loading">加载中…</div></div>
-
-    <div class="card" id="manual-card" style="grid-column:1/-1">
-      <div class="manual-head">
-        <div>
-          <h2>📘 操作手册</h2>
-          <div class="auto-sub">完整使用说明：各模块功能、风扇曲线编辑、硬盘温控的 SAS/SSD/休眠停转逻辑、自动化告警配置、常见排错。离线可读，不联网。</div>
-        </div>
-        <button class="btn-mini" onclick="window.open('/manual','_blank')">📘 打开操作手册</button>
-      </div>
-    </div>
   </main>
 </div>
 <div class="nav-overlay" id="navOverlay" onclick="closeSidebar()"></div>
