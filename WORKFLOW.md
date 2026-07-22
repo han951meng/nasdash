@@ -68,9 +68,9 @@ grep '^version' manifest   # 确认 version = 1.7.10
 ## Step 6 · 部署到 NAS（版本号变更必须走重装）
 
 ```bash
-# 新机 192.168.100.130，密码 hanyuvip；旧机 192.168.50.158 密码 Hanyuvip
-scp nasdash.fpk admin@192.168.100.130:/tmp/
-sshpass -p hanyuvip ssh -o StrictHostKeyChecking=no admin@192.168.100.130 '
+# 主力 NAS 192.168.50.158，密码 hanyuvip（2026-07-21 由 192.168.100.130 换回此 IP；原记"旧机 192.168.50.158"已失效，若旧硬件仍在网其当前 IP 未知）
+scp nasdash.fpk admin@192.168.50.158:/tmp/
+sshpass -p hanyuvip ssh -o StrictHostKeyChecking=no admin@192.168.50.158 '
   echo hanyuvip | sudo -S appcenter-cli stop com.dashboard.nasdash
   echo hanyuvip | sudo -S appcenter-cli uninstall com.dashboard.nasdash
   echo hanyuvip | sudo -S appcenter-cli install-fpk /tmp/nasdash.fpk --volume 1

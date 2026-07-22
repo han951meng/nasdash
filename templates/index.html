@@ -177,6 +177,8 @@
   .dt-section-title{font-size:13px;font-weight:600;color:var(--muted);margin-bottom:10px;display:flex;align-items:center;gap:8px}
   .dt-section-title .count{font-size:11px;color:var(--blue);background:var(--bg);padding:2px 8px;border-radius:10px;border:1px solid var(--border)}
   .dt-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px}
+  .dt-hint{font-size:12px;color:var(--muted);line-height:1.6;background:var(--bg);border:1px solid var(--border);border-left:3px solid var(--blue);border-radius:6px;padding:8px 12px;margin-bottom:12px}
+  .dt-hint b{color:var(--text);font-weight:600}
   .dt-opt{display:flex;align-items:flex-start;gap:8px;padding:8px 10px;background:var(--bg);border:1px solid var(--border);border-radius:8px;cursor:pointer;transition:.15s}
   .dt-opt:hover{border-color:var(--blue)}
   .dt-opt input[type=checkbox]{margin:0;margin-top:2px;accent-color:var(--blue);flex-shrink:0}
@@ -194,6 +196,7 @@
   .dt-actions{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:8px}
   .dt-save-state{font-size:13px;color:var(--muted)}
   .dt-save-state.ok{color:var(--green)}
+  .dt-warn{display:none;margin:8px 0;padding:10px 12px;border-radius:8px;background:#fff7ed;color:#9a3412;border:1px solid #fed7aa;font-size:13px;line-height:1.55}
   .dt-live{display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--bg);border:1px solid var(--border);border-radius:8px;font-size:13px}
   .dt-live b{font-size:16px;color:var(--green)}
   .dt-toggle{display:inline-flex;align-items:center;gap:8px;font-size:14px;font-weight:500;cursor:pointer}
@@ -237,6 +240,7 @@
   .auto-actions{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap;align-items:center}
   .dt-save-state{font-size:12px;color:var(--muted)}
   .dt-save-state.ok{color:var(--green,#22c55e)}
+  .dt-warn{display:none;margin:6px 0;padding:9px 11px;border-radius:8px;background:#fff7ed;color:#9a3412;border:1px solid #fed7aa;font-size:12px;line-height:1.5}
   /* 风扇曲线编辑器 */
   .curve-presets{display:flex;gap:6px;margin:6px 0 10px;flex-wrap:wrap}
   .curve-pt{display:flex;gap:6px;align-items:center;margin-bottom:6px}
@@ -377,7 +381,12 @@ function renderPanel(id){
     // 正在拖动滑块/编辑占空比时跳过整页重建，避免打断操作（转速数值由 fetchFanStatus 每2秒刷新）
     var _fa=document.activeElement;
     var _busy=_fa&&(_fa.classList.contains('fan-slider')||_fa.classList.contains('fan-custom-input'));
-    if(!_busy){ refreshFanPanel(); initDiskTemp(); initSysTemp(); drawCurve('dt'); drawCurve('st'); }
+    if(!_busy){
+      var _sd=_snapTemp('#disk-temp-panel'), _ss=_snapTemp('#sys-temp-panel');
+      refreshFanPanel();
+      initDiskTemp(_sd); initSysTemp(_ss);
+      drawCurve('dt'); drawCurve('st');
+    }
   }
   var lu=document.getElementById('lastUpdate');
   if(lu && DATA.time) lu.textContent='更新于 '+DATA.time+(DATA.elapsed!==undefined?' ('+DATA.elapsed+'s)':'');
@@ -882,6 +891,34 @@ function bindFanSliders(){
   if(!fanTimer){ fetchFanStatus(); fanTimer=setInterval(fetchFanStatus, 2000); }
 }
 
+// ===== 温控面板刷新保护 =====
+// 整页重建（refreshFanPanel / renderAll）会把 temp 面板的勾选、曲线等表单清空，
+// 并在 initDiskTemp/initSysTemp 里从服务器 config 重新回填。
+// 若用户已勾选但还没点「保存」，刷新就会把未保存的改动冲掉。
+// 解决：刷新前对面板所有表单字段拍快照，init 回填后再把未保存改动恢复回去。
+function _snapTemp(sel){
+  var o={}, box=document.querySelector(sel);
+  if(!box) return o;
+  box.querySelectorAll('input,select').forEach(function(el){
+    if(el.type==='checkbox'||el.type==='radio') o[el.id]=el.checked;
+    else o[el.id]=el.value;
+  });
+  return o;
+}
+function _restoreTemp(sel, snap){
+  if(!snap) return;
+  var box=document.querySelector(sel);
+  if(!box) return;
+  Object.keys(snap).forEach(function(id){
+    var el=document.getElementById(id); if(!el) return;
+    if(el.type==='checkbox'||el.type==='radio') el.checked=snap[id];
+    else el.value=snap[id];
+  });
+  if(sel.indexOf('disk')>=0){ renderCurvePoints('dt'); drawCurve('dt'); }
+  else { renderCurvePoints('st'); drawCurve('st'); }
+  updateDiskTempCounts(); updateSysTempCounts();
+}
+
 // ===== 硬盘温度控制风扇（disk_temp）=====
 function renderDiskTempPanel(){
   var fans=(typeof FAN_LIST!=='undefined'?FAN_LIST:[])||[];
@@ -914,12 +951,14 @@ function renderDiskTempPanel(){
     +'<label class="dt-toggle" style="margin-bottom:14px"><input type="checkbox" id="dt-enabled"> 启用硬盘温控</label>'
     +'<div class="dt-section">'
       +'<div class="dt-section-title">监控硬盘 <span class="count" id="dt-disk-count">0</span></div>'
+      +'<div class="dt-hint">每块盘右侧会显示：<b>温度</b>=当前实时温度 · <b>休眠</b>=盘已停转省电 · <b>常驻</b>=SAS 企业盘或固态盘(SSD)，厂商为数据安全锁定不休眠，因此不参与「全部休眠→停风扇」判断（但它若发烫仍会触发风扇散热）</div>'
       +'<div class="dt-grid">'+diskOptsHtml+'</div>'
     +'</div>'
     +'<div class="dt-section">'
       +'<div class="dt-section-title">受控风扇 <span class="count" id="dt-fan-count">0</span></div>'
       +'<div class="dt-grid">'+fanOptsHtml+'</div>'
     +'</div>'
+    +'<div class="dt-warn" id="dt-warn" style="display:none"></div>'
     +'<div class="dt-section">'
       +'<div class="dt-section-title">温控曲线</div>'
       +'<div class="dt-thresholds">'
@@ -948,9 +987,17 @@ function updateDiskTempCounts(){
   var fc=document.querySelectorAll('.dt-fan:checked').length;
   var dce=document.getElementById('dt-disk-count'); if(dce) dce.textContent=dc;
   var fce=document.getElementById('dt-fan-count'); if(fce) fce.textContent=fc;
+  var warn=document.getElementById('dt-warn');
+  if(warn){
+    var en=document.getElementById('dt-enabled');
+    if(en && en.checked && fc===0){
+      warn.textContent='⚠️ 已启用硬盘温控，但没勾选任何「受控风扇」。这样风扇不会被接管，「监控盘全部休眠时停转风扇」等设置也不会生效。请在上方「受控风扇」里勾选要由硬盘温度控制的风扇。';
+      warn.style.display='block';
+    }else{ warn.style.display='none'; }
+  }
 }
 var dtTimer=null;
-async function initDiskTemp(){
+async function initDiskTemp(snap){
   try{
     var r=await fetch('/api/fan/disk_temp?_='+Date.now());
     var j=await r.json();
@@ -978,15 +1025,14 @@ async function initDiskTemp(){
       });
     }
     var panel=document.getElementById('disk-temp-panel');
-    if(panel){
-      panel.addEventListener('change', function(e){
+    if(panel && !panel.dataset.bound){ panel.dataset.bound='1'; panel.addEventListener('change', function(e){
         if(e.target && (e.target.classList.contains('dt-disk') || e.target.classList.contains('dt-fan'))) updateDiskTempCounts();
-      });
-    }
+      }); }
     updateDiskTempCounts();
     refreshDiskTempPanel();
     if(dtTimer) clearInterval(dtTimer);
     dtTimer=setInterval(refreshDiskTempPanel,5000);
+    if(snap) _restoreTemp('#disk-temp-panel', snap);
   }catch(e){}
 }
 async function refreshDiskTempPanel(){
@@ -1000,6 +1046,7 @@ async function refreshDiskTempPanel(){
       var el=document.getElementById('dt-temp-'+shortDev);
       if(el){
         if(d.asleep) el.textContent='休眠';
+        else if(d.no_sleep){ el.textContent=(d.temp!=null?d.temp+'°C':'N/A')+' · 常驻'; el.title='常驻：SAS 企业盘或固态盘(SSD)，厂商为数据安全锁定不休眠，不参与「全部休眠→停风扇」判断，但高温时仍会触发风扇散热'; }
         else if(d.temp!=null) el.textContent=d.temp+'°C';
         else el.textContent='N/A';
       }
@@ -1065,6 +1112,7 @@ function renderSysTempPanel(){
       +'<div class="dt-section-title">受控风扇 <span class="count" id="st-fan-count">0</span></div>'
       +'<div class="dt-grid">'+fanOptsHtml+'</div>'
     +'</div>'
+    +'<div class="dt-warn" id="st-warn" style="display:none"></div>'
     +'<div class="dt-section">'
       +'<div class="dt-section-title">温控曲线</div>'
       +'<div class="dt-thresholds">'
@@ -1086,9 +1134,17 @@ function renderSysTempPanel(){
 function updateSysTempCounts(){
   var fc=document.querySelectorAll('.st-fan:checked').length;
   var fce=document.getElementById('st-fan-count'); if(fce) fce.textContent=fc;
+  var warn=document.getElementById('st-warn');
+  if(warn){
+    var en=document.getElementById('st-enabled');
+    if(en && en.checked && fc===0){
+      warn.textContent='⚠️ 已启用主板/CPU 温控，但没勾选任何「受控风扇」。这样风扇不会被接管，温控曲线也不会生效。请在上方「受控风扇」里勾选要由主板/CPU 温度控制的风扇。';
+      warn.style.display='block';
+    }else{ warn.style.display='none'; }
+  }
 }
 var stTimer=null;
-async function initSysTemp(){
+async function initSysTemp(snap){
   try{
     var r=await fetch('/api/fan/sys_temp?_='+Date.now());
     var j=await r.json();
@@ -1116,19 +1172,18 @@ async function initSysTemp(){
       });
     }
     var panel=document.getElementById('sys-temp-panel');
-    if(panel){
-      panel.addEventListener('change', function(e){
+    if(panel && !panel.dataset.bound){ panel.dataset.bound='1'; panel.addEventListener('change', function(e){
         if(e.target && e.target.classList.contains('st-fan')) updateSysTempCounts();
         if(e.target && e.target.name==='st-source'){
           var l=document.getElementById('st-src-label');
           if(l) l.textContent=(e.target.value==='mb'?'主板':'CPU');
         }
-      });
-    }
+      }); }
     updateSysTempCounts();
     refreshSysTempPanel();
     if(stTimer) clearInterval(stTimer);
     stTimer=setInterval(refreshSysTempPanel,5000);
+    if(snap) _restoreTemp('#sys-temp-panel', snap);
   }catch(e){}
 }
 async function refreshSysTempPanel(){
@@ -1735,6 +1790,7 @@ function renderAll(){
   document.getElementById('system').innerHTML = renderSystem(DATA.system);
   let _fa=document.activeElement;
   let _fanBusy = _fa && (_fa.classList.contains('fan-slider') || _fa.classList.contains('fan-custom-input'));
+  var _sd=_snapTemp('#disk-temp-panel'), _ss=_snapTemp('#sys-temp-panel');
   if(!_fanBusy){
     document.getElementById('fan').innerHTML = renderFanControl();
     bindFanSliders();
@@ -1746,8 +1802,8 @@ function renderAll(){
   document.getElementById('storage').innerHTML = renderStorage(DATA.storage);
   document.getElementById('docker').innerHTML = renderDocker(DATA.docker);
   document.getElementById('lastUpdate').textContent = '更新于 '+DATA.time+' ('+DATA.elapsed+'s)';
-  initDiskTemp();
-  initSysTemp();
+  initDiskTemp(_sd);
+  initSysTemp(_ss);
   showAlerts(DATA.alerts);
 }
 

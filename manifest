@@ -19,4 +19,4 @@ service_port          = 9800
 checkport             = false
 disable_authorization_path = true
 changelog             = 1.8.5: 修复应用中心更新日志不显示的问题 1.8.4: 移动端适配(抽屉式导航+宽表横向滚动)与风扇页硬盘名称竖排堆叠显示修复 1.8.3: 移动端适配：左侧导航改为可隐藏抽屉式（汉堡菜单+遮罩），阵列卡/风扇控制/Docker 等页面的宽表格改为横向滚动而非撑破页面，手机上不再需要拖动查看全部内容
-checksum              = 17e52ca487ecc372e42ef4be7c8e9506
+checksum              = 308da85dd8a60aeeddce9716e7bb6e84

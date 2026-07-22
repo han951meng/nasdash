@@ -1,6 +1,6 @@
 # nasdash
 
-**当前版本：v1.8.5** · [下载最新 fpk](https://github.com/han951meng/nasdash/releases/latest)
+**当前版本：v1.8.5** · [下载最新 fpk](https://github.com/han951meng/nasdash/releases/latest) · [📖 操作手册](docs/使用手册.md)
 
 飞牛OS（fnOS）NAS 硬件监控面板 —— FPK 应用包
 
@@ -16,7 +16,7 @@
 ### 安装步骤
 1. 下载 `nasdash.fpk`（GitHub Releases 或项目附件）
 2. 打开飞牛OS **应用中心 → 右上角「+ 手动安装」**，上传 `nasdash.fpk`
-3. 确认安装（无向导步骤），**依赖自动安装**：smartmontools / lm-sensors / mdadm / Flask / dmidecode / i2c-tools
+3. 确认安装（按安装向导确认），**依赖自动安装**：smartmontools / lm-sensors / mdadm / Flask / dmidecode / i2c-tools
 4. 安装完成后，桌面出现「NAS硬件监控」图标，点击即可打开（经飞牛统一网关，需登录飞牛账号）
 
 > **storcli 已随包内置**：LSI MegaRAID / HBA 直通卡用户无需从 Broadcom 官网手动下载，安装即自动落地到 `/opt/MegaRAID/storcli` 并建软链。

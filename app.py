@@ -229,6 +229,11 @@ def _load_json_file(path, default):
     try:
         with open(path, "r", encoding="utf-8") as f:
             d = json.load(f)
+        # default=None 作哨兵时不做类型校验（否则 isinstance(dict, NoneType) 恒为 False，
+        # 会把已存的配置误判丢弃，导致 disk_temp/sys_temp 配置永远读不回来）；
+        # 传具体类型（如 {}）的调用者仍保留类型校验，非期望类型时回退默认值。
+        if default is None:
+            return d
         return d if isinstance(d, type(default)) else default
     except Exception:
         return default
@@ -928,24 +933,54 @@ def _fan_sys_temp_decision(T, cfg):
             return ("control", _fan_sys_temp_pwm(T, cfg))
         return ("hold", None)
 
+def _disk_is_ssd(dev):
+    """非 NVMe 的固态盘（SATA/SAS SSD）识别：/sys/block/<name>/queue/rotational=0。
+    这类盘无机械轴、不会停转休眠，应排除出"全部休眠→停转"判断（否则像 SAS 一样
+    把功能堵死）。NVMe 由调用方单独处理，这里只管 sdX 类设备。读 sysfs 失败则保守
+    返回 False（按机械盘处理，宁可不排除也不误伤可休眠盘）。"""
+    try:
+        name = str(dev).replace("/dev/", "")
+        with open("/sys/block/%s/queue/rotational" % name) as f:
+            return f.read().strip() == "0"
+    except Exception:
+        return False
+
+
 def get_disk_temps(devs):
     """读指定硬盘温度。sdX 用 smartctl -n standby（不唤醒休眠盘）；
     NVMe 不支持 -n standby，直接读温度（NVMe 一般不停机休眠）。
-    返回 {dev: {"temp":int|None, "asleep":bool|None}}。"""
+    返回 {dev: {"temp":int|None, "asleep":bool|None, "no_sleep":bool}}。
+    no_sleep=True：该盘天生不会休眠——SAS 阵列企业盘被厂商为数据安全锁死不停转，
+    NVMe 与 SATA/SAS 固态盘(SSD)无机械轴、也不停转休眠。这类盘不参与"全部休眠→停转"
+    判断（否则一块 SAS/SSD 盘就永远满足不了 all(asleep)，把整个休眠停转功能堵死）。"""
     states = {}
     for dev in devs or []:
         try:
+            no_sleep = False
             if dev.startswith("/dev/nvme"):
                 out = sudo_cmd([SMARTCTL, "-A", dev], 8)
                 asleep = False
+                no_sleep = True  # NVMe 不停机休眠
             else:
                 out = sudo_cmd([SMARTCTL, "-n", "standby", "-A", dev], 8)
                 asleep = False
                 if out and "STANDBY" in out.upper():
-                    states[dev] = {"temp": None, "asleep": True}
+                    states[dev] = {"temp": None, "asleep": True, "no_sleep": False}
                     continue
+                # SAS 企业盘（阵列卡后）永不休眠：厂商为数据安全锁死。
+                # smartctl -A 对 SAS 盘输出 "Current Drive Temperature"（SATA 走属性表
+                # Temperature_Celsius），据此识别，无需额外调用；阵列卡后 lsblk TRAN 为空不可用。
+                if out:
+                    up = out.upper()
+                    if ("CURRENT DRIVE TEMPERATURE" in up
+                            or "DRIVE TRIP TEMPERATURE" in up
+                            or "TRANSPORT PROTOCOL:   SAS" in up):
+                        no_sleep = True
+                # SATA/SAS 固态盘(SSD)无机械轴、不会停转休眠，同样排除出判断
+                if not no_sleep and _disk_is_ssd(dev):
+                    no_sleep = True
             if not out:
-                states[dev] = {"temp": None, "asleep": None}
+                states[dev] = {"temp": None, "asleep": None, "no_sleep": no_sleep}
                 continue
             temp = None
             for line in out.splitlines():
@@ -962,21 +997,42 @@ def get_disk_temps(devs):
                             t = t - 273
                         temp = t
                         break
-            states[dev] = {"temp": temp, "asleep": asleep}
+            states[dev] = {"temp": temp, "asleep": asleep, "no_sleep": no_sleep}
         except Exception:
-            states[dev] = {"temp": None, "asleep": None}
+            states[dev] = {"temp": None, "asleep": None, "no_sleep": False}
     return states
+
+
+def _all_monitored_idle(valid, cfg):
+    """判断"可停转风扇"：所有可休眠盘都已休眠，且不可休眠盘(SAS 阵列企业盘/NVMe/
+    SATA·SAS 固态盘)温度都低于启动阈值。SAS 企业盘与固态盘厂商锁死/无机械轴不休眠，
+    不参与"全部休眠"判断，但它们若高温仍需散热(安全兜底)，此时不停转、交给温度曲线控速。
+    - sleep_stop 关 → 永不停转
+    - 无任何可休眠盘(如纯 SAS/NVMe/SSD 环境) → 永不因休眠停转，交给温度曲线
+    """
+    if not bool(cfg.get("sleep_stop", True)):
+        return False
+    sleepable = [s for s in valid if not s.get("no_sleep")]
+    if not sleepable:
+        return False
+    if not all(s.get("asleep") for s in sleepable):
+        return False
+    start = float(cfg.get("start_temp", 40))
+    nosleep_temps = [s["temp"] for s in valid
+                     if s.get("no_sleep") and isinstance(s.get("temp"), (int, float))]
+    if nosleep_temps and max(nosleep_temps) >= start:
+        return False  # 有高温 SAS/NVMe 企业盘，仍需散热，不停转
+    return True
 
 def _fan_disk_temp_pwm(states, cfg):
     """按硬盘温度算目标 raw(0~255)。
     - 所有监控盘休眠且 sleep_stop → 0（停转）
     - 优先自定义温度→PWM 曲线；否则取最热盘温度 T：T<start → 0；start≤T<full → min~max 线性；T≥full → max
     """
-    sleep_stop = bool(cfg.get("sleep_stop", True))
     valid = [s for s in (states or {}).values() if isinstance(s, dict)]
     if not valid:
         return None
-    if sleep_stop and all(s.get("asleep") for s in valid):
+    if _all_monitored_idle(valid, cfg):
         return 0
     temps = [s["temp"] for s in valid if isinstance(s.get("temp"), (int, float))]
     if not temps:
@@ -1036,8 +1092,7 @@ def _fan_disk_temp_decision(states, cfg):
     if not valid:
         _dt_engaged["v"] = False
         return ("release", None)
-    sleep_stop = bool(cfg.get("sleep_stop", True))
-    if sleep_stop and all(s.get("asleep") for s in valid):
+    if _all_monitored_idle(valid, cfg):
         _dt_engaged["v"] = False
         return ("release", None)
     temps = [s["temp"] for s in valid if isinstance(s.get("temp"), (int, float))]
@@ -2006,6 +2061,16 @@ def get_system():
                                 nm = "CMOS 电池"
                             d["sensors"]["voltages"].append({"name": nm, "value": round(v, 2)})
                             break
+            # 同名风扇去重：飞牛系统风扇服务(FanControlServer)可能给不同通道命名重复
+            # (如两个通道都叫 CHA_FAN1)，导致界面出现两张同名卡片分不清。
+            # 名字撞车时追加通道号后缀(#fan{idx})，让用户一眼区分。
+            if len(d["sensors"]["fans"]) > 1:
+                _name_counts = {}
+                for _f in d["sensors"]["fans"]:
+                    _name_counts[_f["name"]] = _name_counts.get(_f["name"], 0) + 1
+                for _f in d["sensors"]["fans"]:
+                    if _name_counts[_f["name"]] > 1:
+                        _f["name"] = f"{_f['name']} #fan{_f['idx']}"
         except (json.JSONDecodeError, ValueError):
             pass
     d["cpu_temp"] = cpu_temp
@@ -2833,6 +2898,7 @@ def api_fan_disk_temp_get():
         "dev": dev,
         "temp": states.get(dev, {}).get("temp"),
         "asleep": states.get(dev, {}).get("asleep"),
+        "no_sleep": states.get(dev, {}).get("no_sleep", False),
     } for dev in devs]
     target = _fan_disk_temp_pwm(states, cfg)
     return jsonify({
