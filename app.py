@@ -2475,6 +2475,7 @@ hr{ border:none; border-top:1px solid var(--border); margin:28px 0; }
 .topbar{ position:sticky; top:0; background:var(--card); border-bottom:1px solid var(--border);
   padding:10px 20px; font-size:13px; color:var(--muted); z-index:10; }
 .topbar b{ color:var(--text); }
+.hl-red{ color:#dc2626; font-weight:500; }
 """
 # 应用内嵌版：去掉整页外壳/顶栏/定宽，宽度自适应面板；前端 request.args embed=1 时返回
 _MANUAL_CSS_EMBED = """
@@ -2495,12 +2496,17 @@ _MANUAL_CSS_EMBED = """
 .man-body .man-table th,.man-body .man-table td{ border:1px solid #e2e8f0; padding:8px 12px; text-align:left; }
 .man-body .man-table th{ background:#fff; font-weight:600; }
 .man-body .man-table tbody tr:nth-child(even){ background:#f8fafc; }
+.man-body .hl-red{ color:#dc2626; font-weight:500; }
 """
 
 def _md_inline(text):
-    """行内：转义 HTML + **粗体** + `代码`。"""
+    """行内：转义 HTML + **粗体** + `代码` + ==红色==。
+    红色标记是给「本版本修复了什么」这种高亮用的，避免一改一票否决。"""
     text = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+    # 先吃 ==红色== 标记（避免被后面的 ** 误吃），用占位符包起来再做粗体/代码
+    text = re.sub(r'==(.+?)==', lambda m: '\x00HL\x00' + m.group(1) + '\x00/HL\x00', text)
     text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
+    text = text.replace('\x00HL\x00', '<span class="hl-red">').replace('\x00/HL\x00', '</span>')
     text = re.sub(r'`([^`]+?)`', r'<code>\1</code>', text)
     return text
 
