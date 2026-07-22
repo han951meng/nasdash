@@ -2476,6 +2476,26 @@ hr{ border:none; border-top:1px solid var(--border); margin:28px 0; }
   padding:10px 20px; font-size:13px; color:var(--muted); z-index:10; }
 .topbar b{ color:var(--text); }
 """
+# 应用内嵌版：去掉整页外壳/顶栏/定宽，宽度自适应面板；前端 request.args embed=1 时返回
+_MANUAL_CSS_EMBED = """
+.man-body{ color:#1f2933; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; line-height:1.75; max-width:100%; }
+.man-body h1{ font-size:24px; margin:0 0 8px; }
+.man-body h2{ font-size:19px; margin:28px 0 10px; padding-bottom:6px; border-bottom:2px solid #e2e8f0; }
+.man-body h3{ font-size:16px; margin:20px 0 8px; color:#0f172a; }
+.man-body h4{ font-size:14px; margin:16px 0 6px; }
+.man-body p{ margin:10px 0; }
+.man-body ul,.man-body ol{ margin:10px 0; padding-left:24px; }
+.man-body li{ margin:5px 0; }
+.man-body a{ color:#2563eb; }
+.man-body code{ background:#1e293b; color:#e2e8f0; padding:2px 6px; border-radius:5px; font-size:13px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+.man-body pre{ background:#1e293b; color:#e2e8f0; padding:14px; border-radius:8px; overflow-x:auto; font-size:13px; }
+.man-body blockquote{ background:#fff7ed; border-left:4px solid #f59e0b; margin:12px 0; padding:10px 16px; border-radius:6px; color:#92400e; }
+.man-body hr{ border:none; border-top:1px solid #e2e8f0; margin:28px 0; }
+.man-body .man-table{ border-collapse:collapse; width:100%; margin:12px 0; font-size:14px; display:table; overflow:visible; }
+.man-body .man-table th,.man-body .man-table td{ border:1px solid #e2e8f0; padding:8px 12px; text-align:left; }
+.man-body .man-table th{ background:#fff; font-weight:600; }
+.man-body .man-table tbody tr:nth-child(even){ background:#f8fafc; }
+"""
 
 def _md_inline(text):
     """行内：转义 HTML + **粗体** + `代码`。"""
@@ -2555,6 +2575,9 @@ def manual():
     except Exception as e:
         return "<h1>操作手册未找到</h1><p>%s</p>" % _md_inline(str(e)), 404
     body = _render_markdown(md)
+    if request.args.get("embed") == "1":
+        # 应用内嵌：仅返回片段（无 html/head/body 外壳），由前端塞进面板，停留在应用内
+        return "<style>%s</style>\n<div class=\"man-body\">%s</div>" % (_MANUAL_CSS_EMBED, body)
     return ("<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">"
             "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
             "<title>nasdash 操作手册</title><style>%s</style></head>"
