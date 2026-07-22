@@ -1599,7 +1599,6 @@ function renderAutomation(){
       <div class="auto-sub">温度 / 硬盘健康告警、外部通知与一键健康报告导出</div>
     </div>
     <button class="btn-mini" onclick="exportReport('html')">📄 导出健康报告</button>
-    <button class="btn-mini" onclick="window.open('/manual','_blank')">📘 操作手册</button>
   </div>
   <div class="auto-card">
     <h3>🔍 活动告警 <span class="badge b-info">每 15 秒刷新</span></h3>
@@ -1656,6 +1655,13 @@ function renderAutomation(){
     <div class="auto-actions">
       <button class="btn-mini" onclick="exportReport('json')">导出 JSON</button>
       <button class="btn-mini" onclick="exportReport('html')">导出 HTML 报告</button>
+    </div>
+  </div>
+  <div class="auto-card">
+    <h3>📘 操作手册</h3>
+    <div style="font-size:13px;color:var(--muted);margin-bottom:12px">完整使用说明：各模块功能、风扇曲线编辑、硬盘温控的 SAS/SSD/休眠停转逻辑、自动化告警配置、常见排错。离线可读，不联网。</div>
+    <div class="auto-actions">
+      <button class="btn-mini" onclick="window.open('/manual','_blank')">📘 打开操作手册</button>
     </div>
   </div>`;
 }
