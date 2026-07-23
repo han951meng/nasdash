@@ -1,6 +1,6 @@
 # nasdash 开发 / 发版工作流
 
-基于 `v1.7.10` 基线。所有修改一律从干净基线出发，绝不用旧包 / 旧图标当母版。
+基于 `v1.8.7` 基线。所有修改一律从干净基线出发，绝不用旧包 / 旧图标当母版。
 
 ## Step 0 · 明确需求（先想清楚再动手）
 
@@ -21,8 +21,8 @@
 
 ```bash
 git fetch
-git checkout v1.7.10        # 或 git pull 到最新 main（HEAD 即 1.7.10 发版 commit）
-grep '^version' manifest   # 确认 version = 1.7.10
+git checkout v1.8.7        # 或 git pull 到最新 main（HEAD 即 1.8.7 发版 commit）
+grep '^version' manifest   # 确认 version = 1.8.7
 ```
 
 ## Step 2 · 编码 / 改图标
@@ -51,7 +51,7 @@ grep '^version' manifest   # 确认 version = 1.7.10
 ## Step 4 · 改版本号 + 同步四处一致（一键）
 
 ```bash
-./release.py 1.7.10 "一句话更新要点"
+./release.py 1.8.7 "一句话更新要点"
 ```
 
 自动改 `manifest`(version/desc/changelog) + `README.md`(版本号/更新日志) + 重建 fpk + 校验。
@@ -65,20 +65,21 @@ grep '^version' manifest   # 确认 version = 1.7.10
 
 `verify.sh` 自动挡：三处 md5 一致、manifest desc 单行（否则应用中心报 10111）、版本号三处（manifest / fpk / README）一致。
 
-## Step 6 · 部署到 NAS（版本号变更必须走重装）
+## Step 6 · 部署到 NAS（真机自测用无向导版）
+
+测试/自测部署用**无向导版**（`bash build.sh` 产物，fpk 根不含 `wizard/`），经 trim-cli 一键部署。
+（连接参数固定：`--host 192.168.50.158 --scheme ws --port 5666 --allow-insecure-ws`；须先 `export TRIM_CLI_SESSION_STORAGE=file`）
 
 ```bash
-# 主力 NAS 192.168.50.158，密码 hanyuvip（2026-07-21 由 192.168.100.130 换回此 IP；原记"旧机 192.168.50.158"已失效，若旧硬件仍在网其当前 IP 未知）
-scp nasdash.fpk admin@192.168.50.158:/tmp/
-sshpass -p hanyuvip ssh -o StrictHostKeyChecking=no admin@192.168.50.158 '
-  echo hanyuvip | sudo -S appcenter-cli stop com.dashboard.nasdash
-  echo hanyuvip | sudo -S appcenter-cli uninstall com.dashboard.nasdash
-  echo hanyuvip | sudo -S appcenter-cli install-fpk /tmp/nasdash.fpk --volume 1
-  echo hanyuvip | sudo -S appcenter-cli start com.dashboard.nasdash
-'
+# 标准流：stop → uninstall → install-fpk → start
+trim-cli ... app stop com.dashboard.nasdash --yes
+trim-cli ... app uninstall com.dashboard.nasdash --yes
+trim-cli ... app install-fpk /path/nasdash.fpk --volume-id 1 --yes
+trim-cli ... app start com.dashboard.nasdash --yes
 ```
 
-- 用户配置（`fan_disk_temp.json` / `fan_sys_temp.json` / `fan_labels.json` / `board_override.txt`）会在 `uninstall` 时自动备份到持久目录 `@appdata`，重装后由 `install_callback` 自动还原，**无需手动备份**。
+- **若 uninstall 被飞牛拦死**（NAS 上装的是向导/WebUI 版时常见）：改用 cp 兜底——先 `app stop`，再把本地 `app.tgz` 解包覆盖到运行目录 `/vol1/@appcenter/com.dashboard.nasdash/`，并同步 `/var/apps/<appid>/manifest` 版本号，最后 `app start`。
+- 部署前先备份 `@appdata`：`sshpass -p hanyuvip ssh ... "tar czf /vol1/1000/nd_appdata_backup_$(date +%Y%m%d_%H%M%S).tar.gz -C /vol1/@appdata com.dashboard.nasdash"`。
 - 首启若报 10500（端口竞态），再 `start` 一次自愈。
 
 ## Step 7 · 真机验证
@@ -91,13 +92,26 @@ ss -ltnp | grep 9800                               # 端口在监听
 ps -o user= -p $(pgrep -f com.dashboard.nasdash)   # 运行用户为 root
 ```
 
-## Step 8 · 发版
+## Step 8 · 发版（发布版必须带向导）
+
+发布资产必须是**带向导完整版**（`bash build.sh --with-wizard` 产物，fpk 根含 `wizard/`），绝不能用无向导测试版当发布物。
 
 ```bash
-git add -A && git commit -m "release: v1.7.10"
-git tag v1.7.10 && git push && git push --tags
-gh release upload v1.7.10 nasdash.fpk --clobber
+# 1) 构建带向导发布版，并复制成发布资产名
+bash build.sh --with-wizard
+cp nasdash.fpk nasdash-release-vX.Y.Z.fpk
+
+# 2) 提交源码 + 发布说明（fpk 本身是 Release 资产、不入库）
+git add README.md app.py "docs/使用手册.md" manifest templates/index.html release_notes_vX.Y.Z.md
+git commit -m "release: vX.Y.Z"
+git tag vX.Y.Z && git push origin main && git push origin vX.Y.Z
+
+# 3) 建 Release（发布说明作 -F，fpk 作位置参数放末尾）
+gh release create vX.Y.Z -F release_notes_vX.Y.Z.md -t "nasdash vX.Y.Z" --latest nasdash-release-vX.Y.Z.fpk
 ```
+
+- 发版后改了任何会进包的内容（手册/app.py/模板/配置），必须**重建带向导版 → `gh release delete-asset` 旧资产 → `gh release upload` 新资产**，并比对 GitHub 资产字节数 = 本地 fpk 字节数确认无误。
+- 发布说明（`release_notes_*.md`）与操作手册面向最终用户，**禁止出现 build.sh / trim-cli / 无向导版 / 带向导版 / wizard / fnos-fpk-dev.md 等内部部署话术**。
 
 ## 附：回滚预案
 
