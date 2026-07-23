@@ -6,6 +6,16 @@
 
 一个轻量级单文件 Flask Web 应用，通过 `storcli` / `smartctl` / `sensors` / `mdadm` / `lspci` / `ip` 等系统命令采集 NAS 硬件状态，以网页面板展示，免去每次 SSH 敲命令的麻烦。
 
+## 预览
+
+<table>
+<tr>
+<td width="33%"><img src="docs/screenshots/01-dashboard.png" alt="硬件配置检测仪表盘"><br><em>硬件配置检测</em></td>
+<td width="33%"><img src="docs/screenshots/02-fan-rule.png" alt="风扇控制 - 逐风扇温度联动控速"><br><em>风扇控制（含逐风扇温度联动控速）</em></td>
+<td width="33%"><img src="docs/screenshots/03-raid.png" alt="阵列卡"><br><em>阵列卡（LSI MegaRAID）</em></td>
+</tr>
+</table>
+
 ## 安装
 
 ### 环境要求
