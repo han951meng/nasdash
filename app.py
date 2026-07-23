@@ -671,31 +671,41 @@ def fan_smooth_loop():
             with FAN_LOCK:
                 overrides = dict(FAN_TARGETS)   # 每风扇手动/自动覆盖（仅用户经 UI 调过的风扇）
             all_fans = _enumerate_fans()          # 本机真实风扇全集（it87/nct）
-            st = _load_fan_sys_temp()
-            dt = _load_fan_disk_temp()
-            sys_claimed, disk_claimed = _select_temp_fans(all_fans, st, dt)
-            controlled = sys_claimed | disk_claimed
+            dt = _load_fan_disk_temp()            # 硬盘监控设置（监控盘 + 休眠/空闲停转，供 disk 源共享）
+            rules = _effective_fan_rules()        # 逐风扇温控规则（旧全局面板派生 + 用户逐风扇覆盖）
+            controlled = set()
             controlling_any = False   # 本周期是否真正在写 PWM（接管 FCS 的依据）
-            # 主板/CPU 温控（sys_temp）：优先级最高，先接管
-            if st.get("enabled"):
-                T = _fan_read_sys_temp(st.get("source", "cpu"))
-                action, target = _fan_sys_temp_decision(T, st)
-                for (hwmon, idx) in sys_claimed:
-                    if action == "control" and target is not None:
-                        _fan_smooth_step(hwmon, idx, target); controlling_any = True
-                    elif action == "release":
-                        _fan_release_auto(hwmon, idx)
-                    # "hold" → 已交还自动，不再写入（避免与主板/内核抢控）
-            # 硬盘温度控制（disk_temp）：接管未被 sys_temp 占用的受控风扇
-            if dt.get("enabled") and dt.get("disks"):
-                states = get_disk_temps(dt["disks"])
-                action, target = _fan_disk_temp_decision(states, dt)
-                for (hwmon, idx) in disk_claimed:
-                    if action == "control" and target is not None:
-                        _fan_smooth_step(hwmon, idx, target); controlling_any = True
-                    elif action == "release":
-                        _fan_release_auto(hwmon, idx)
-                    # "hold" → 已交还自动，不再写入
+            # 逐风扇温控：每台风扇按各自「温度源 + 曲线」独立决策（论坛需求：同温源不同曲线）。
+            # 温度源每种只算一次，多台同源风扇复用（硬盘温度采集较重，避免重复扫盘）。
+            need_disk = any((r.get("source", "disk") == "disk") for r in rules.values())
+            need_cpu = any((r.get("source") == "cpu") for r in rules.values())
+            need_mb = any((r.get("source") == "mb") for r in rules.values())
+            disk_all_idle, disk_T, disk_has = (False, None, False)
+            if need_disk:
+                disk_all_idle, disk_T, disk_has = _disk_source_state(dt)
+            cpu_T = _fan_read_sys_temp("cpu") if need_cpu else None
+            mb_T = _fan_read_sys_temp("mb") if need_mb else None
+            for (hwmon, idx) in all_fans:
+                rule = rules.get("%s::%d" % (hwmon, idx))
+                if not rule:
+                    continue
+                src = rule.get("source", "disk")
+                if src == "disk":
+                    if not disk_has:
+                        continue  # 未配置监控盘 → 该风扇本轮不温控（保持原样）
+                    T, all_idle = disk_T, disk_all_idle
+                elif src == "cpu":
+                    T, all_idle = cpu_T, False
+                else:
+                    T, all_idle = mb_T, False
+                key = (hwmon, idx)
+                controlled.add(key)
+                action, target = _fan_rule_decision(key, rule, T, all_idle=all_idle)
+                if action == "control" and target is not None:
+                    _fan_smooth_step(hwmon, idx, target); controlling_any = True
+                elif action == "release":
+                    _fan_release_auto(hwmon, idx)
+                # "hold" → 已交还自动，不再写入（避免与主板/内核抢控）
             # 剩余风扇：仅处理用户在 UI 中手动/自动设过的（overrides）；未触碰的风扇保持原样（交还 BIOS/主板）
             for (hwmon, idx), cfg in overrides.items():
                 if (hwmon, idx) in controlled:
@@ -761,6 +771,7 @@ def _load_fan_disk_temp():
         "max_pwm": 100,              # 全速占空比（%）；full_temp 档即此值，默认 100=全速
         "recover_temp": 35,          # 盘温低于此值 → 受控风扇交还主板/内核自动控速（滞回，须 < start_temp）
         "sleep_stop": True,          # 所有监控盘休眠 → 风扇停转
+        "idle_minutes": 5,           # 监控盘连续无读写满此分钟数也停转风扇（与休眠二选一满足即停，解决「设了休眠风扇却一直转」）
         "controlled_fans": "all",    # "all" 或 [[hwmon,idx],...]
     }
     d = _load_json_file(FAN_DISK_TEMP_FILE, None)
@@ -965,7 +976,7 @@ def get_disk_temps(devs):
                 out = sudo_cmd([SMARTCTL, "-n", "standby", "-A", dev], 8)
                 asleep = False
                 if out and "STANDBY" in out.upper():
-                    states[dev] = {"temp": None, "asleep": True, "no_sleep": False}
+                    states[dev] = {"dev": dev, "temp": None, "asleep": True, "no_sleep": False}
                     continue
                 # SAS 企业盘（阵列卡后）永不休眠：厂商为数据安全锁死。
                 # smartctl -A 对 SAS 盘输出 "Current Drive Temperature"（SATA 走属性表
@@ -980,7 +991,7 @@ def get_disk_temps(devs):
                 if not no_sleep and _disk_is_ssd(dev):
                     no_sleep = True
             if not out:
-                states[dev] = {"temp": None, "asleep": None, "no_sleep": no_sleep}
+                states[dev] = {"dev": dev, "temp": None, "asleep": None, "no_sleep": no_sleep}
                 continue
             temp = None
             for line in out.splitlines():
@@ -997,26 +1008,61 @@ def get_disk_temps(devs):
                             t = t - 273
                         temp = t
                         break
-            states[dev] = {"temp": temp, "asleep": asleep, "no_sleep": no_sleep}
+            states[dev] = {"dev": dev, "temp": temp, "asleep": asleep, "no_sleep": no_sleep}
         except Exception:
-            states[dev] = {"temp": None, "asleep": None, "no_sleep": False}
+            states[dev] = {"dev": dev, "temp": None, "asleep": None, "no_sleep": False}
     return states
 
 
+_DISK_IO_CACHE = {}   # dev -> {"sectors": int, "t": float}；按 /proc/diskstats 扇区计数判断磁盘是否真的在读写
+
+def _disk_idle(dev, idle_minutes):
+    """按 /proc/diskstats 的扇区读写计数判断磁盘是否已连续 idle 满 idle_minutes。
+    与 smartctl 检测到的 STANDBY 状态互补：部分环境下 STANDBY 检测不到，但盘确实无 I/O，
+    此时也应允许停转风扇（用户「设了 5 分钟休眠风扇却一直转」多因此而来）。
+    返回 True=已连续无 I/O 足够久（可停转）；False=近期有 I/O 或尚在计时窗口内。"""
+    try:
+        name = str(dev).replace("/dev/", "")
+        last = None
+        with open("/proc/diskstats") as f:
+            for line in f:
+                parts = line.split()
+                # 字段：1 major 2 minor 3 dev 4 reads 5 rmerged 6 rsect 7 rms 8 writes 9 wmerged 10 wsect
+                if len(parts) >= 10 and parts[2] == name:
+                    last = int(parts[5]) + int(parts[9])
+                    break
+        now = time.time()
+        if last is None:
+            return False
+        prev = _DISK_IO_CACHE.get(dev)
+        if prev is None or prev["sectors"] != last:
+            _DISK_IO_CACHE[dev] = {"sectors": last, "t": now}
+            return False
+        return (now - prev["t"]) >= idle_minutes * 60
+    except Exception:
+        return False
+
 def _all_monitored_idle(valid, cfg):
-    """判断"可停转风扇"：所有可休眠盘都已休眠，且不可休眠盘(SAS 阵列企业盘/NVMe/
-    SATA·SAS 固态盘)温度都低于启动阈值。SAS 企业盘与固态盘厂商锁死/无机械轴不休眠，
-    不参与"全部休眠"判断，但它们若高温仍需散热(安全兜底)，此时不停转、交给温度曲线控速。
+    """判断"可停转风扇"：所有可休眠盘都已休眠(或连续无 I/O 满 idle_minutes)，且不可休眠盘
+    (SAS 阵列企业盘/NVMe/SATA·SAS 固态盘)温度都低于启动阈值。SAS 企业盘与固态盘厂商锁死/
+    无机械轴不休眠，不参与"全部休眠"判断，但它们若高温仍需散热(安全兜底)，此时不停转、
+    交给温度曲线控速。
     - sleep_stop 关 → 永不停转
     - 无任何可休眠盘(如纯 SAS/NVMe/SSD 环境) → 永不因休眠停转，交给温度曲线
+    - 任一可休眠盘未休眠且仍有 I/O（未满 idle_minutes）→ 不停转
     """
     if not bool(cfg.get("sleep_stop", True)):
         return False
+    idle_min = float(cfg.get("idle_minutes", 5))
     sleepable = [s for s in valid if not s.get("no_sleep")]
     if not sleepable:
         return False
-    if not all(s.get("asleep") for s in sleepable):
-        return False
+    for s in sleepable:
+        if s.get("asleep"):
+            continue
+        if _disk_idle(s.get("dev"), idle_min):
+            continue
+        return False  # 该盘既未休眠、也未空闲够久 → 不停转
     start = float(cfg.get("start_temp", 40))
     nosleep_temps = [s["temp"] for s in valid
                      if s.get("no_sleep") and isinstance(s.get("temp"), (int, float))]
@@ -1112,6 +1158,145 @@ def _fan_disk_temp_decision(states, cfg):
             _dt_engaged["v"] = True
             return ("control", _fan_disk_temp_pwm(states, cfg))
         return ("hold", None)
+
+# ===================== 风扇：逐风扇温度联动规则（fan_rules）=====================
+# 论坛需求（huhaibo820）：两台硬盘风扇跟同一组硬盘温度走，但各用不同曲线
+# （一路 30–45°C、一路 45–60°C）。即「在风扇处设置温度源」——每台风扇可单独选温度源
+# （硬盘聚合 / CPU / 主板）并配自己的曲线。
+# 设计（向后兼容，叠加式）：
+#   - 默认规则由旧的 disk_temp / sys_temp 两个全局面板派生（谁 enabled + 接管哪些风扇）。
+#   - fan_rules.json 存「逐风扇覆盖」：某台风扇一旦单独设置，即以它为准，压过全局默认。
+#   - 硬盘温度源共享 disk_temp 的「监控硬盘 + 休眠/空闲停转」设置（同阵列同温源）。
+FAN_RULES_FILE = os.path.join(_config_dir(), "fan_rules.json")
+_FAN_RULE_SOURCES = ("disk", "cpu", "mb")
+
+def _load_fan_rules_raw():
+    """读取用户保存的逐风扇覆盖规则；无有效文件返回 None（表示未自定义、沿用全局默认）。"""
+    d = _load_json_file(FAN_RULES_FILE, None)
+    if isinstance(d, dict) and isinstance(d.get("rules"), dict):
+        return d
+    return None
+
+def _save_fan_rules(d):
+    return _save_json_file(FAN_RULES_FILE, d)
+
+def _rule_from_cfg(source, cfg):
+    """把全局 disk_temp / sys_temp 配置转成一条逐风扇规则。"""
+    r = {
+        "enabled": True,
+        "source": source,
+        "start_temp": cfg.get("start_temp", 40),
+        "full_temp": cfg.get("full_temp", 60),
+        "min_pwm": cfg.get("min_pwm", 30),
+        "max_pwm": cfg.get("max_pwm", 100),
+        "recover_temp": cfg.get("recover_temp", 35),
+    }
+    if cfg.get("curve"):
+        r["curve"] = cfg["curve"]
+    return r
+
+def _derive_rules_from_legacy():
+    """从旧的 disk_temp / sys_temp 全局面板派生逐风扇默认规则（sys 优先于 disk）。"""
+    st = _load_fan_sys_temp()
+    dt = _load_fan_disk_temp()
+    all_fans = _enumerate_fans()
+    sys_claimed, disk_claimed = _select_temp_fans(all_fans, st, dt)
+    rules = {}
+    for (h, i) in sys_claimed:
+        rules["%s::%d" % (h, i)] = _rule_from_cfg(st.get("source", "cpu"), st)
+    for (h, i) in disk_claimed:
+        rules["%s::%d" % (h, i)] = _rule_from_cfg("disk", dt)
+    return rules
+
+def _effective_fan_rules():
+    """最终生效的逐风扇规则：先由旧全局面板派生默认，再叠加用户逐风扇覆盖。
+    覆盖项 value=None 表示「显式清除该风扇的规则」（回到手动/BIOS）。"""
+    rules = _derive_rules_from_legacy()
+    saved = _load_fan_rules_raw()
+    if saved:
+        for k, r in (saved.get("rules") or {}).items():
+            if r is None:
+                rules.pop(k, None)
+            elif isinstance(r, dict) and r.get("enabled", True):
+                rules[k] = r
+            else:
+                rules.pop(k, None)  # enabled=False → 该风扇不温控
+    return rules
+
+def _disk_source_state(dt_cfg):
+    """硬盘温度源当前状态（供所有 source=disk 的风扇共享，每轮只算一次）。
+    返回 (all_idle, T, has_disks)：
+      all_idle=True → 监控盘全部休眠/空闲 → 交还自动
+      T            → 最热监控盘温度（°C），无读数为 None
+      has_disks    → 是否配置了监控盘（无则 disk 源风扇不参与温控）"""
+    devs = dt_cfg.get("disks") or []
+    if not devs:
+        return (False, None, False)
+    states = get_disk_temps(devs)
+    valid = [s for s in states.values() if isinstance(s, dict)]
+    if not valid:
+        return (False, None, True)
+    if _all_monitored_idle(valid, dt_cfg):
+        return (True, None, True)
+    temps = [s["temp"] for s in valid if isinstance(s.get("temp"), (int, float))]
+    T = max(temps) if temps else None
+    return (False, T, True)
+
+def _fan_rule_pwm(T, rule):
+    """按单值温度 T + 该风扇自身规则算目标 raw(0~255)。优先自定义曲线，否则 start/full 线性。"""
+    minp = float(rule.get("min_pwm", 30))
+    maxp = float(rule.get("max_pwm", 100))
+    curve_raw = _fan_curve_pwm(T, rule, minp, maxp)
+    if curve_raw is not None:
+        return curve_raw
+    if T is None:
+        return None
+    start = float(rule.get("start_temp", 40))
+    full = float(rule.get("full_temp", 60))
+    if T < start:
+        return 0
+    if T >= full:
+        return round(maxp / 100 * 255)
+    r = (T - start) / (full - start) if full > start else 0
+    return round((minp + r * (maxp - minp)) / 100 * 255)
+
+# 逐风扇温控滞回状态：{(hwmon, idx): True/False/None}
+_FAN_ENGAGED = {}
+
+def _fan_rule_decision(key, rule, T, all_idle=False):
+    """逐风扇温控滞回状态机，语义与旧的两套全局状态机一致但按风扇独立记忆。
+    返回 (action, raw)：control=按曲线接管 / release=交还自动 / hold=已释放且在滞回区不写。
+    stop_below_start=True 时：温度低于开转温度（或硬盘空闲=冷态）直接强制 0%（保持在 nasdash
+    软件接管、不交还自动），实现「低于开转温度即停转」。读不到温度仍保守交还自动（避免未知
+    高温时风扇熄火，比强制停转更安全）。"""
+    start = float(rule.get("start_temp", 40))
+    recover = float(rule.get("recover_temp", start - 5))
+    if recover >= start:
+        recover = start - 5
+    stop_below = bool(rule.get("stop_below_start", False))
+    if all_idle:
+        # 硬盘空闲（disk 源）视为冷态：勾选了低温停转则强制 0%，否则交还自动
+        _FAN_ENGAGED[key] = False
+        return ("control", 0) if stop_below else ("release", None)
+    if T is None:
+        # 读不到温度：保守交还自动（不强制停转，避免未知高温时风扇熄火）
+        _FAN_ENGAGED[key] = False
+        return ("release", None)
+    if T < start:
+        if stop_below:
+            # 低温强制停转：直接写 0%（保持在 nasdash 软件接管，不交还自动）
+            _FAN_ENGAGED[key] = False
+            return ("control", 0)
+        # 原滞回逻辑：已接管则低于 recover 才释放；未接管则保持释放
+        if _FAN_ENGAGED.get(key):
+            if T < recover:
+                _FAN_ENGAGED[key] = False
+                return ("release", None)
+            return ("control", _fan_rule_pwm(T, rule))
+        return ("hold", None)
+    # 已达开转温度：接管并按曲线控速
+    _FAN_ENGAGED[key] = True
+    return ("control", _fan_rule_pwm(T, rule))
 
 # ===================== 采集：阵列卡 =====================
 def detect_storage_controllers():
@@ -2960,7 +3145,7 @@ def api_fan_set():
         pct = int(pwm)
     except (TypeError, ValueError):
         return jsonify({"ok": False, "error": "invalid pwm"}), 400
-    FLOOR = 10  # 最低 10%（用户要求支持 10% 档位；此硬件风扇 10% 仍可运转）
+    FLOOR = 0  # 允许命令到 0%（真正停转）。有用户反馈其硬件在 10% 已停转，需要能设到 0%
     pct = max(FLOOR, min(100, pct))
     raw = round(pct / 100 * 255)
     # 仅设为目标值，由缓变线程平滑过渡（不再瞬间写 255，避免突然全速）
@@ -2975,11 +3160,16 @@ def get_fan_status():
     fans = []
     labels = _load_fan_labels()
     _dt = _load_fan_disk_temp()
-    _dt_active = bool(_dt.get("enabled")) and bool(_dt.get("disks"))
-    _dt_cf = _dt.get("controlled_fans", "all")
-    _st = _load_fan_sys_temp()
-    _st_active = bool(_st.get("enabled"))
-    _st_cf = _st.get("controlled_fans", "all")
+    _rules = _effective_fan_rules()   # 逐风扇温控规则（判定每台风扇是否被温控接管 + 算目标）
+    # 逐风扇温控目标：温度源每种只算一次，供状态展示（与调速线程口径一致）
+    _need_disk = any((r.get("source", "disk") == "disk") for r in _rules.values())
+    _need_cpu = any((r.get("source") == "cpu") for r in _rules.values())
+    _need_mb = any((r.get("source") == "mb") for r in _rules.values())
+    _disk_idle_s, _disk_T, _disk_has = (False, None, False)
+    if _need_disk:
+        _disk_idle_s, _disk_T, _disk_has = _disk_source_state(_dt)
+    _cpu_T = _fan_read_sys_temp("cpu") if _need_cpu else None
+    _mb_T = _fan_read_sys_temp("mb") if _need_mb else None
     fc_raw = read_file("/vol2/@appconf/FanControlServer/config.json")
     names = {}
     if fc_raw:
@@ -3006,10 +3196,30 @@ def get_fan_status():
             pwm_raw = None
         pwm_pct = round(pwm_raw / 255 * 100) if pwm_raw is not None else None
         cur_mode = "manual" if _pe == "1" else "auto" if _pe == "2" else "off"
-        _is_st = bool(_st_active) and (_st_cf == "all" or [hwmon, idx] in _st_cf)
-        _is_dt = (not _is_st) and bool(_dt_active) and (_dt_cf == "all" or [hwmon, idx] in _dt_cf)
-        mode = "sys_temp" if _is_st else ("disk_temp" if _is_dt else cur_mode)
         key = (hwmon, idx)
+        # 逐风扇温控：该风扇若命中规则，模式按温度源分类（沿用旧徽标 disk_temp/sys_temp），
+        # 并附带该风扇自己的规则与实时计算目标，供前端逐扇展示。
+        _rule = _rules.get("%s::%d" % (hwmon, idx))
+        rule_out = None
+        computed_pwm = None
+        rule_source = None
+        if _rule:
+            _src = _rule.get("source", "disk")
+            rule_source = _src
+            if _src == "disk":
+                _rt, _ridle, _rhas = _disk_T, _disk_idle_s, _disk_has
+            elif _src == "cpu":
+                _rt, _ridle, _rhas = _cpu_T, False, True
+            else:
+                _rt, _ridle, _rhas = _mb_T, False, True
+            if _rhas:
+                _raw = 0 if _ridle else _fan_rule_pwm(_rt, _rule)
+                if _raw is not None:
+                    computed_pwm = round(_raw / 255 * 100)
+            rule_out = _rule
+            mode = "sys_temp" if _src in ("cpu", "mb") else "disk_temp"
+        else:
+            mode = cur_mode
         target_pct = None
         with FAN_LOCK:
             tcfg = FAN_TARGETS.get(key)
@@ -3023,6 +3233,9 @@ def get_fan_status():
             "idx": idx, "hwmon": hwmon,
             "rpm": rpm, "pwm": pwm_pct,
             "mode": mode,
+            "rule": rule_out,
+            "rule_source": rule_source,
+            "computed_pwm": computed_pwm,
             "target_pct": target_pct,
             "controllable": True,
             # has_tach=False：该通道读不到转速（分线器副扇/未接转速线/主板未布线该通道）
@@ -3078,6 +3291,14 @@ def api_fan_disk_temp_set():
         cfg["disks"] = norm
     if "sleep_stop" in data:
         cfg["sleep_stop"] = bool(data["sleep_stop"])
+    if "idle_minutes" in data:
+        try:
+            iv = float(data["idle_minutes"])
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "idle_minutes 需为数字"}), 400
+        if iv < 1 or iv > 120:
+            return jsonify({"ok": False, "error": "idle_minutes 需在 1~120 分钟"}), 400
+        cfg["idle_minutes"] = iv
     err = _apply_temp_curve(cfg, data, recover_max=100)
     if err:
         return err
@@ -3117,6 +3338,140 @@ def api_fan_sys_temp_set():
     return jsonify({"ok": False, "error": "写配置失败"}), 500
 
 
+def _validate_fan_rule(r):
+    """校验单条逐风扇规则，返回 (clean_rule|None, error|None)。value=None 表示删除该风扇规则。"""
+    if r is None:
+        return (None, None)
+    if not isinstance(r, dict):
+        return (None, "规则需为对象")
+    src = r.get("source", "disk")
+    if src not in _FAN_RULE_SOURCES:
+        return (None, "source 需为 disk / cpu / mb")
+    clean = {"enabled": bool(r.get("enabled", True)), "source": src}
+    for k, lo, hi, dv in (("start_temp", 0, 110, 40), ("full_temp", 0, 120, 60),
+                          ("min_pwm", 0, 100, 30), ("max_pwm", 0, 100, 100),
+                          ("recover_temp", 0, 120, 35)):
+        v = r.get(k, dv)
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            return (None, k + " 需为数字")
+        if v < lo or v > hi:
+            return (None, "%s 需在 %d~%d" % (k, lo, hi))
+        clean[k] = v
+    if clean["full_temp"] <= clean["start_temp"]:
+        return (None, "全速温度必须大于开转温度")
+    if clean["recover_temp"] >= clean["start_temp"]:
+        return (None, "恢复自动温度必须小于开转温度")
+    # 可选：低于开转温度即强制停转（默认关）
+    if "stop_below_start" in r:
+        clean["stop_below_start"] = bool(r["stop_below_start"])
+    if "curve" in r and r["curve"]:
+        curve = r["curve"]
+        if not isinstance(curve, list):
+            return (None, "curve 需为数组")
+        norm = []
+        for p in curve:
+            if not (isinstance(p, (list, tuple)) and len(p) == 2):
+                return (None, "curve 每项需为 [温度, 占空比]")
+            try:
+                t = float(p[0]); pw = float(p[1])
+            except (TypeError, ValueError):
+                return (None, "curve 温度/占空比需为数字")
+            if pw < 0 or pw > 100:
+                return (None, "curve 占空比需在 0~100")
+            norm.append([t, pw])
+        norm.sort(key=lambda x: x[0])
+        clean["curve"] = norm
+    return (clean, None)
+
+
+@app.route("/api/fan/rules")
+def api_fan_rules_get():
+    """读取逐风扇温控规则（含旧全局面板派生的默认）+ 每台风扇的温度源、实时温度、计算目标。
+    is_custom：是否已存在用户逐风扇覆盖文件。"""
+    rules = _effective_fan_rules()
+    dt = _load_fan_disk_temp()
+    disk_all_idle, disk_T, disk_has = _disk_source_state(dt) if any(
+        (r.get("source", "disk") == "disk") for r in rules.values()) else (False, None, bool(dt.get("disks")))
+    cpu_T = _fan_read_sys_temp("cpu")
+    mb_T = _fan_read_sys_temp("mb")
+    fans_out = []
+    for (hwmon, idx) in _enumerate_fans():
+        rk = "%s::%d" % (hwmon, idx)
+        rule = rules.get(rk)
+        lbl = _load_fan_labels().get(rk, {})
+        src = (rule or {}).get("source")
+        if src == "cpu":
+            T = cpu_T
+        elif src == "mb":
+            T = mb_T
+        else:
+            T = disk_T if rule else None
+        computed = None
+        if rule:
+            raw = 0 if (src == "disk" and disk_all_idle) else _fan_rule_pwm(T, rule)
+            if raw is not None:
+                computed = round(raw / 255 * 100)
+        fans_out.append({
+            "hwmon": hwmon, "idx": idx, "key": rk,
+            "name": lbl.get("name") or ("风扇%d" % idx),
+            "hidden": bool(lbl.get("hidden")),
+            "rule": rule,
+            "source_temp": round(T, 1) if isinstance(T, (int, float)) else None,
+            "computed_pwm": computed,
+        })
+    return jsonify({
+        "fans": fans_out,
+        "is_custom": _load_fan_rules_raw() is not None,
+        "disk": {"disks": dt.get("disks", []), "has_disks": disk_has,
+                 "all_idle": disk_all_idle, "temp": round(disk_T, 1) if isinstance(disk_T, (int, float)) else None},
+        "cpu_temp": round(cpu_T, 1) if isinstance(cpu_T, (int, float)) else None,
+        "mb_temp": round(mb_T, 1) if isinstance(mb_T, (int, float)) else None,
+        "sources": list(_FAN_RULE_SOURCES),
+    })
+
+
+@app.route("/api/fan/rules", methods=["POST"])
+@require_admin()
+def api_fan_rules_set():
+    """保存逐风扇温控规则覆盖。两种 body：
+      整体覆盖：{"rules": {"<hwmon>::<idx>": {...}|null, ...}}
+      单条设置：{"key": "<hwmon>::<idx>", "rule": {...}|null}
+    rule=null 表示清除该风扇的自定义（回到全局默认/手动）。"""
+    data = request.get_json(force=True, silent=True) or {}
+    saved = _load_fan_rules_raw() or {"rules": {}}
+    cur = dict(saved.get("rules") or {})
+    if "key" in data:
+        k = data.get("key")
+        if not isinstance(k, str) or "::" not in k:
+            return jsonify({"ok": False, "error": "key 需为 '<hwmon>::<idx>'"}), 400
+        clean, err = _validate_fan_rule(data.get("rule"))
+        if err:
+            return jsonify({"ok": False, "error": err}), 400
+        if clean is None:
+            cur.pop(k, None)
+        else:
+            cur[k] = clean
+    elif "rules" in data:
+        incoming = data.get("rules")
+        if not isinstance(incoming, dict):
+            return jsonify({"ok": False, "error": "rules 需为对象"}), 400
+        for k, r in incoming.items():
+            if not isinstance(k, str) or "::" not in k:
+                return jsonify({"ok": False, "error": "规则 key 需为 '<hwmon>::<idx>'"}), 400
+            clean, err = _validate_fan_rule(r)
+            if err:
+                return jsonify({"ok": False, "error": "%s: %s" % (k, err)}), 400
+            if clean is None:
+                cur.pop(k, None)
+            else:
+                cur[k] = clean
+    else:
+        return jsonify({"ok": False, "error": "缺少 key 或 rules"}), 400
+    if _save_fan_rules({"rules": cur}):
+        return jsonify({"ok": True, "rules": cur})
+    return jsonify({"ok": False, "error": "写配置失败"}), 500
 
 
 @app.route("/api/fan/fcs")

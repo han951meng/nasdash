@@ -170,6 +170,25 @@
   .fan-custom-input{width:56px;padding:5px 6px;font-size:13px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text)}
   .fan-custom-input:focus{outline:none;border-color:var(--blue)}
   .fan-card-state{font-size:12px;color:var(--muted)}
+  /* 逐风扇温度联动控速 */
+  .fan-rule{margin-top:10px;padding-top:10px;border-top:1px dashed var(--border)}
+  .fan-rule-head{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
+  .fan-rule-title{font-size:12px;font-weight:600;color:var(--text)}
+  .fan-rule-src{padding:4px 6px;font-size:12px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text)}
+  .fan-rule-src:focus{outline:none;border-color:var(--blue)}
+  .fan-rule-live{font-size:12px;color:var(--blue);margin-left:auto}
+  .fan-rule-body{margin-top:8px}
+  .fan-rule-fields{display:flex;flex-wrap:wrap;gap:6px 10px;font-size:12px;color:var(--muted)}
+  .fan-rule-fields span{display:inline-flex;align-items:center;gap:4px}
+  .fan-rule-fields label{color:var(--muted)}
+  .fan-rule-fields input{width:52px;padding:4px 5px;font-size:12px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text)}
+  .fan-rule-fields input:focus{outline:none;border-color:var(--blue)}
+  .fan-rule-actions{display:flex;align-items:center;gap:10px;margin-top:8px}
+  .fan-rule-state{font-size:12px;color:var(--muted)}
+  .fan-rule-state.ok{color:var(--green)}
+  .fan-rule-stop{display:flex;align-items:center;gap:6px;margin-top:8px;font-size:12px;color:var(--text);cursor:pointer}
+  .fan-rule-stop input{width:auto;margin:0}
+  .fan-rule-tip{font-size:12px;color:var(--muted);line-height:1.6;margin:2px 0 12px;padding:10px 12px;background:var(--bg);border:1px solid var(--border);border-radius:8px}
   /* 硬盘温度控制风扇面板 */
   .dt-panel{--dt-gap:16px;padding:18px}
   .dt-panel h3{display:flex;align-items:center;gap:10px;margin:0 0 16px;font-size:16px}
@@ -613,11 +632,11 @@ function fmtDiskRows(diskio){
 
 function renderFanControls(fans){
   let ctrls = (fans||[]).filter(f=>f.controllable).map(f=>{
-    let id='fan'+f.idx;
+    let id=fanUid(f.hwmon, f.idx);
     let pct=(f.pwm!=null)?f.pwm:50;
     return `<div class="fan-ctrl" id="${id}-box">
       <div class="fan-ctrl-head"><span>${f.name}</span><span class="fan-ctrl-val"><span id="${id}-cur">${pct}</span>% <span class="fan-ctrl-tgt" id="${id}-tgt"></span></span></div>
-      <input type="range" min="30" max="100" value="${pct}" class="fan-slider" data-hwmon="${f.hwmon}" data-idx="${f.idx}" id="${id}-slider">
+      <input type="range" min="0" max="100" value="${pct}" class="fan-slider" data-hwmon="${f.hwmon}" data-idx="${f.idx}" id="${id}-slider">
       <div class="fan-ctrl-actions">
         <span class="fan-ctrl-rpm">转速 <b id="${id}-rpm">${f.rpm||0}</b> RPM</span>
         <button class="btn-mini" onclick="setFanAuto('${f.hwmon}', ${f.idx})">恢复自动</button>
@@ -632,6 +651,9 @@ function renderFanControls(fans){
 // ===== 风扇控制独立页面（预设档位 + 实时转速卡片）=====
 let FAN_LIST=[];
 let SHOW_HIDDEN_FANS=false;
+// 风扇卡片 DOM 唯一 ID：用 hwmon 路径 + idx 组合，避免不同 hwmon 芯片上 idx 重复导致 ID 撞车
+// （重名风扇「改一个两个一起变、隐藏一个两个一起没」的根因）
+function fanUid(hwmon, idx){ return 'fan_' + String(hwmon||'').split('/').pop() + '_' + (idx==null?'':idx); }
 // 仅重渲染风扇面板（本地缓存 DATA，无需全量 loadData，避免点击「显示/隐藏通道」时卡顿等待整页刷新）
 function refreshFanPanel(){
   let box=document.getElementById('fan');
@@ -647,16 +669,17 @@ function renderFanControl(){
   let fans=SHOW_HIDDEN_FANS?allFans:allFans.filter(f=>!f.hidden);
   FAN_LIST=fans;
   if(!allFans.length) return '<div class="card"><div class="loading">未检测到可调控风扇（部分 NAS 由系统固件统一控温，本工具不接管）</div></div>';
-  let presets=[['auto','默认'],['100','全速'],['10','10%'],['20','20%'],['30','30%'],['40','40%'],['50','50%'],['60','60%'],['70','70%'],['80','80%'],['90','90%']];
+  let presets=[['0','停转'],['auto','默认'],['100','全速'],['10','10%'],['20','20%'],['30','30%'],['40','40%'],['50','50%'],['60','60%'],['70','70%'],['80','80%'],['90','90%']];
   let presetHtml=presets.map(p=>`<button class="preset-btn ${p[0]==='100'?'full':''}" data-preset="${p[0]}" onclick="applyFanPreset('${p[0]}')">${p[1]}</button>`).join('');
   let modeMap={'curve':'曲线温控','manual':'手动控制','auto':'自动温控','off':'关闭','disk_temp':'硬盘温控','sys_temp':'主板/CPU温控'};
   let cards=fans.map(f=>{
-    let id='fan'+f.idx;
+    let id=fanUid(f.hwmon, f.idx);
     let pct=(f.pwm!=null)?f.pwm:50;
+    let ruleHtml=fanRuleSection(f, id);
     return `<div class="fan-card" id="${id}-box">
       <div class="fan-card-head">
         <input class="fan-label-input" id="${id}-label" value="${esc(f.label||f.name||'')}" placeholder="自定义名称（如 CPU 风扇）" maxlength="40">
-        <span class="pill ${f.mode==='curve'||f.mode==='auto'?'b-info':'b-warn'}">${modeMap[f.mode]||f.mode||''}</span>
+        <span class="pill ${f.mode==='curve'||f.mode==='auto'||f.mode==='disk_temp'||f.mode==='sys_temp'?'b-info':'b-warn'}">${modeMap[f.mode]||f.mode||''}</span>
         <span class="fan-label-save">
           <select class="fan-volt-select" id="${id}-volt" title="风扇供电电压">
             <option value="12V" ${f.voltage==='12V'?'selected':''}>12V</option>
@@ -673,16 +696,17 @@ function renderFanControl(){
         <span>当前 <b id="${id}-cur">${pct}</b>%</span>
         <span>目标 <b id="${id}-tgt"></b></span>
       </div>
-      <input type="range" min="10" max="100" value="${pct}" class="fan-slider" data-hwmon="${f.hwmon}" data-idx="${f.idx}" id="${id}-slider">
+      <input type="range" min="0" max="100" value="${pct}" class="fan-slider" data-hwmon="${f.hwmon}" data-idx="${f.idx}" id="${id}-slider">
       <div class="fan-card-actions">
         <button class="btn-mini" onclick="setFanAuto('${f.hwmon}', ${f.idx})">恢复自动</button>
         <span class="fan-custom">
-          <input type="number" min="10" max="100" step="1" value="${pct}" class="fan-custom-input" id="${id}-custom" data-hwmon="${f.hwmon}" data-idx="${f.idx}" title="自定义该风扇占空比"> %
+          <input type="number" min="0" max="100" step="1" value="${pct}" class="fan-custom-input" id="${id}-custom" data-hwmon="${f.hwmon}" data-idx="${f.idx}" title="自定义该风扇占空比（0=停转）"> %
           <button class="btn-mini" onclick="applyFanCustom('${f.hwmon}', ${f.idx})">应用</button>
         </span>
         <button class="btn-mini" onclick="toggleFanHidden('${f.hwmon}', ${f.idx}, ${f.hidden?'false':'true'})" title="隐藏无风扇/无转速的空通道，可随时恢复">${f.hidden?'取消隐藏':'隐藏'}</button>
         <span class="fan-card-state" id="${id}-state"></span>
       </div>
+      ${ruleHtml}
     </div>`;
   }).join('');
   let dtHtml = renderDiskTempPanel();
@@ -697,9 +721,91 @@ function renderFanControl(){
       ${hideToggle}
       <span class="fan-global-state" id="fan-global-state"></span>
     </div>
+    <div class="fan-rule-tip">💡 每台风扇卡片内可单独设「温度联动控速」：各自选温度源（硬盘 / CPU / 主板）并配自己的曲线，互不影响。适合两台风扇跟同一组硬盘温度、却要走不同曲线（如一台 30–45°C、一台 45–60°C）。未单独设置的风扇沿用下方全局默认。硬盘温度源需先在上方「硬盘温度控制」里勾选要监控的硬盘。</div>
     <div class="fan-grid">${gridInner}</div>
     <div class="card fcs-card" id="fcs-panel"><div class="loading">加载系统风扇服务状态…</div></div>
   </div>`;
+}
+// ===== 逐风扇温度联动控速（fan_rules）：每台风扇独立温度源 + 独立曲线 =====
+function fanRuleSection(f, id){
+  var r=f.rule||null;
+  var src=f.rule_source||'';
+  var sd={disk:{start:40,full:60,min:30,max:100,rec:35},
+          cpu:{start:45,full:70,min:30,max:100,rec:40},
+          mb:{start:45,full:70,min:30,max:100,rec:40}};
+  var d=sd[src]||sd.disk;
+  var v=function(k,dv){ return (r&&r[k]!=null)?r[k]:dv; };
+  var open=!!src;
+  var comp=(f.computed_pwm!=null)?(f.computed_pwm+'%'):'—';
+  return '<div class="fan-rule" id="'+id+'-rule">'
+    +'<div class="fan-rule-head">'
+      +'<span class="fan-rule-title">温度联动控速</span>'
+      +'<select class="fan-rule-src" id="'+id+'-rsrc" onchange="onRuleSrcChange(\''+f.hwmon+'\','+f.idx+')">'
+        +'<option value="" '+(src===''?'selected':'')+'>关闭（手动/默认）</option>'
+        +'<option value="disk" '+(src==='disk'?'selected':'')+'>硬盘温度</option>'
+        +'<option value="cpu" '+(src==='cpu'?'selected':'')+'>CPU 温度</option>'
+        +'<option value="mb" '+(src==='mb'?'selected':'')+'>主板温度</option>'
+      +'</select>'
+      +'<span class="fan-rule-live" id="'+id+'-rlive">'+(open?('计算目标 '+comp):'')+'</span>'
+    +'</div>'
+    +'<div class="fan-rule-body" id="'+id+'-rbody" style="display:'+(open?'block':'none')+'">'
+      +'<div class="fan-rule-fields">'
+        +'<span><label>开转</label><input type="number" id="'+id+'-rstart" min="0" max="110" value="'+v('start_temp',d.start)+'">°C</span>'
+        +'<span><label>全速</label><input type="number" id="'+id+'-rfull" min="0" max="120" value="'+v('full_temp',d.full)+'">°C</span>'
+        +'<span><label>开转占空</label><input type="number" id="'+id+'-rmin" min="0" max="100" value="'+v('min_pwm',d.min)+'">%</span>'
+        +'<span><label>全速占空</label><input type="number" id="'+id+'-rmax" min="0" max="100" value="'+v('max_pwm',d.max)+'">%</span>'
+        +'<span><label>恢复</label><input type="number" id="'+id+'-rrec" min="0" max="120" value="'+v('recover_temp',d.rec)+'">°C</span>'
+      +'</div>'
+      +'<label class="fan-rule-stop"><input type="checkbox" id="'+id+'-rstop" '+(r&&r.stop_below_start?'checked':'')+'> 低于开转温度即停转（强制 0%）</label>'
+      +'<div class="fan-rule-actions">'
+        +'<button class="btn-mini" onclick="saveFanRule(\''+f.hwmon+'\','+f.idx+')">保存联动</button>'
+        +'<span class="fan-rule-state" id="'+id+'-rstate"></span>'
+      +'</div>'
+    +'</div>'
+  +'</div>';
+}
+function onRuleSrcChange(hwmon, idx){
+  var id=fanUid(hwmon, idx);
+  var sel=document.getElementById(id+'-rsrc');
+  var body=document.getElementById(id+'-rbody');
+  if(!sel||!body) return;
+  var src=sel.value;
+  body.style.display=src?'block':'none';
+  // 切换温度源时，若各输入仍是上个源的默认，套用新源的推荐默认（用户已改过则保留）
+  if(src){
+    var sd={disk:{start:40,full:60,rec:35},cpu:{start:45,full:70,rec:40},mb:{start:45,full:70,rec:40}};
+    var d=sd[src]||sd.disk;
+    var st=document.getElementById(id+'-rstate'); if(st) st.textContent='';
+  }
+}
+async function saveFanRule(hwmon, idx){
+  var id=fanUid(hwmon, idx);
+  var st=document.getElementById(id+'-rstate');
+  var sel=document.getElementById(id+'-rsrc');
+  var key=hwmon+'::'+idx;
+  var src=sel?sel.value:'';
+  var body={key:key};
+  if(!src){
+    body.rule=null;  // 关闭 → 清除该风扇联动
+  }else{
+    var start=parseFloat(document.getElementById(id+'-rstart').value);
+    var full=parseFloat(document.getElementById(id+'-rfull').value);
+    var minp=parseFloat(document.getElementById(id+'-rmin').value);
+    var maxp=parseFloat(document.getElementById(id+'-rmax').value);
+    var rec=parseFloat(document.getElementById(id+'-rrec').value);
+    var stopEl=document.getElementById(id+'-rstop');
+    var stopv=stopEl?stopEl.checked:false;
+    if(!(full>start)){ if(st){ st.textContent='全速温度须大于开转温度'; st.className='fan-rule-state'; } return; }
+    if(!(rec<start)){ if(st){ st.textContent='恢复温度须小于开转温度'; st.className='fan-rule-state'; } return; }
+    body.rule={enabled:true,source:src,start_temp:start,full_temp:full,min_pwm:minp,max_pwm:maxp,recover_temp:rec,stop_below_start:stopv};
+  }
+  if(st){ st.textContent='保存中…'; st.className='fan-rule-state'; }
+  try{
+    var r=await fetch('/api/fan/rules',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    var j=await r.json();
+    if(st){ st.textContent=j.ok?'已保存 ✓':('失败：'+(j.error||'')); st.className=j.ok?'fan-rule-state ok':'fan-rule-state'; }
+    if(j.ok){ loadData(); }  // 重新拉取，令徽标/计算目标随新规则更新
+  }catch(e){ if(st){ st.textContent='请求失败（需管理员登录）'; st.className='fan-rule-state'; } }
 }
 // ===== 系统风扇服务（pwm-fancontrol）永久禁用 / 恢复 =====
 async function loadFcsStatus(){
@@ -793,12 +899,12 @@ function updatePresetHighlight(fans){
   }
 }
 async function applyFanCustom(hwmon, idx){
-  let id='fan'+idx;
+  let id=fanUid(hwmon, idx);
   let inp=document.getElementById(id+'-custom');
   if(!inp) return;
   let v=parseInt(inp.value,10);
   if(isNaN(v)) return;
-  v=Math.max(10,Math.min(100,v));
+  v=Math.max(0,Math.min(100,v));
   inp.value=v;
   await applyFan(hwmon, idx, v);
 }
@@ -807,7 +913,7 @@ async function fetchFanStatus(){
     let r=await fetch('/api/fan/status?_='+Date.now());
     let j=await r.json();
     (j.fans||[]).forEach(f=>{
-      let id='fan'+f.idx;
+      let id=fanUid(f.hwmon, f.idx);
       let cur=document.getElementById(id+'-cur');
       let tgt=document.getElementById(id+'-tgt');
       let rpm=document.getElementById(id+'-rpm');
@@ -822,12 +928,15 @@ async function fetchFanStatus(){
         // 手动模式下滑块停在用户设定的目标值，不强行跟随实时爬升（避免松手后滑块回弹误以为没生效）；自动模式跟随实时值
         sl.value=(f.mode==='manual' && f.target_pct!=null)?f.target_pct:(f.pwm!=null?f.pwm:50);
       }
+      // 逐风扇温度联动：实时刷新「计算目标」（不动用户正在编辑的输入框）
+      let rlive=document.getElementById(id+'-rlive');
+      if(rlive && f.rule_source){ rlive.textContent='计算目标 '+(f.computed_pwm!=null?f.computed_pwm+'%':'—'); }
     });
     updatePresetHighlight(j.fans);
   }catch(e){}
 }
 async function applyFan(hwmon, idx, pwm){
-  let id='fan'+idx, st=document.getElementById(id+'-state');
+  let id=fanUid(hwmon, idx), st=document.getElementById(id+'-state');
   if(st) st.textContent='目标 '+pwm+'%，平滑过渡中…';
   try{
     let r=await fetch('/api/fan/set',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({hwmon:hwmon,idx:idx,pwm:pwm})});
@@ -836,7 +945,7 @@ async function applyFan(hwmon, idx, pwm){
   }catch(e){ if(st) st.textContent='请求失败'; }
 }
 async function setFanAuto(hwmon, idx){
-  let id='fan'+idx, st=document.getElementById(id+'-state');
+  let id=fanUid(hwmon, idx), st=document.getElementById(id+'-state');
   if(st) st.textContent='恢复中…';
   try{
     let r=await fetch('/api/fan/set',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({hwmon:hwmon,idx:idx,mode:'auto'})});
@@ -846,7 +955,7 @@ async function setFanAuto(hwmon, idx){
   }catch(e){ if(st) st.textContent='请求失败'; }
 }
 async function saveFanLabel(hwmon, idx){
-  let id='fan'+idx;
+  let id=fanUid(hwmon, idx);
   let labInp=document.getElementById(id+'-label');
   let voltSel=document.getElementById(id+'-volt');
   let st=document.getElementById(id+'-label-state');
@@ -880,7 +989,7 @@ function bindFanSliders(){
   document.querySelectorAll('.fan-slider').forEach(sl=>{
     sl.addEventListener('input', ()=>{
       clearPresetHighlight();
-      let id='fan'+sl.dataset.idx;
+      let id=fanUid(sl.dataset.hwmon, sl.dataset.idx);
       let v=sl.value;
       let cur=document.getElementById(id+'-cur'); if(cur) cur.textContent=v;
       let tgt=document.getElementById(id+'-tgt'); if(tgt) tgt.textContent='→ 目标 '+v+'%';
@@ -973,9 +1082,10 @@ function renderDiskTempPanel(){
       +'</div>'
     +'</div>'
     +'<div class="dt-section">'
-      +'<div class="dt-options">'
+        +'<div class="dt-options">'
         +'<label class="dt-toggle"><input type="checkbox" id="dt-sleep" checked> 监控盘全部休眠时停转风扇</label>'
-      +'</div>'
+        +'<label class="dt-toggle">监控盘连续无读写满 <input type="number" id="dt-idle" min="1" max="120" value="5" style="width:52px"> 分钟也停转风扇（与休眠满足其一即停）</label>'
+        +'</div>'
     +'</div>'
     + renderCurveEditor('dt')
     +'<div class="dt-actions">'
@@ -1013,6 +1123,7 @@ async function initDiskTemp(snap){
     var rc=document.getElementById('dt-recover'); if(rc) rc.value=(c.recover_temp!=null?c.recover_temp:35);
     var cd=document.getElementById('dt-curve-data'); if(cd){ cd.value=JSON.stringify(c.curve||[]); renderCurvePoints('dt'); drawCurve('dt'); }
     var sl=document.getElementById('dt-sleep'); if(sl) sl.checked=(c.sleep_stop!==false);
+    var idleEl=document.getElementById('dt-idle'); if(idleEl) idleEl.value=(c.idle_minutes!=null?c.idle_minutes:5);
     (c.disks||[]).forEach(function(dev){
       var shortDev=String(dev).replace(/^\/dev\//,'');
       var cbs=document.querySelectorAll('.dt-disk');
@@ -1074,12 +1185,13 @@ async function saveDiskTempConfig(){
   var maxp=parseFloat(document.getElementById('dt-max').value);
   var rec=parseFloat(document.getElementById('dt-recover').value);
   var sl=document.getElementById('dt-sleep'); var sleep=sl?sl.checked:true;
+  var idleEl=document.getElementById('dt-idle'); var idle=idleEl?parseFloat(idleEl.value):5;
   if(!devs.length){ if(st){ st.textContent='请至少勾选一个硬盘'; st.className='dt-save-state'; } return; }
   if(!(full>start)){ if(st){ st.textContent='全速温度须大于开转温度'; st.className='dt-save-state'; } return; }
   if(!(rec<start)){ if(st){ st.textContent='恢复自动温度须小于开转温度'; st.className='dt-save-state'; } return; }
   if(st){ st.textContent='保存中…'; st.className='dt-save-state'; }
   try{
-    var body={enabled:enabled,disks:devs,start_temp:start,full_temp:full,min_pwm:minp,max_pwm:maxp,recover_temp:rec,sleep_stop:sleep,controlled_fans:controlled_fans,curve:readCurve('dt')};
+    var body={enabled:enabled,disks:devs,start_temp:start,full_temp:full,min_pwm:minp,max_pwm:maxp,recover_temp:rec,sleep_stop:sleep,idle_minutes:idle,controlled_fans:controlled_fans,curve:readCurve('dt')};
     var r=await fetch('/api/fan/disk_temp',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     var j=await r.json();
     if(st){ st.textContent=j.ok?'已保存 ✓':'失败：'+(j.error||''); st.className=j.ok?'dt-save-state ok':'dt-save-state'; }
