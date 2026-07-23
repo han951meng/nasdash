@@ -12,6 +12,7 @@
   4. 调用 build.sh --with-wizard 重建【带向导发布版】fpk 并跑 verify.sh
 发版后的 commit/tag/push/Release 由你手动执行（见末尾提示）。
 """
+import os
 import re
 import subprocess
 import sys
@@ -93,7 +94,37 @@ if len(_secs) > README_KEEP:
 
 open(RD, "w", encoding="utf-8").write(r)
 
-print("manifest / README 已更新，开始重建【带向导发布版】fpk ...")
+# 4c) 手册头部版本号自动同步（防 1.8.5->1.8.6 类漏改）
+MANUAL = "docs/使用手册.md"
+if os.path.exists(MANUAL):
+    _mm = open(MANUAL, encoding="utf-8").read()
+    _mm2 = re.sub(r"仅对应当前代码版本 v[\d.]+", f"仅对应当前代码版本 v{NEW}", _mm)
+    if _mm2 != _mm:
+        open(MANUAL, "w", encoding="utf-8").write(_mm2)
+        print(f"已同步 {MANUAL} 头部版本号 -> v{NEW}")
+    else:
+        print(f"⚠️ 未在 {MANUAL} 找到头部版本号行，请手动核对")
+    print(f"提醒：请手动把 {MANUAL} 的『本版本修复了什么』区更新为本版要点（release.py 已自动同步头部版本号）")
+
+# 4d) 版本号残留扫描（防漏改：手册仍含旧版本号 / app.py 硬编码旧版本）
+_residue = []
+if os.path.exists(MANUAL):
+    _mt = open(MANUAL, encoding="utf-8", errors="ignore").read()
+    if f"v{cur}" in _mt:
+        _residue.append(f"{MANUAL} 仍含旧版本号 v{cur}（请更新『本版本修复了什么』/正文）")
+for _f in ("app.py",):
+    if os.path.exists(_f):
+        _at = open(_f, encoding="utf-8", errors="ignore").read()
+        if f'"{cur}"' in _at or f"'{cur}'" in _at:
+            _residue.append(f"{_f} 疑似硬编码旧版本号 {cur}（应为动态读 manifest）")
+if _residue:
+    print("\n⚠️  版本号残留检查未通过：")
+    for _a in _residue:
+        print("   - " + _a)
+    print("请修正后重跑 release.py。")
+    sys.exit(2)
+
+print("manifest / README / 手册 已更新，开始重建【带向导发布版】fpk ...")
 subprocess.check_call(["bash", "build.sh", "--with-wizard"])
 
 print(f"\n发版准备完成：{NEWV}")
