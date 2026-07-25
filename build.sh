@@ -50,4 +50,4 @@ fi
 ls -la nasdash.fpk app.tgz
 
 # 4. 一致性校验（三处 md5 / desc 单行 / 版本号三处一致）
-./verify.sh
+./scripts/verify.sh

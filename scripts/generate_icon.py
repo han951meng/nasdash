@@ -50,7 +50,7 @@ def create_icon(size, filename, base=1024):
 
 
 if __name__ == '__main__':
-    out_dir = os.path.dirname(os.path.abspath(__file__))
+    out_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     # 关键（参考 hermes-agent fpk 的成功做法）：飞牛桌面/应用中心显示图标时会
     # 缩放，位图分辨率太低就糊。别按官方文档把 "64" 做成真 64×64——那会模糊。
     # hermes 的诀窍：无论文件名叫 64 还是 256，位图内容全部用 256×256 高清。

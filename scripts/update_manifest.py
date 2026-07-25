@@ -2,8 +2,11 @@
 # -*- coding: utf-8 -*-
 """精确更新 manifest：version / desc(单行) / changelog 三处，不动 checksum（app.tgz 未变）。"""
 import re
+import os
 
-MANIFEST = "manifest"
+MANIFEST = os.path.normpath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "manifest")
+)
 
 # ---- 新的应用介绍（desc，必须单行，无真实换行）----
 NEW_DESC = (

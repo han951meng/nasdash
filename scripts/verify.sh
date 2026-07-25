@@ -2,7 +2,7 @@
 # 发版前一致性校验：挡掉 10111(manifest 换行) / 校验失败 / 版本号四处不一致等低级错误。
 # 由 build.sh 在打包后自动调用，也可单独运行。
 set -e
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 
 # 跨平台 md5：macOS 用 `md5 -q`，Linux 用 `md5sum`
 md5_of() {

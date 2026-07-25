@@ -3,7 +3,7 @@
 """一键发版准备：改版本号 + 同步 manifest(desc/changelog) + README + 重建 fpk + 校验。
 
 用法:
-    ./release.py 1.7.9 "本次更新的一句话要点"
+    ./scripts/release.py 1.7.9 "本次更新的一句话要点"
 
 脚本会:
   1. 校验新版本号大于当前版本号
@@ -20,8 +20,8 @@ import sys
 NEW_RAW = (sys.argv[1] if len(sys.argv) > 1 else "").strip().lstrip("vV")
 HEAD = sys.argv[2] if len(sys.argv) > 2 else None
 if not NEW_RAW or not HEAD:
-    print("用法: ./release.py <新版本号> <更新要点一句话>")
-    print("示例: ./release.py 1.7.9 \"新增 XX 功能\"")
+    print("用法: ./scripts/release.py <新版本号> <更新要点一句话>")
+    print("示例: ./scripts/release.py 1.7.9 \"新增 XX 功能\"")
     sys.exit(1)
 
 NEW = NEW_RAW          # 无 v，用于 manifest

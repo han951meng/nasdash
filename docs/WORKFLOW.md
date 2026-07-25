@@ -14,7 +14,7 @@
 
 - 开发者文档总入口：<https://developer.fnnas.com/docs/>
 - 应用图标规范：<https://developer.fnnas.com/docs/core-concepts/icon/>
-  - 注意：官方写「ICON.PNG=64×64」是**误导**。实测只有位图内容全部 256×256 才清晰（参考 fnos-hermes-agent 做法）。图标统一由 `generate_icon.py` 生成。
+  - 注意：官方写「ICON.PNG=64×64」是**误导**。实测只有位图内容全部 256×256 才清晰（参考 fnos-hermes-agent 做法）。图标统一由 `scripts/generate_icon.py` 生成。
 - manifest / fpk 结构、应用中心生命周期（install / start / stop / uninstall）以官方文档为准。
 
 ## Step 1 · 基线对齐
@@ -28,12 +28,12 @@ grep '^version' manifest   # 确认 version = 1.8.7
 ## Step 2 · 编码 / 改图标
 
 - 改 `app.py` / `ui` / `config` / `vendor`。
-- 改图标**只改 `generate_icon.py`**（1024 母版下采样），重跑生成 4 个 256×256 文件，不要另起炉灶、不要按官方做真 64×64。
+- 改图标**只改 `scripts/generate_icon.py`**（1024 母版下采样），重跑生成 4 个 256×256 文件，不要另起炉灶、不要按官方做真 64×64。
 
 ## Step 3 · 本地自测（不上真机，早暴露问题）
 
 ```bash
-./local_smoke.sh
+./scripts/local_smoke.sh
 ```
 
 - `py_compile` 语法检查；若有 flask 则本地起服务 curl `/api/version`、`/api/all`。
@@ -42,7 +42,7 @@ grep '^version' manifest   # 确认 version = 1.8.7
 ## Step 3.5 · 跑回归测试（守护历史 bug 不复发）
 
 ```bash
-./test.sh          # 纯函数 pytest：品牌识别 / 阵列卡温度 / NVMe 通电时长 等 15 个用例
+./scripts/test.sh          # 纯函数 pytest：品牌识别 / 阵列卡温度 / NVMe 通电时长 等 15 个用例
 ```
 
 - 不依赖硬件，本地 venv 跑；覆盖 v1.7.5(通电时长逗号截断)、v1.7.8(金士顿误判三星) 等历史修复。
@@ -51,19 +51,19 @@ grep '^version' manifest   # 确认 version = 1.8.7
 ## Step 4 · 改版本号 + 同步四处一致（一键）
 
 ```bash
-./release.py 1.8.7 "一句话更新要点"
+./scripts/release.py 1.8.7 "一句话更新要点"
 ```
 
 自动改 `manifest`(version/desc/changelog) + `README.md`(版本号/更新日志) + 重建 fpk + 校验。
-（手动方式见 `update_manifest.py` 旧脚本。）
+（手动方式见 `scripts/update_manifest.py` 旧脚本。）
 
 ## Step 5 · 重建 fpk + 一致性校验（一键）
 
 ```bash
-./build.sh        # 内含 ./verify.sh
+./build.sh        # 内含 ./scripts/verify.sh
 ```
 
-`verify.sh` 自动挡：三处 md5 一致、manifest desc 单行（否则应用中心报 10111）、版本号三处（manifest / fpk / README）一致。
+`scripts/verify.sh` 自动挡：三处 md5 一致、manifest desc 单行（否则应用中心报 10111）、版本号三处（manifest / fpk / README）一致。
 
 ## Step 6 · 部署到 NAS（真机自测用无向导版）
 

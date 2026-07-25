@@ -19,16 +19,16 @@ jobs:
           python-version: '3.11'
 
       - name: Make build scripts executable
-        run: chmod +x build.sh verify.sh test.sh local_smoke.sh
+        run: chmod +x build.sh scripts/verify.sh scripts/test.sh scripts/local_smoke.sh
 
       - name: Python syntax check (app.py)
         run: python3 -m py_compile app.py
 
       - name: Parser unit tests (pytest)
-        run: ./test.sh
+        run: ./scripts/test.sh
 
       - name: Local smoke test (hardware may be absent -> WARN only)
-        run: ./local_smoke.sh
+        run: ./scripts/local_smoke.sh
         continue-on-error: true
 
       - name: Build fpk + consistency verify

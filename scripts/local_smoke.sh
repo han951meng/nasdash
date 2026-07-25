@@ -2,7 +2,7 @@
 # 本地自测：在不上 NAS 真机的前提下，尽量早地暴露「能否跑起来」的问题。
 # 用法: ./local_smoke.sh
 set -u
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 
 # 1) 找一个能 import flask 的 python（优先当前 python3，其次 .venv）
 PY=python3
