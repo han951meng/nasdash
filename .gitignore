@@ -19,6 +19,7 @@ app.tgz
 
 # 构建产物 fpk（仅作 GitHub Release 资产，不入库；由 build.sh 重新生成）
 nasdash.fpk
+nasdash-release-*.fpk
 
 # 论坛发帖草稿等杂物（非源码）
 forum_post_*
