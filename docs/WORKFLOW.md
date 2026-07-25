@@ -1,6 +1,6 @@
 # nasdash 开发 / 发版工作流
 
-基于 `v1.8.7` 基线。所有修改一律从干净基线出发，绝不用旧包 / 旧图标当母版。
+基于 `v1.8.8` 基线。所有修改一律从干净基线出发，绝不用旧包 / 旧图标当母版。
 
 ## Step 0 · 明确需求（先想清楚再动手）
 
@@ -21,8 +21,8 @@
 
 ```bash
 git fetch
-git checkout v1.8.7        # 或 git pull 到最新 main（HEAD 即 1.8.7 发版 commit）
-grep '^version' manifest   # 确认 version = 1.8.7
+git checkout v1.8.8        # 或 git pull 到最新 main（HEAD 即 1.8.8 发版 commit）
+grep '^version' manifest   # 确认 version = 1.8.8
 ```
 
 ## Step 2 · 编码 / 改图标
@@ -51,7 +51,7 @@ grep '^version' manifest   # 确认 version = 1.8.7
 ## Step 4 · 改版本号 + 同步四处一致（一键）
 
 ```bash
-./scripts/release.py 1.8.7 "一句话更新要点"
+./scripts/release.py 1.8.8 "一句话更新要点"
 ```
 
 自动改 `manifest`(version/desc/changelog) + `README.md`(版本号/更新日志) + 重建 fpk + 校验。
