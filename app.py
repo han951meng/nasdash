@@ -576,11 +576,12 @@ def _select_temp_fans(all_fans, sys_cfg, disk_cfg):
     if disk_cfg.get("enabled") and disk_cfg.get("disks"):
         cf = disk_cfg.get("controlled_fans", "all")
         for (hwmon, idx) in all_fans:
-            if (hwmon, idx) in sys_claimed:
-                continue
             if cf != "all" and [hwmon, idx] not in cf:
                 continue
             disk_claimed.add((hwmon, idx))
+    # 解耦互斥：sys 与 disk 各自独立选风扇组（不再「sys 先全拿、disk 拿剩余」）。
+    # 重叠时 disk 优先（硬盘温控更敏感，是用户明确诉求），从 sys 移除 disk 已选的风扇。
+    sys_claimed -= disk_claimed
     return sys_claimed, disk_claimed
 
 def _restore_fan_modes():
@@ -682,7 +683,13 @@ def fan_smooth_loop():
             need_mb = any((r.get("source") == "mb") for r in rules.values())
             disk_all_idle, disk_T, disk_has = (False, None, False)
             if need_disk:
-                disk_all_idle, disk_T, disk_has = _disk_source_state(dt)
+                _dt_eff = dt
+                if not dt.get("disks"):
+                    # 逐风扇 disk 规则不依赖全局监控盘白名单：自动用本机全部盘作温度源
+                    _all_devs = _list_all_disk_devs()
+                    if _all_devs:
+                        _dt_eff = dict(dt, disks=_all_devs)
+                disk_all_idle, disk_T, disk_has = _disk_source_state(_dt_eff)
             cpu_T = _fan_read_sys_temp("cpu") if need_cpu else None
             mb_T = _fan_read_sys_temp("mb") if need_mb else None
             for (hwmon, idx) in all_fans:
@@ -1015,6 +1022,23 @@ def get_disk_temps(devs):
 
 
 _DISK_IO_CACHE = {}   # dev -> {"sectors": int, "t": float}；按 /proc/diskstats 扇区计数判断磁盘是否真的在读写
+
+def _list_all_disk_devs():
+    """返回本机全部块设备路径（/dev/sdX + /dev/nvmeXnY），供「逐风扇 disk 规则」在用户未配置
+    全局监控盘白名单（fan_disk_temp.disks 为空）时，自动用全部盘作为温度源。
+    避免用户只设了逐风扇 disk 规则、却因全局 disks 为空导致风扇被静默跳过、永远不控。
+    轻量 glob 枚举，不触发 smartctl（温度在调速线程里按需读取）。"""
+    names = set()
+    for l in "\n".join(_glob.glob("/dev/sd*")).split():
+        n = l.strip().split("/")[-1]
+        if re.match(r"^sd[a-z]+$", n):
+            names.add(n)
+    for l in "\n".join(_glob.glob("/dev/nvme*")).split():
+        n = l.strip().split("/")[-1]
+        if re.match(r"^nvme\d+n\d+$", n):
+            names.add(n)
+    return ["/dev/" + n for n in sorted(names)]
+
 
 def _disk_idle(dev, idle_minutes):
     """按 /proc/diskstats 的扇区读写计数判断磁盘是否已连续 idle 满 idle_minutes。
@@ -3155,6 +3179,22 @@ def api_fan_set():
     return jsonify({"ok": True, "mode": "manual", "pwm": pct, "raw": raw})
 
 
+def _dedup_fan_names(fans):
+    """展示名去重：同名风扇补 #2/#3 后缀，便于在 UI 区分（如主板把两通道都报成 CHA_FAN1）。
+    仅影响前端展示，不影响持久化 key（hwmon::idx）——改名/隐藏逻辑仍按唯一 key 工作。"""
+    seen = {}
+    for f in fans:
+        n = f.get("name")
+        if not n:
+            continue
+        if n in seen:
+            seen[n] += 1
+            f["name"] = "%s #%d" % (n, seen[n])
+        else:
+            seen[n] = 1
+    return fans
+
+
 def get_fan_status():
     """风扇实时状态列表（供前端轮询与硬件健康报告复用）。"""
     fans = []
@@ -3167,7 +3207,13 @@ def get_fan_status():
     _need_mb = any((r.get("source") == "mb") for r in _rules.values())
     _disk_idle_s, _disk_T, _disk_has = (False, None, False)
     if _need_disk:
-        _disk_idle_s, _disk_T, _disk_has = _disk_source_state(_dt)
+        _dt_eff = _dt
+        if not _dt.get("disks"):
+            # 逐风扇 disk 规则不依赖全局监控盘白名单：自动用本机全部盘作温度源
+            _all_devs = _list_all_disk_devs()
+            if _all_devs:
+                _dt_eff = dict(_dt, disks=_all_devs)
+        _disk_idle_s, _disk_T, _disk_has = _disk_source_state(_dt_eff)
     _cpu_T = _fan_read_sys_temp("cpu") if _need_cpu else None
     _mb_T = _fan_read_sys_temp("mb") if _need_mb else None
     fc_raw = read_file("/vol2/@appconf/FanControlServer/config.json")
@@ -3243,7 +3289,7 @@ def get_fan_status():
             # 用户可把「无风扇的幽灵通道」隐藏（持久化到 fan_labels.json）
             "hidden": bool(_lbl.get("hidden")),
         })
-    return fans
+    return _dedup_fan_names(fans)
 
 @app.route("/api/fan/status")
 def api_fan_status():
@@ -3392,8 +3438,13 @@ def api_fan_rules_get():
     is_custom：是否已存在用户逐风扇覆盖文件。"""
     rules = _effective_fan_rules()
     dt = _load_fan_disk_temp()
-    disk_all_idle, disk_T, disk_has = _disk_source_state(dt) if any(
-        (r.get("source", "disk") == "disk") for r in rules.values()) else (False, None, bool(dt.get("disks")))
+    _dt_eff = dt
+    if not dt.get("disks"):
+        _all_devs = _list_all_disk_devs()
+        if _all_devs:
+            _dt_eff = dict(dt, disks=_all_devs)
+    disk_all_idle, disk_T, disk_has = _disk_source_state(_dt_eff) if any(
+        (r.get("source", "disk") == "disk") for r in rules.values()) else (False, None, bool(_dt_eff.get("disks")))
     cpu_T = _fan_read_sys_temp("cpu")
     mb_T = _fan_read_sys_temp("mb")
     fans_out = []
@@ -3421,6 +3472,7 @@ def api_fan_rules_get():
             "source_temp": round(T, 1) if isinstance(T, (int, float)) else None,
             "computed_pwm": computed,
         })
+    fans_out = _dedup_fan_names(fans_out)
     return jsonify({
         "fans": fans_out,
         "is_custom": _load_fan_rules_raw() is not None,
