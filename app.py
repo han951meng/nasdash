@@ -1245,6 +1245,26 @@ def _effective_fan_rules():
                 rules[k] = r
             else:
                 rules.pop(k, None)  # enabled=False → 该风扇不温控
+    # hwmon 路径漂移兜底：飞牛重启后 /sys/class/hwmon/hwmonN 编号会变化
+    # (如 hwmon4<->hwmon3)，已保存规则的 key 用的是旧路径，精确匹配会整组失效、
+    # 表现为「部分风扇温控丢失 / 只控一组」。按通道序号(idx)兜底：当前枚举到的
+    # (hwmon,idx) 若精确 key 缺失、但存在同 idx 的旧 key，则映射到当前精确 key。
+    # 与 fan_labels 的 idx 兜底策略一致。
+    try:
+        _enum = _enumerate_fans()
+        _fixed = {}
+        for (_hw, _idx) in _enum:
+            _ek = "%s::%d" % (_hw, _idx)
+            if _ek in rules:
+                continue
+            _suf = "::%d" % _idx
+            for _k, _r in rules.items():
+                if _k.endswith(_suf):
+                    _fixed[_ek] = _r
+                    break
+        rules.update(_fixed)
+    except Exception:
+        pass
     return rules
 
 def _disk_source_state(dt_cfg):
