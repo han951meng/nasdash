@@ -1493,7 +1493,11 @@ function renderDetect(D){
   if(!D) return '';
   let r = D.raid||{}, disks = D.disks||[], s = D.system||{}, st = D.storage||{}, dk = D.docker||{};
   // 状态栏健康判定
-  let fans = (s.sensors&&s.sensors.fans)||[];
+  // 健康检查只看「可见 + 能读转速」的风扇：
+  // - hidden（用户标记空口/不用的口）不参与判定；
+  // - has_tach=false（2/3针无转速线、主板读不到）无法判断是否停转，也不参与，避免误报「异常」。
+  //   日后换上带转速线的 4 针扇，has_tach 自动变 true，即自动恢复测速，无需任何额外设置。
+  let fans = ((s.sensors&&s.sensors.fans)||[]).filter(f=>!f.hidden && f.has_tach);
   let fanOk = fans.length>0 && fans.every(f=>!(f.stopped||f.rpm<1));
   let fanStr = fans.length===0 ? 'N/A' : (fanOk?'正常':'异常');
   let raidOk = r.mode==='mega'||r.mode==='hba';
