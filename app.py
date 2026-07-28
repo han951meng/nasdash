@@ -114,6 +114,39 @@ def _app_version():
     return "v1.6.2"
 APP_VERSION = _app_version()
 
+def _fnos_version():
+    """尽力读取 fnOS 系统版本（底层 Debian，标准 os-release 不含 fnOS 版本号）。"""
+    for path in ("/usr/os-release", "/etc/fnos-release", "/etc/os-release"):
+        try:
+            with open(path) as f:
+                txt = f.read()
+            m = re.search(r"PRETTY_NAME=\"?([^\"\n]*fnOS[^\"\n]*)", txt, re.I)
+            if not m:
+                m = re.search(r"VERSION=\"?([^\"\n]*fnOS[^\"\n]*)", txt, re.I)
+            if m:
+                return m.group(1).strip()
+            if path == "/etc/os-release":
+                mv = re.search(r"VERSION_ID=\"?([^\"\n]*)", txt)
+                if mv:
+                    return "Debian " + mv.group(1).strip() + " (fnOS 底层)"
+        except Exception:
+            pass
+    return "未知"
+
+def _debug_log_tail(n=60):
+    """读取应用 debug.log 末尾 n 行（脱敏：卷路径简化为占位，避免泄露用户目录结构）。"""
+    try:
+        with open(os.path.join(APP_DIR, "debug.log"), "r", errors="ignore") as f:
+            lines = f.readlines()
+        tail = lines[-n:] if len(lines) > n else lines
+        redacted = []
+        for ln in tail:
+            ln = re.sub(r"/vol\d+/@\S+", "<卷路径>", ln)
+            redacted.append(ln.rstrip("\n"))
+        return redacted
+    except Exception:
+        return []
+
 # ---------- 检测新版本（GitHub latest release，带缓存/超时/静默失败，绝不阻塞页面） ----------
 _VERSION_CHECK = {"cached_result": None, "checked_at": 0}
 _VERSION_CHECK_TTL = 6 * 3600  # 6 小时缓存，避免频繁打 GitHub API
@@ -706,13 +739,19 @@ def fan_smooth_loop():
                 else:
                     T, all_idle = mb_T, False
                 key = (hwmon, idx)
+                # #4 修复（huhaibo820）：用户显式手动调速（FAN_TARGETS 该风扇 mode=manual）
+                # 时，手动优先于温度联动——否则一旦设了温度联控速，手动滑块就完全失效。
+                # 点「恢复自动」会把 mode 改回 auto/清空，届时温度联动重新生效。
+                ov = overrides.get(key)
+                if ov and ov.get("mode") == "manual":
+                    continue
                 controlled.add(key)
                 action, target = _fan_rule_decision(key, rule, T, all_idle=all_idle)
                 if action == "control" and target is not None:
                     _fan_smooth_step(hwmon, idx, target); controlling_any = True
                 elif action == "release":
                     _fan_release_auto(hwmon, idx)
-                # "hold" → 已交还自动，不再写入（避免与主板/内核抢控）
+            # "hold" → 已交还自动，不再写入（避免与主板/内核抢控）
             # 剩余风扇：仅处理用户在 UI 中手动/自动设过的（overrides）；未触碰的风扇保持原样（交还 BIOS/主板）
             for (hwmon, idx), cfg in overrides.items():
                 if (hwmon, idx) in controlled:
@@ -735,8 +774,27 @@ def fan_smooth_loop():
             pass
         time.sleep(0.6)
 
+def _fan_smooth_runner():
+    """风扇控速常驻线程的『守护外壳』：fan_smooth_loop 内部虽已捕获 Exception，
+    但为防止任何意外（含非 Exception 的 BaseException、SIGINT 等）导致控速线程静默死亡、
+    进而使所有 PWM 变更（手动调速/温度联动）完全失效，此处再包一层自重启 + 异常落盘，
+    确保控速线程永不永久退出，并把罕见崩溃原因写进 fan_thread.log 供排查。"""
+    import traceback as _tb
+    _log = os.path.join(_config_dir(), "fan_thread.log")
+    while True:
+        try:
+            fan_smooth_loop()
+        except BaseException as _e:   # 含 Exception 与 KeyboardInterrupt/SystemExit 等
+            try:
+                with open(_log, "a") as _fh:
+                    _fh.write("%s [fan-smooth] 意外退出，2s 后自愈重启：%r\n%s\n"
+                              % (time.strftime("%Y-%m-%d %H:%M:%S"), _e, _tb.format_exc()))
+            except Exception:
+                pass
+            time.sleep(2)   # 退避后重启，避免空转打满 CPU
+
 _restore_fan_modes()   # 启动即恢复风扇模式（或首次默认接管自动控温），避免重启后全速
-_fan_thread = _threading.Thread(target=fan_smooth_loop, daemon=True, name="fan-smooth")
+_fan_thread = _threading.Thread(target=_fan_smooth_runner, daemon=True, name="fan-smooth")
 _fan_thread.start()
 
 # ===================== 风扇标注（用户可编辑名称/电压，按安装实例持久化）=====================
@@ -2302,6 +2360,25 @@ def get_system():
                         _f["name"] = f"{_f['name']} #fan{_f['idx']}"
         except (json.JSONDecodeError, ValueError):
             pass
+    # 合并风扇控速元数据（温控规则来源 / 逻辑模式 / 计算目标 / 目标占空比），
+    # 供前端首屏即正确显示「温度联动控速」来源与逻辑模式（手动 / 自动·CPU·主板·硬盘温控），
+    # 而非仅按硬件寄存器位误报。否则下拉框恒显「关闭（手动/默认）」、状态标签错显（#2/#3 回归）。
+    try:
+        _fs = get_fan_status()
+        _fs_map = {}
+        for _ff in _fs:
+            _fs_map["%s::%d" % (_ff.get("hwmon"), _ff.get("idx"))] = _ff
+        for _f in d["sensors"]["fans"]:
+            _m = _fs_map.get("%s::%d" % (_f.get("hwmon"), _f.get("idx")))
+            if not _m:
+                continue
+            _f["mode"] = _m.get("mode", _f.get("mode"))
+            _f["rule_source"] = _m.get("rule_source")
+            _f["rule"] = _m.get("rule")
+            _f["computed_pwm"] = _m.get("computed_pwm")
+            _f["target_pct"] = _m.get("target_pct")
+    except Exception:
+        pass
     d["cpu_temp"] = cpu_temp
     # 兼容旧字段
     d["temps"] = {t["name"]: t["value"] for t in d["sensors"]["temps"]}
@@ -3168,23 +3245,27 @@ def api_fan_set():
         if idx in _idx2hw:
             hwmon = _idx2hw[idx]
             key = (hwmon, idx)
+    # 别名组：同一物理风扇多通道（用户为这些通道设了相同名称）→ 控速同步到全部成员
+    _keys = _fan_alias_members_of(hwmon, idx)
     if mode == "auto":
-        if _fan_ext_service_running():
-            # 系统风扇服务在跑：交还它接管（写 enable=2）
-            try:
-                with open(f"{hwmon}/pwm{idx}_enable", "w") as f:
-                    f.write("2")
-            except Exception:
-                pass
-            with FAN_LOCK:
-                FAN_TARGETS.pop(key, None)
-            _save_fan_mode(idx, "auto", None)
-            return jsonify({"ok": True, "mode": "auto", "owner": "ext_service"})
-        # 系统风扇服务未运行：nasdash 自带保守温控曲线接管
-        with FAN_LOCK:
-            FAN_TARGETS[key] = {"mode": "auto", "target": None}
-        _save_fan_mode(idx, "auto", None)
-        return jsonify({"ok": True, "mode": "auto", "owner": "nasdash"})
+        ext = _fan_ext_service_running()
+        for (h, i) in _keys:
+            if ext:
+                # 系统风扇服务在跑：交还它接管（写 enable=2）
+                try:
+                    with open(f"{h}/pwm{i}_enable", "w") as f:
+                        f.write("2")
+                except Exception:
+                    pass
+                with FAN_LOCK:
+                    FAN_TARGETS.pop((h, i), None)
+            else:
+                # 系统风扇服务未运行：nasdash 自带保守温控曲线接管
+                with FAN_LOCK:
+                    FAN_TARGETS[(h, i)] = {"mode": "auto", "target": None}
+            _save_fan_mode(i, "auto", None)
+        owner = "ext_service" if ext else "nasdash"
+        return jsonify({"ok": True, "mode": "auto", "owner": owner})
     try:
         pct = int(pwm)
     except (TypeError, ValueError):
@@ -3193,10 +3274,92 @@ def api_fan_set():
     pct = max(FLOOR, min(100, pct))
     raw = round(pct / 100 * 255)
     # 仅设为目标值，由缓变线程平滑过渡（不再瞬间写 255，避免突然全速）
-    with FAN_LOCK:
-        FAN_TARGETS[key] = {"mode": "manual", "target": raw}
-    _save_fan_mode(idx, "manual", raw)
-    return jsonify({"ok": True, "mode": "manual", "pwm": pct, "raw": raw})
+    for (h, i) in _keys:
+        with FAN_LOCK:
+            FAN_TARGETS[(h, i)] = {"mode": "manual", "target": raw}
+        _save_fan_mode(i, "manual", raw)
+    return jsonify({"ok": True, "mode": "manual", "pwm": pct, "raw": raw, "aliased": len(_keys) > 1})
+
+
+def _fan_alias_map():
+    """别名组：以『用户自定义同名标注』连接多个不同 hwmon::idx 通道（同一物理风扇被识别成两张卡）。
+    返回 {key:"hwmon::idx": [member keys...]}。仅当用户为多个通道设了相同非空 name 时才成组，
+    避免把恰巧同名的不同风扇误合并（论坛 huhaibo820 反馈 #1：改名/隐藏联动、两张卡合一）。"""
+    labels = _load_fan_labels()
+    by_name = {}
+    for k, v in (labels or {}).items():
+        if not isinstance(v, dict):
+            continue
+        name = (v.get("name") or "").strip()
+        if name:
+            by_name.setdefault(name, []).append(k)
+    amap = {}
+    for name, keys in by_name.items():
+        if len(keys) > 1:
+            for k in keys:
+                amap[k] = list(keys)
+    return amap
+
+
+def _fan_alias_members_of(hwmon, idx):
+    """返回含别名的全部成员 key 列表 [(hwmon, idx), ...]（含自身）。"""
+    amap = _fan_alias_map()
+    ks = "%s::%d" % (hwmon, idx)
+    members = amap.get(ks, [ks])
+    out = []
+    for m in members:
+        if "::" in m:
+            h, i = m.split("::", 1)
+            try:
+                out.append((h, int(i)))
+            except (TypeError, ValueError):
+                pass
+    return out or [(hwmon, idx)]
+
+
+def _apply_fan_aliases(fans):
+    """把同名标注的多通道风扇合并为一张卡：代表取有转速的通道，改名/隐藏同步到全部成员。"""
+    amap = _fan_alias_map()
+    if not amap:
+        return fans
+    idx_of = {}
+    for f in fans:
+        idx_of["%s::%d" % (f["hwmon"], f["idx"])] = f
+    seen = set()
+    out = []
+    for f in fans:
+        k = "%s::%d" % (f["hwmon"], f["idx"])
+        if k not in amap:
+            out.append(f)
+            continue
+        grp = tuple(sorted(amap[k]))
+        if grp in seen:
+            continue  # 成员已并入代表，跳过
+        seen.add(grp)
+        members = [idx_of[m] for m in grp if m in idx_of]
+        rep = next((m for m in members if (m.get("rpm") or 0) > 0), members[0])
+        rep = dict(rep)
+        rep["alias_members"] = list(grp)
+        rpms = [m.get("rpm") or 0 for m in members]
+        rep["rpm"] = max(rpms) if any(rpms) else (rep.get("rpm") or 0)
+        rep["hidden"] = bool(any(m.get("hidden") for m in members))
+        out.append(rep)
+    return out
+
+
+def _replicate_aliases(clean):
+    """标注整体保存时，把同名组的条目同步到所有成员（改名/隐藏联动）。"""
+    amap = _fan_alias_map()
+    if not amap:
+        return
+    for ks, members in amap.items():
+        entry = clean.get(ks)
+        if not entry:
+            continue
+        for m in members:
+            if m == ks:
+                continue
+            clean[m] = dict(entry)
 
 
 def _dedup_fan_names(fans):
@@ -3285,12 +3448,17 @@ def get_fan_status():
             rule_out = _rule
             mode = "sys_temp" if _src in ("cpu", "mb") else "disk_temp"
         else:
-            mode = cur_mode
+            # 无温控规则：以用户设的逻辑模式为准。nasdash 接管控速时硬件 pwm_enable 恒为 1（manual），
+            # 不能据此判断，故显示 auto（下面若 tcfg 为 manual 会再覆盖为 manual）。
+            mode = "auto"
         target_pct = None
         with FAN_LOCK:
             tcfg = FAN_TARGETS.get(key)
         if tcfg and tcfg.get("mode") == "manual":
             target_pct = round(tcfg["target"] / 255 * 100)
+        # #4 修复：用户显式手动调速时手动优先于温度联动，状态标签显示「手动控制」（与控速行为一致）
+        if tcfg and tcfg.get("mode") == "manual":
+            mode = "manual"
         _lbl = labels.get(f"{hwmon}::{idx}", {})
         fans.append({
             "name": _lbl.get("name") or names.get(idx, f"风扇{idx}"),
@@ -3298,6 +3466,7 @@ def get_fan_status():
             "voltage": _lbl.get("voltage", ""),
             "idx": idx, "hwmon": hwmon,
             "rpm": rpm, "pwm": pwm_pct,
+            "pwm_enable": _pe,   # 原始寄存器值：0=关闭 1=软件控(手动) 2=交还主板/内核自动
             "mode": mode,
             "rule": rule_out,
             "rule_source": rule_source,
@@ -3309,6 +3478,7 @@ def get_fan_status():
             # 用户可把「无风扇的幽灵通道」隐藏（持久化到 fan_labels.json）
             "hidden": bool(_lbl.get("hidden")),
         })
+    fans = _apply_fan_aliases(fans)
     return _dedup_fan_names(fans)
 
 @app.route("/api/fan/status")
@@ -3514,6 +3684,20 @@ def api_fan_rules_set():
     data = request.get_json(force=True, silent=True) or {}
     saved = _load_fan_rules_raw() or {"rules": {}}
     cur = dict(saved.get("rules") or {})
+    def _clear_manual_for_rule(rule_key):
+        # 写入温度联动规则时，清掉该风扇的手动覆盖，使规则立即生效。
+        # 否则 FAN_TARGETS 残留 manual 会让控速循环跳过温度规则（见 fan_smooth_loop 745-747），
+        # 表现为「保存了但温度联动不生效 / 点保存无法应用」。#4 修复的『手动优先』仅在
+        # 用户仍处手动态时成立；一旦显式设回温度联动，手动态须让位。
+        try:
+            _h, _is = rule_key.split("::", 1)
+            _idx = int(_is)
+            with FAN_LOCK:
+                FAN_TARGETS.pop((_h, _idx), None)
+            _save_fan_mode(_idx, "auto", None)
+        except Exception:
+            pass
+
     if "key" in data:
         k = data.get("key")
         if not isinstance(k, str) or "::" not in k:
@@ -3525,6 +3709,7 @@ def api_fan_rules_set():
             cur.pop(k, None)
         else:
             cur[k] = clean
+            _clear_manual_for_rule(k)
     elif "rules" in data:
         incoming = data.get("rules")
         if not isinstance(incoming, dict):
@@ -3539,6 +3724,7 @@ def api_fan_rules_set():
                 cur.pop(k, None)
             else:
                 cur[k] = clean
+                _clear_manual_for_rule(k)
     else:
         return jsonify({"ok": False, "error": "缺少 key 或 rules"}), 400
     if _save_fan_rules({"rules": cur}):
@@ -3607,6 +3793,7 @@ def api_fan_labels_post():
         if v.get("hidden"):
             entry["hidden"] = True   # 隐藏无风扇的幽灵通道（可恢复）
         clean[k] = entry
+    _replicate_aliases(clean)   # 别名同步：同名标注通道改名/隐藏联动（huhaibo820 #1）
     if _save_fan_labels(clean):
         return jsonify({"ok": True})
     return jsonify({"ok": False, "error": "save failed"}), 500
@@ -3818,6 +4005,96 @@ def build_health_report():
         "raid": raid, "disks": disks, "system": system_full,
         "storage": storage, "docker": docker, "fans": fans, "alerts": alerts,
     }
+
+def build_diagnostics():
+    """生成可复制粘贴的设备诊断包（供社区排障，隐私安全、不联网）。
+    重点暴露『原生态』：每风扇通道的 hwmon::idx、pwm_enable 原始值、是否命中温控规则，
+    以及全部风扇配置，便于远程定位『同风扇重复』『模式标签错显』『设温控后手动失效』等问题。"""
+    try:
+        fans = get_fan_status()
+    except Exception:
+        fans = []
+    fan_rows = []
+    for f in fans:
+        fan_rows.append({
+            "key": "%s::%d" % (f.get("hwmon"), f.get("idx")),
+            "name": f.get("label") or f.get("name"),
+            "pwm_enable": f.get("pwm_enable"),     # 原始寄存器：0/1/2
+            "pwm_pct": f.get("pwm"),
+            "rpm": f.get("rpm"),
+            "mode": f.get("mode"),
+            "rule_hit": bool(f.get("rule")),
+            "rule_source": f.get("rule_source"),
+            "computed_pwm": f.get("computed_pwm"),
+            "target_pct": f.get("target_pct"),
+            "hidden": f.get("hidden"),
+        })
+    # 疑似同物理风扇（相同非空转速出现在多个通道）→ 提示「一张卡变两张」问题（huhaibo820 #1）
+    _rpm_groups = {}
+    for f in fan_rows:
+        r = f.get("rpm") or 0
+        if r > 0:
+            _rpm_groups.setdefault(r, []).append(f.get("key"))
+    diag_dups = [v for v in _rpm_groups.values() if len(v) > 1]
+    chips = []
+    try:
+        for d in sorted(glob.glob("/sys/class/hwmon/hwmon*")):
+            chips.append(read_file(d + "/name").strip())
+    except Exception:
+        pass
+    diag = {
+        "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "nasdash_version": APP_VERSION,
+        "fnos_version": _fnos_version(),
+        "kernel": getattr(os.uname(), "release", ""),
+        "sensor_chips": chips,
+        "fans": fan_rows,
+        "fan_rules": _load_fan_rules_raw(),
+        "fan_mode": _load_fan_modes(),
+        "disk_temp": _load_fan_disk_temp(),
+        "sys_temp": _load_fan_sys_temp(),
+        "fan_labels": _load_fan_labels(),
+        "alias_groups": _fan_alias_map(),
+        "suspected_duplicate_rpm": diag_dups,
+        "debug_log_tail": _debug_log_tail(60),
+    }
+    return diag
+
+def render_diagnostics_text(diag):
+    """把诊断包渲染成可复制的纯文本。"""
+    L = []
+    L.append("===== nasdash 设备诊断包 =====")
+    L.append("生成时间: %s" % diag.get("generated_at"))
+    L.append("nasdash 版本: %s" % diag.get("nasdash_version"))
+    L.append("fnOS 版本: %s" % diag.get("fnos_version"))
+    L.append("内核: %s" % diag.get("kernel"))
+    L.append("传感器芯片: %s" % ", ".join(diag.get("sensor_chips") or []) or "无")
+    L.append("")
+    L.append("--- 风扇通道（key = hwmon::idx；pwm_enable: 0=关闭 1=软件控 2=交还自动）---")
+    for f in diag.get("fans") or []:
+        rule = ("命中[%s]" % f.get("rule_source")) if f.get("rule_hit") else "无规则"
+        L.append("  %s | %s | pwm_enable=%s | pwm=%s%% | rpm=%s | mode=%s | %s | 目标=%s | 隐藏=%s"
+                 % (f.get("key"), f.get("name"), f.get("pwm_enable"),
+                    f.get("pwm_pct"), f.get("rpm"), f.get("mode"), rule,
+                    f.get("target_pct"), f.get("hidden")))
+    if diag.get("suspected_duplicate_rpm"):
+        L.append("⚠ 疑似同物理风扇（相同转速多通道，疑似「一张卡变两张」）: %s"
+                 % json.dumps(diag.get("suspected_duplicate_rpm"), ensure_ascii=False))
+    if diag.get("alias_groups"):
+        L.append("已合并同名通道(别名组): %s" % json.dumps(diag.get("alias_groups"), ensure_ascii=False))
+    L.append("")
+    L.append("--- 风扇配置 ---")
+    L.append("fan_rules: %s" % json.dumps(diag.get("fan_rules"), ensure_ascii=False))
+    L.append("fan_mode: %s" % json.dumps(diag.get("fan_mode"), ensure_ascii=False))
+    L.append("disk_temp: %s" % json.dumps(diag.get("disk_temp"), ensure_ascii=False))
+    L.append("sys_temp: %s" % json.dumps(diag.get("sys_temp"), ensure_ascii=False))
+    L.append("fan_labels: %s" % json.dumps(diag.get("fan_labels"), ensure_ascii=False))
+    L.append("")
+    L.append("--- debug.log 尾部（脱敏）---")
+    for ln in diag.get("debug_log_tail") or []:
+        L.append("  " + ln)
+    L.append("=========================")
+    return "\n".join(L)
 
 def _render_report_html(rep):
     def esc(s):
@@ -4106,6 +4383,15 @@ def api_report():
     if fmt == "html":
         return _render_report_html(rep)
     return jsonify(rep)
+
+@app.route("/api/diagnostics")
+def api_diagnostics():
+    """设备诊断包：txt=可复制纯文本（贴论坛用），json=结构化。隐私安全、不联网。"""
+    fmt = request.args.get("format", "txt")
+    diag = build_diagnostics()
+    if fmt == "json":
+        return jsonify(diag)
+    return Response(render_diagnostics_text(diag), mimetype="text/plain; charset=utf-8")
 
 # ===================== 前端 =====================
 def _serve_gateway(app, socket_path):

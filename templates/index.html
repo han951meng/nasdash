@@ -671,7 +671,7 @@ function renderFanControl(){
   if(!allFans.length) return '<div class="card"><div class="loading">未检测到可调控风扇（部分 NAS 由系统固件统一控温，本工具不接管）</div></div>';
   let presets=[['0','停转'],['auto','默认'],['100','全速'],['10','10%'],['20','20%'],['30','30%'],['40','40%'],['50','50%'],['60','60%'],['70','70%'],['80','80%'],['90','90%']];
   let presetHtml=presets.map(p=>`<button class="preset-btn ${p[0]==='100'?'full':''}" data-preset="${p[0]}" onclick="applyFanPreset('${p[0]}')">${p[1]}</button>`).join('');
-  let modeMap={'curve':'曲线温控','manual':'手动控制','auto':'自动温控','off':'关闭','disk_temp':'硬盘温控','sys_temp':'主板/CPU温控'};
+  let modeMap={'curve':'曲线温控','manual':'手动控制','auto':'自动温控','off':'关闭','disk_temp':'自动·硬盘温控','sys_temp':'自动·CPU/主板温控'};
   let cards=fans.map(f=>{
     let id=fanUid(f.hwmon, f.idx);
     let pct=(f.pwm!=null)?f.pwm:50;
@@ -679,7 +679,7 @@ function renderFanControl(){
     return `<div class="fan-card" id="${id}-box">
       <div class="fan-card-head">
         <input class="fan-label-input" id="${id}-label" value="${esc(f.label||f.name||'')}" placeholder="自定义名称（如 CPU 风扇）" maxlength="40">
-        <span class="pill ${f.mode==='curve'||f.mode==='auto'||f.mode==='disk_temp'||f.mode==='sys_temp'?'b-info':'b-warn'}">${modeMap[f.mode]||f.mode||''}</span>
+        <span class="pill ${f.mode==='curve'||f.mode==='auto'||f.mode==='disk_temp'||f.mode==='sys_temp'?'b-info':'b-warn'}" id="${id}-pill">${modeMap[f.mode]||f.mode||''}</span>
         <span class="fan-label-save">
           <select class="fan-volt-select" id="${id}-volt" title="风扇供电电压">
             <option value="12V" ${f.voltage==='12V'?'selected':''}>12V</option>
@@ -771,12 +771,15 @@ function onRuleSrcChange(hwmon, idx){
   if(!sel||!body) return;
   var src=sel.value;
   body.style.display=src?'block':'none';
-  // 切换温度源时，若各输入仍是上个源的默认，套用新源的推荐默认（用户已改过则保留）
+  // 下拉框是「温度源开关」：选「关闭」清规则、选温度源按该源推荐默认曲线立即落盘，
+  // 否则 30s 自动刷新整页重渲染会把未保存的选择打回原样（用户反馈：点关闭刷新后又回到温度联动）。
   if(src){
-    var sd={disk:{start:40,full:60,rec:35},cpu:{start:45,full:70,rec:40},mb:{start:45,full:70,rec:40}};
+    var sd={disk:{start:40,full:60,min:30,max:100,rec:35},cpu:{start:45,full:70,min:30,max:100,rec:40},mb:{start:45,full:70,min:30,max:100,rec:40}};
     var d=sd[src]||sd.disk;
-    var st=document.getElementById(id+'-rstate'); if(st) st.textContent='';
+    var setv=function(elid,val){ var e=document.getElementById(elid); if(e) e.value=val; };
+    setv(id+'-rstart',d.start); setv(id+'-rfull',d.full); setv(id+'-rmin',d.min); setv(id+'-rmax',d.max); setv(id+'-rrec',d.rec);
   }
+  saveFanRule(hwmon, idx);
 }
 async function saveFanRule(hwmon, idx){
   var id=fanUid(hwmon, idx);
@@ -924,13 +927,22 @@ async function fetchFanStatus(){
       let unit=document.getElementById(id+'-rpm-unit'); if(unit) unit.textContent=(f.has_tach?'RPM':'无转速信号');
       let bar=document.getElementById(id+'-bar');
       if(bar) bar.style.width=(f.pwm!=null?f.pwm:50)+'%';
+      // 实时刷新状态徽标：模式可能随时变化（如拖滑块→手动、点恢复自动→自动），
+      // 但卡片只在整页渲染时生成一次徽标，故这里每轮补刷，避免显示与实际脱节。
+      let pill=document.getElementById(id+'-pill');
+      if(pill){
+        let mm={'curve':'曲线温控','manual':'手动控制','auto':'自动温控','off':'关闭','disk_temp':'自动·硬盘温控','sys_temp':'自动·CPU/主板温控'};
+        pill.textContent=mm[f.mode]||f.mode||'';
+        let info=(f.mode==='curve'||f.mode==='auto'||f.mode==='disk_temp'||f.mode==='sys_temp');
+        pill.className='pill '+(info?'b-info':'b-warn');
+      }
       if(sl && document.activeElement!==sl){
         // 手动模式下滑块停在用户设定的目标值，不强行跟随实时爬升（避免松手后滑块回弹误以为没生效）；自动模式跟随实时值
         sl.value=(f.mode==='manual' && f.target_pct!=null)?f.target_pct:(f.pwm!=null?f.pwm:50);
       }
-      // 逐风扇温度联动：实时刷新「计算目标」（不动用户正在编辑的输入框）
+      // 逐风扇温度联动：实时刷新「计算目标」（手动覆盖时不显示，避免误以为仍在温控）
       let rlive=document.getElementById(id+'-rlive');
-      if(rlive && f.rule_source){ rlive.textContent='计算目标 '+(f.computed_pwm!=null?f.computed_pwm+'%':'—'); }
+      if(rlive){ if(f.rule_source && f.mode!=='manual'){ rlive.textContent='计算目标 '+(f.computed_pwm!=null?f.computed_pwm+'%':'—'); } else { rlive.textContent=''; } }
     });
     updatePresetHighlight(j.fans);
   }catch(e){}
@@ -1770,10 +1782,11 @@ function renderAutomation(){
   </div>
   <div class="auto-card">
     <h3>📊 一键健康报告</h3>
-    <div style="font-size:13px;color:var(--muted);margin-bottom:12px">汇总全部硬件状态与活动告警，导出供排查留档。JSON 可直接查看，HTML 为排版报告。</div>
+    <div style="font-size:13px;color:var(--muted);margin-bottom:12px">汇总全部硬件状态与活动告警，导出供排查留档。JSON 可直接查看，HTML 为排版报告。<b>遇到风扇/传感器异常</b>时，点「复制诊断信息」一键复制设备原生态（含每台风扇通道的 hwmon::idx、pwm_enable 原始值、温控规则命中情况），直接贴给开发者最快定位。</div>
     <div class="auto-actions">
       <button class="btn-mini" onclick="exportReport('json')">导出 JSON</button>
       <button class="btn-mini" onclick="exportReport('html')">导出 HTML 报告</button>
+      <button class="btn-mini" onclick="copyDiagnostics()">📋 复制诊断信息</button>
     </div>
   </div>`;
 }
@@ -1896,6 +1909,27 @@ async function exportReport(fmt){
       setTimeout(function(){ URL.revokeObjectURL(a.href); }, 1000);
     }
   }catch(e){ alert('导出失败：'+e); }
+}
+function toast(msg){
+  var t=document.getElementById('toast');
+  if(!t){ t=document.createElement('div'); t.id='toast'; t.style.cssText='position:fixed;left:50%;bottom:32px;transform:translateX(-50%);background:rgba(20,30,48,.92);color:#fff;padding:10px 18px;border-radius:10px;font-size:13px;z-index:9999;box-shadow:0 6px 20px rgba(0,0,0,.25);opacity:0;transition:opacity .25s'; document.body.appendChild(t); }
+  t.textContent=msg; t.style.opacity='1';
+  clearTimeout(t._timer); t._timer=setTimeout(function(){ t.style.opacity='0'; }, 2600);
+}
+async function copyDiagnostics(){
+  try{
+    var r=await fetch('/api/diagnostics?format=txt&_='+Date.now());
+    var txt=await r.text();
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      await navigator.clipboard.writeText(txt);
+      toast('已复制诊断信息，直接粘贴到论坛或发给开发者即可');
+    } else {
+      // 老浏览器兜底：弹出文本供手动复制
+      var ta=document.createElement('textarea'); ta.value=txt; document.body.appendChild(ta); ta.select();
+      try{ document.execCommand('copy'); toast('已复制诊断信息'); }catch(e){ alert(txt); }
+      ta.remove();
+    }
+  }catch(e){ alert('复制失败：'+e); }
 }
 // 全局告警横幅
 let alertsDismissed=false;
