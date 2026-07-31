@@ -1032,9 +1032,13 @@ def get_disk_temps(devs):
     判断（否则一块 SAS/SSD 盘就永远满足不了 all(asleep)，把整个休眠停转功能堵死）。"""
     states = {}
     for dev in devs or []:
+        # is_nvme 单独标记：NVMe 多为 M.2 被动散热（自带马甲、贴主板），机箱风扇气流基本吹不到，
+        # 且其正常工作温区与机械盘完全不同（机械盘 44°C 偏热，NVMe 53°C 属正常、70°C 才近降频线）。
+        # 故 NVMe 不能与机械盘共用 start_temp 阈值，需在停转兜底与温度源取值处单独换算。
+        is_nvme = dev.startswith("/dev/nvme")
         try:
             no_sleep = False
-            if dev.startswith("/dev/nvme"):
+            if is_nvme:
                 out = sudo_cmd([SMARTCTL, "-A", dev], 8)
                 asleep = False
                 no_sleep = True  # NVMe 不停机休眠
@@ -1042,7 +1046,8 @@ def get_disk_temps(devs):
                 out = sudo_cmd([SMARTCTL, "-n", "standby", "-A", dev], 8)
                 asleep = False
                 if out and "STANDBY" in out.upper():
-                    states[dev] = {"dev": dev, "temp": None, "asleep": True, "no_sleep": False}
+                    states[dev] = {"dev": dev, "temp": None, "asleep": True,
+                                   "no_sleep": False, "is_nvme": False}
                     continue
                 # SAS 企业盘（阵列卡后）永不休眠：厂商为数据安全锁死。
                 # smartctl -A 对 SAS 盘输出 "Current Drive Temperature"（SATA 走属性表
@@ -1057,7 +1062,8 @@ def get_disk_temps(devs):
                 if not no_sleep and _disk_is_ssd(dev):
                     no_sleep = True
             if not out:
-                states[dev] = {"dev": dev, "temp": None, "asleep": None, "no_sleep": no_sleep}
+                states[dev] = {"dev": dev, "temp": None, "asleep": None,
+                               "no_sleep": no_sleep, "is_nvme": is_nvme}
                 continue
             temp = None
             for line in out.splitlines():
@@ -1074,13 +1080,130 @@ def get_disk_temps(devs):
                             t = t - 273
                         temp = t
                         break
-            states[dev] = {"dev": dev, "temp": temp, "asleep": asleep, "no_sleep": no_sleep}
+            states[dev] = {"dev": dev, "temp": temp, "asleep": asleep,
+                           "no_sleep": no_sleep, "is_nvme": is_nvme}
         except Exception:
-            states[dev] = {"dev": dev, "temp": None, "asleep": None, "no_sleep": False}
+            states[dev] = {"dev": dev, "temp": None, "asleep": None,
+                           "no_sleep": False, "is_nvme": is_nvme}
     return states
 
 
 _DISK_IO_CACHE = {}   # dev -> {"sectors": int, "t": float}；按 /proc/diskstats 扇区计数判断磁盘是否真的在读写
+_DISK_FRIENDLY_CACHE = {}   # dev -> {"name","model","category","is_system","size","t"}; 5 分钟缓存
+_DISK_FRIENDLY_TTL = 300
+_SYSTEM_DISK_DEV = None   # 启动时确定一次（系统盘一般不会换）
+
+
+def _detect_system_disk_dev():
+    """确定 / 挂载的盘 dev（如 sda/nvme0n1）。挂载在 /boot、/boot/efi 不算系统盘。"""
+    global _SYSTEM_DISK_DEV
+    if _SYSTEM_DISK_DEV is not None:
+        return _SYSTEM_DISK_DEV
+    try:
+        out = run_cmd(["findmnt", "-n", "-o", "SOURCE", "/"], 3)
+        src = (out.strip().splitlines() or [""])[0].strip()
+        # 形如 /dev/nvme0n1p2[/subvol] 的 btrfs 源，先砍掉子卷部分
+        m0 = re.match(r"^(/dev/[A-Za-z0-9/_.-]+?)(?:\[.*\])?$", src)
+        if m0:
+            src = m0.group(1)
+        part = src.replace("/dev/", "").strip()
+        if part:
+            # 首选 lsblk PKNAME 直接问父盘（对 nvme/mmcblk/dm 都稳）
+            try:
+                pk = run_cmd(["lsblk", "-no", "PKNAME", src], 3).strip().splitlines()
+                pk0 = pk[0].strip() if pk else ""
+                if pk0:
+                    _SYSTEM_DISK_DEV = pk0
+                    return _SYSTEM_DISK_DEV
+            except Exception:
+                pass
+            # 回退：手工剥离分区后缀（nvme0n1p2 → nvme0n1；mmcblk0p1 → mmcblk0；sda3 → sda）
+            mn = re.match(r"^(nvme\d+n\d+)p\d+$", part) or re.match(r"^(mmcblk\d+)p\d+$", part)
+            if mn:
+                _SYSTEM_DISK_DEV = mn.group(1)
+            else:
+                _SYSTEM_DISK_DEV = re.sub(r"\d+$", "", part)
+    except Exception:
+        pass
+    return _SYSTEM_DISK_DEV or ""
+
+
+def _short_size(size_b):
+    """字节数 → '14.0T'/'120G'。"""
+    try:
+        b = int(size_b)
+    except Exception:
+        return "?"
+    gb = b / 1e9
+    if gb >= 1000:
+        v = gb / 1000
+        return f"{v:.0f}T" if v >= 10 else f"{v:.1f}T"
+    return f"{gb:.0f}G"
+
+
+def _short_disk_name(model, size_str, category, is_system):
+    """生成盘的简短可读名（用于「当前温度」卡片）。"""
+    if is_system:
+        return f"系统盘({category})"
+    # 取品牌简称（去掉 "（xxx）" 后缀）
+    brand_cn = ""
+    if model:
+        b, _ = disk_brand_and_feature(model)
+        if b:
+            brand_cn = b.split("(")[0]
+    if brand_cn and size_str and size_str != "?":
+        return f"{brand_cn}{size_str}"
+    if model:
+        return model[:16]
+    return "未知"
+
+
+def _disk_friendly_info(dev):
+    """返回该盘的友好名/型号/分类/盘位/是否系统盘。带 5 分钟缓存。
+    设计目标：让前端「当前温度」卡片上的 nvme0n1/sda/sdb 一眼能认出是哪块物理盘。"""
+    dev = str(dev).replace("/dev/", "").strip()
+    if not dev:
+        return {"dev": "", "name": dev, "model": "", "category": "HDD", "is_system": False}
+    now = time.time()
+    cached = _DISK_FRIENDLY_CACHE.get(dev)
+    if cached and now - cached["t"] < _DISK_FRIENDLY_TTL:
+        return cached
+    info = {"dev": dev, "name": dev, "model": "", "category": "HDD",
+            "is_system": False, "size": "?", "t": now}
+    # 1) lsblk 轻量拿 ROTA/TRAN/SIZE
+    try:
+        lsblk = run_cmd(["lsblk", "-dn", "-b", "-o", "NAME,SIZE,ROTA,TRAN", f"/dev/{dev}"], 3)
+        for line in lsblk.strip().splitlines():
+            p = line.split()
+            if p and p[0] == dev and len(p) >= 2:
+                info["size"] = _short_size(p[1])
+                rota = p[2] if len(p) > 2 else "1"
+                tran = p[3] if len(p) > 3 else ""
+                if dev.startswith("nvme"):
+                    info["category"] = "NVMe"
+                elif rota == "0":
+                    info["category"] = "SSD"
+                else:
+                    info["category"] = "HDD"
+                break
+    except Exception:
+        pass
+    # 2) smartctl -i 拿 model（带 -n standby 不唤醒休眠盘）
+    try:
+        out = sudo_cmd([SMARTCTL, "-n", "standby", "-i", f"/dev/{dev}"], 5)
+        if out:
+            m = re.search(r"(?:Device Model|Model Number|Product):\s*(.+)", out)
+            if m:
+                info["model"] = m.group(1).strip()
+    except Exception:
+        pass
+    # 3) 系统盘判定
+    sys_dev = _detect_system_disk_dev()
+    info["is_system"] = (dev == sys_dev)
+    # 4) 友好名
+    info["name"] = _short_disk_name(info["model"], info["size"], info["category"], info["is_system"])
+    _DISK_FRIENDLY_CACHE[dev] = info
+    return info
 
 def _list_all_disk_devs():
     """返回本机全部块设备路径（/dev/sdX + /dev/nvmeXnY），供「逐风扇 disk 规则」在用户未配置
@@ -1125,6 +1248,26 @@ def _disk_idle(dev, idle_minutes):
     except Exception:
         return False
 
+# NVMe 专用温度量纲。机械盘与 NVMe 的"正常/该散热"温区完全不同：
+#   机械盘 40°C 已偏热、50°C 需警惕；NVMe 53°C 属完全正常，70~75°C 才触发厂商降频保护。
+# 早期两者共用 start_temp(默认 40°C)，导致任何一块 NVMe 都恒高于阈值，
+# 于是"硬盘全部休眠即停转"被永久判定为 False——用户勾了停转却发现风扇一直转。
+# 另一面也要留安全阀：装了「主动式 M.2 散热器」（带小风扇、接主板风扇口）的机器，
+# NVMe 真烧起来时风扇仍需响应，故不是直接排除，而是换算到 NVMe 自己的量纲。
+NVME_START_TEMP = 65.0   # NVMe 开始需要主动散热的温度
+NVME_FULL_TEMP = 80.0    # NVMe 需全力散热的温度（接近多数消费级盘的降频/告警线）
+
+def _nvme_temp_as_hdd(t, start, full):
+    """把 NVMe 温度换算成等效的机械盘温度，便于与其他盘统一比较/取最大值。
+    低于 NVME_START_TEMP 返回 None（不参与，视为无需风扇介入）；
+    NVME_START→start、NVME_FULL→full 线性映射，使风扇响应强度与"离降频线还有多远"对齐。"""
+    if not isinstance(t, (int, float)) or t < NVME_START_TEMP:
+        return None
+    if t >= NVME_FULL_TEMP:
+        return full
+    r = (t - NVME_START_TEMP) / (NVME_FULL_TEMP - NVME_START_TEMP)
+    return start + r * (full - start)
+
 def _all_monitored_idle(valid, cfg):
     """判断"可停转风扇"：所有可休眠盘都已休眠(或连续无 I/O 满 idle_minutes)，且不可休眠盘
     (SAS 阵列企业盘/NVMe/SATA·SAS 固态盘)温度都低于启动阈值。SAS 企业盘与固态盘厂商锁死/
@@ -1147,11 +1290,35 @@ def _all_monitored_idle(valid, cfg):
             continue
         return False  # 该盘既未休眠、也未空闲够久 → 不停转
     start = float(cfg.get("start_temp", 40))
-    nosleep_temps = [s["temp"] for s in valid
-                     if s.get("no_sleep") and isinstance(s.get("temp"), (int, float))]
-    if nosleep_temps and max(nosleep_temps) >= start:
-        return False  # 有高温 SAS/NVMe 企业盘，仍需散热，不停转
+    for s in valid:
+        if not s.get("no_sleep"):
+            continue
+        t = s.get("temp")
+        if not isinstance(t, (int, float)):
+            continue
+        # NVMe 按自己的量纲判定（65°C 起）：机械盘的 40°C 对 NVMe 只是常温，
+        # 若共用会让本函数恒返回 False，等于永久禁用「休眠停转」。
+        thr = NVME_START_TEMP if s.get("is_nvme") else start
+        if t >= thr:
+            return False  # 有不休眠的盘确实偏热（SAS 企业盘/固态），仍需散热，不停转
     return True
+
+def _disk_source_max_temp(valid, start, full):
+    """取监控盘的「等效最热温度」，作为硬盘温度源的单值 T。
+    机械盘 / SATA·SAS 固态用原始温度；NVMe 先换算到机械盘量纲（低于 65°C 直接不参与）。
+    否则常年 50°C 出头的 M.2 固态会稳坐"最热盘"，让机箱风扇的转速由一块它根本吹不到的盘决定，
+    真正需要散热的机械盘反而说了不算。"""
+    temps = []
+    for s in valid:
+        t = s.get("temp")
+        if not isinstance(t, (int, float)):
+            continue
+        if s.get("is_nvme"):
+            t = _nvme_temp_as_hdd(t, start, full)
+            if t is None:
+                continue
+        temps.append(t)
+    return max(temps) if temps else None
 
 def _fan_disk_temp_pwm(states, cfg):
     """按硬盘温度算目标 raw(0~255)。
@@ -1163,20 +1330,23 @@ def _fan_disk_temp_pwm(states, cfg):
         return None
     if _all_monitored_idle(valid, cfg):
         return 0
-    temps = [s["temp"] for s in valid if isinstance(s.get("temp"), (int, float))]
-    if not temps:
-        # 无温度读数：有曲线则以曲线最低点兜底，否则回退 min_pwm
-        if cfg.get("curve"):
-            return _fan_curve_pwm(None, cfg, 30, 70)
-        return round(float(cfg.get("min_pwm", 30)) / 100 * 255)
-    T = max(temps)
-    curve_raw = _fan_curve_pwm(T, cfg, 30, 70)
-    if curve_raw is not None:
-        return curve_raw
     start = float(cfg.get("start_temp", 40))
     full = float(cfg.get("full_temp", 60))
     minp = float(cfg.get("min_pwm", 30))
     maxp = float(cfg.get("max_pwm", 70))
+    T = _disk_source_max_temp(valid, start, full)
+    if T is None:
+        # 区分两种「没有可用温度」：
+        #   完全读不到 → 保守兜底转起来（怕真热却不知道）；
+        #   读得到但都低于各自开转阈值（例如只监控了一块 55°C 的 NVMe）→ 无需风扇，给 0。
+        if not any(isinstance(s.get("temp"), (int, float)) for s in valid):
+            if cfg.get("curve"):
+                return _fan_curve_pwm(None, cfg, 30, 70)
+            return round(float(cfg.get("min_pwm", 30)) / 100 * 255)
+        return 0
+    curve_raw = _fan_curve_pwm(T, cfg, 30, 70)
+    if curve_raw is not None:
+        return curve_raw
     if T < start:
         return 0
     if T >= full:
@@ -1224,11 +1394,12 @@ def _fan_disk_temp_decision(states, cfg):
     if _all_monitored_idle(valid, cfg):
         _dt_engaged["v"] = False
         return ("release", None)
-    temps = [s["temp"] for s in valid if isinstance(s.get("temp"), (int, float))]
-    if not temps:
+    # NVMe 换算后再取最热：否则 M.2 固态常年 50°C+ 会让滞回状态恒定判为"该接管"，
+    # 风扇永远交不回主板自动控制（与停转失效同源）。
+    T = _disk_source_max_temp(valid, start, float(cfg.get("full_temp", 60)))
+    if T is None:
         _dt_engaged["v"] = False
         return ("release", None)
-    T = max(temps)
     if _dt_engaged["v"] is None:
         _dt_engaged["v"] = (T >= start)
     if _dt_engaged["v"]:
@@ -1341,17 +1512,34 @@ def _disk_source_state(dt_cfg):
         return (False, None, True)
     if _all_monitored_idle(valid, dt_cfg):
         return (True, None, True)
-    temps = [s["temp"] for s in valid if isinstance(s.get("temp"), (int, float))]
-    T = max(temps) if temps else None
+    # NVMe 先换算到机械盘量纲再参与取最热（低于 65°C 不参与），
+    # 否则常年 50°C 出头的 M.2 固态会恒定当选"最热盘"，把机箱风扇一直顶在中高速。
+    T = _disk_source_max_temp(valid,
+                              float(dt_cfg.get("start_temp", 40)),
+                              float(dt_cfg.get("full_temp", 60)))
     return (False, T, True)
 
 def _fan_rule_pwm(T, rule):
-    """按单值温度 T + 该风扇自身规则算目标 raw(0~255)。优先自定义曲线，否则 start/full 线性。"""
+    """按单值温度 T + 该风扇自身规则算目标 raw(0~255)。
+    active_mode 控制走哪套（3按钮显式选择，根治「不知道当前跑的是哪套」）：
+      'curve'  → 自定义曲线；曲线无效/缺失时回退到线性（不报错）
+      'linear' → 开转/全速 线性；忽略自定义曲线（即便设了也走线性）
+      未设/None → 旧行为：曲线优先，线性兜底（兼容老配置）"""
     minp = float(rule.get("min_pwm", 30))
     maxp = float(rule.get("max_pwm", 100))
-    curve_raw = _fan_curve_pwm(T, rule, minp, maxp)
-    if curve_raw is not None:
-        return curve_raw
+    active_mode = rule.get("active_mode")
+    if active_mode == "curve":
+        curve_raw = _fan_curve_pwm(T, rule, minp, maxp)
+        if curve_raw is not None:
+            return curve_raw
+        # 曲线无效/缺失：回退线性（不写错，避免显式选曲线但无曲线时 0 输出）
+    elif active_mode == "linear":
+        pass  # 直接走线性
+    else:
+        # 未设/旧配置：曲线优先（保持向后兼容）
+        curve_raw = _fan_curve_pwm(T, rule, minp, maxp)
+        if curve_raw is not None:
+            return curve_raw
     if T is None:
         return None
     start = float(rule.get("start_temp", 40))
@@ -2429,6 +2617,9 @@ def get_system():
             _f["rule"] = _m.get("rule")
             _f["computed_pwm"] = _m.get("computed_pwm")
             _f["target_pct"] = _m.get("target_pct")
+            _f["has_curve"] = _m.get("has_curve")
+            _f["manual_active"] = _m.get("manual_active")
+            _f["active_mode"] = _m.get("active_mode")
     except Exception:
         pass
     d["cpu_temp"] = cpu_temp
@@ -3482,7 +3673,9 @@ def get_fan_status():
         # 逐风扇温控：该风扇若命中规则，模式按温度源分类（沿用旧徽标 disk_temp/sys_temp），
         # 并附带该风扇自己的规则与实时计算目标，供前端逐扇展示。
         _rule = _rules.get("%s::%d" % (hwmon, idx))
-        rule_out = None
+        rule_out = _rule
+        # 3按钮显式控速方案：'linear'（开转/全速）/'curve'（自定义曲线）；手动时为 None
+        active_mode = (_rule.get("active_mode") if _rule else None)
         computed_pwm = None
         rule_source = None
         if _rule:
@@ -3493,12 +3686,20 @@ def get_fan_status():
                 _raw = 0 if _ridle else _fan_rule_pwm(_rt, _rule)
                 if _raw is not None:
                     computed_pwm = round(_raw / 255 * 100)
-            rule_out = _rule
-            mode = "sys_temp" if (_src in ("cpu", "mb") or _src.startswith("combo")) else "disk_temp"
+            # 显式分两类：手动覆盖时不算温控模式；规则存在但未接管（如曲线无效/温度低）
+            # 时维持 3按钮的高亮态（active_mode 优先于 mode 标签）。
+            if not active_mode:
+                # 旧配置无 active_mode：回退到「linear/curve」按曲线有无判断
+                active_mode = "curve" if _rule.get("curve") else "linear"
+            if _src in ("cpu", "mb") or _src.startswith("combo"):
+                mode = "sys_temp" if active_mode == "linear" else "curve"
+            else:
+                mode = "disk_temp" if active_mode == "linear" else "curve"
         else:
             # 无温控规则：以用户设的逻辑模式为准。nasdash 接管控速时硬件 pwm_enable 恒为 1（manual），
             # 不能据此判断，故显示 auto（下面若 tcfg 为 manual 会再覆盖为 manual）。
             mode = "auto"
+            active_mode = None
         target_pct = None
         with FAN_LOCK:
             tcfg = FAN_TARGETS.get(key)
@@ -3507,6 +3708,7 @@ def get_fan_status():
         # #4 修复：用户显式手动调速时手动优先于温度联动，状态标签显示「手动控制」（与控速行为一致）
         if tcfg and tcfg.get("mode") == "manual":
             mode = "manual"
+            active_mode = None
         _lbl = labels.get(f"{hwmon}::{idx}", {})
         fans.append({
             "name": _lbl.get("name") or names.get(idx, f"风扇{idx}"),
@@ -3529,6 +3731,8 @@ def get_fan_status():
             # has_curve=是否存了曲线；manual_active=当前是否处于手动态（曲线被临时盖住）。
             "has_curve": _rule is not None,
             "manual_active": bool(tcfg and tcfg.get("mode") == "manual"),
+            # 3按钮显式方案：'linear'/'curve'/None(手动)
+            "active_mode": active_mode,
         })
     fans = _apply_fan_aliases(fans)
     return _dedup_fan_names(fans)
@@ -3537,6 +3741,45 @@ def get_fan_status():
 def api_fan_status():
     """轻量风扇状态：供前端高频轮询，实时显示转速/当前占空比/目标（常驻线程 2s tick）"""
     return jsonify({"fans": get_fan_status()})
+
+
+@app.route("/api/fan/temps")
+def api_fan_temps():
+    """轻量温度快照：CPU/主板/各硬盘当前温度，供前端「当前温度」卡片高频展示（独立于 2s 风扇状态轮询）。"""
+    cpu_T = _fan_read_sys_temp("cpu")
+    mb_T = _fan_read_sys_temp("mb")
+    devs = _list_all_disk_devs()
+    states = get_disk_temps(devs) if devs else {}
+    disks = []
+    for d in devs:
+        st = states.get(d, {})
+        fi = _disk_friendly_info(d)
+        disks.append({
+            "dev": d,
+            "name": fi["name"],
+            "model": fi["model"],
+            "category": fi["category"],
+            "is_system": fi["is_system"],
+            "temp": st.get("temp"),
+            "asleep": st.get("asleep"),
+            "no_sleep": st.get("no_sleep", False),
+            # 供前端标注「被动散热、不参与风扇温控」，并说明其判定阈值与机械盘不同
+            "is_nvme": st.get("is_nvme", False),
+            "nvme_start_temp": NVME_START_TEMP,
+        })
+    # 同型号同容量的盘（典型：双磁臂 SAS 盘拆成两个 LUN、或买了两块一样的盘）友好名会撞车，
+    # 撞车时补上内核名后缀，保证「一眼能认出是哪块」这个目标不被重名破坏。
+    _name_count = {}
+    for it in disks:
+        _name_count[it["name"]] = _name_count.get(it["name"], 0) + 1
+    for it in disks:
+        if _name_count.get(it["name"], 0) > 1:
+            it["name"] = "%s·%s" % (it["name"], str(it["dev"]).replace("/dev/", ""))
+    return jsonify({
+        "cpu_temp": round(cpu_T, 1) if isinstance(cpu_T, (int, float)) else None,
+        "mb_temp": round(mb_T, 1) if isinstance(mb_T, (int, float)) else None,
+        "disks": disks,
+    })
 
 
 @app.route("/api/fan/disk_temp")
@@ -3636,6 +3879,12 @@ def _validate_fan_rule(r):
     if src not in _FAN_RULE_SOURCES and not (src.startswith("combo_max:") or src.startswith("combo_avg:")):
         return (None, "source 需为 disk / cpu / mb 或 combo_max:/combo_avg: 组合（如 combo_max:cpu,mb）")
     clean = {"enabled": bool(r.get("enabled", True)), "source": src}
+    # active_mode：3按钮显式控速方案（'linear' 或 'curve'）。
+    # 未提供时根据「是否有曲线」推断：有曲线→'curve'，否则→'linear'（兼容老配置）。
+    if "active_mode" in r and r["active_mode"] in ("linear", "curve"):
+        clean["active_mode"] = r["active_mode"]
+    else:
+        clean["active_mode"] = "curve" if r.get("curve") else "linear"
     for k, lo, hi, dv in (("start_temp", 0, 110, 40), ("full_temp", 0, 120, 60),
                           ("min_pwm", 0, 100, 30), ("max_pwm", 0, 100, 100),
                           ("recover_temp", 0, 120, 35)):
