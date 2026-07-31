@@ -15,7 +15,12 @@
   .header h1{font-size:20px;font-weight:600}
   .header .meta{font-size:13px;opacity:.9;display:flex;gap:16px;align-items:center}
   .container{max-width:1600px;margin:0 auto;padding:20px;display:flex;gap:20px;align-items:flex-start}
-  .sidebar{width:210px;flex:0 0 210px;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:8px;box-shadow:0 1px 3px rgba(0,0,0,.06);position:sticky;top:20px}
+  .sidebar{width:210px;flex:0 0 210px;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:8px;box-shadow:0 1px 3px rgba(0,0,0,.06);position:sticky;top:20px;will-change:transform;max-height:calc(100vh - 40px);overflow-y:auto;overscroll-behavior:contain}
+  /* 滚动条：占位常驻（不抖），thumb 永远真透明（完全看不见，无论滚不滚） */
+  .sidebar,html{scrollbar-width:thin;scrollbar-color:transparent transparent}
+  .sidebar::-webkit-scrollbar,html::-webkit-scrollbar{width:8px;height:8px}
+  .sidebar::-webkit-scrollbar-thumb,html::-webkit-scrollbar-thumb{background:transparent;border-radius:4px}
+  .sidebar::-webkit-scrollbar-track,html::-webkit-scrollbar-track{background:transparent}
   .sidebar-title{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;padding:6px 10px 10px}
   .sb-group{font-size:11px;color:var(--muted);padding:11px 10px 3px;letter-spacing:.5px;border-top:1px solid var(--border);margin-top:6px}
   .sb-group:first-of-type{border-top:none;margin-top:0}
@@ -41,6 +46,7 @@
   .b-warn{background:#fef3c7;color:var(--yellow)}
   .b-bad{background:#fee2e2;color:var(--red)}
   .b-info{background:#dbeafe;color:var(--blue)}
+  .b-muted{background:#e5e7eb;color:var(--muted)}
   .disk-card{position:relative}
   .disk-card.bad{border-color:var(--red);background:#fef2f2}
   .disk-card.warn{border-color:var(--orange)}
@@ -160,6 +166,12 @@
   .volt-badge{display:inline-block;font-size:11px;font-weight:600;padding:1px 7px;border-radius:10px;background:var(--bg);color:var(--muted);border:1px solid var(--border);margin-left:4px}
   .fan-rpm{font-size:26px;font-weight:700;color:var(--blue);line-height:1.1}
   .fan-rpm small{font-size:12px;color:var(--muted);font-weight:400;margin-left:4px}
+  .fan-hw-note{margin-top:8px;padding:7px 9px;border-radius:7px;background:rgba(245,158,11,.10);border:1px solid rgba(245,158,11,.35);font-size:12px;font-weight:600;color:var(--orange);line-height:1.5}
+  .fan-hw-note-sub{display:block;margin-top:3px;font-size:11px;font-weight:400;color:var(--muted)}
+  .fan-stop-hint{display:block;margin:3px 0 0 22px;font-size:11px;color:var(--muted);line-height:1.5}
+  .dt-hint-list{margin:6px 0 0;padding-left:18px;font-size:11px;color:var(--muted);line-height:1.7}
+  .dt-hint-list li{margin:0}
+  .dt-hint-title{margin-top:8px;font-size:11px;font-weight:600;color:var(--text)}
   .fan-speed-bar{height:8px;background:var(--bg);border-radius:5px;overflow:hidden;margin:10px 0 4px}
   .fan-speed-fill{height:100%;background:linear-gradient(90deg,var(--green),var(--blue));border-radius:5px;transition:width .4s}
   .fan-pct-line{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-bottom:6px}
@@ -189,6 +201,57 @@
   .fan-rule-stop{display:flex;align-items:center;gap:6px;margin-top:8px;font-size:12px;color:var(--text);cursor:pointer}
   .fan-rule-stop input{width:auto;margin:0}
   .fan-rule-tip{font-size:12px;color:var(--muted);line-height:1.6;margin:2px 0 12px;padding:10px 12px;background:var(--bg);border:1px solid var(--border);border-radius:8px}
+  .fan-seg{display:inline-flex;border:1px solid var(--border);border-radius:8px;overflow:hidden;margin:6px 0 4px}
+  .fan-seg-3{width:100%;max-width:360px}
+  .seg-btn{flex:1;padding:6px 14px;font-size:13px;font-weight:600;border:none;background:var(--bg);color:var(--muted);cursor:pointer;transition:.15s}
+  .seg-btn+.seg-btn{border-left:1px solid var(--border)}
+  .seg-btn.active{background:var(--blue);color:#fff}
+  .seg-btn:not(.active):hover{color:var(--blue)}
+  .seg-btn.disabled{opacity:.45;cursor:not-allowed}
+  .seg-btn.disabled:hover{color:var(--muted)}
+  .seg-sup{font-size:9px;opacity:.6;margin-left:2px;vertical-align:super}
+  .fan-mode-body{margin-top:6px}
+  .fan-rule-source{display:flex;align-items:center;gap:8px;margin:6px 0 8px;font-size:13px}
+  .fan-rule-source label{color:var(--muted);min-width:48px}
+  .fan-rule-source select{flex:1;max-width:220px}
+  .fan-rule-source .fan-rule-live{font-size:12px;color:var(--muted);margin-left:auto;font-variant-numeric:tabular-nums}
+  .fan-rule-hint{font-size:12px;color:var(--muted);margin-top:6px;line-height:1.5}
+  .fan-rule-curve-wrap{margin-top:4px}
+  .fan-rule-curve{margin-top:10px;border-top:1px dashed var(--border);padding-top:8px}
+  .fan-rule-curve-head{display:flex;align-items:center;justify-content:space-between;font-size:12px;color:var(--muted);margin-bottom:6px}
+  .sleep-panel{margin-bottom:14px}
+  .sleep-panel-head{display:flex;align-items:center;justify-content:space-between;cursor:pointer;padding:4px 2px;font-size:14px;font-weight:600}
+  .sleep-panel-toggle{font-size:14px;color:var(--muted)}
+  .sleep-panel-body{padding-top:10px}
+  /* 当前温度概览（紧凑单行横向 chip 流） */
+  .temp-overview{margin-bottom:14px;padding:12px 14px}
+  .temp-overview-head{font-size:14px;font-weight:600;margin-bottom:8px;display:flex;align-items:center;gap:8px}
+  .temp-updated{font-size:11px;font-weight:400;color:var(--muted);margin-left:auto}
+  .temp-row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+  .temp-cat{display:flex;flex-wrap:wrap;gap:6px;align-items:center;width:100%;margin-top:4px;padding-top:6px;border-top:1px dashed var(--border)}
+  .temp-cat:first-of-type{margin-top:8px;padding-top:0;border-top:none}
+  .temp-cat-label{font-size:11px;color:var(--muted);min-width:42px;font-weight:600}
+  .temp-chip{display:inline-flex;align-items:center;gap:6px;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:4px 9px;font-size:12px;line-height:1.4}
+  .temp-chip.off{opacity:.65}
+  .temp-chip-name{color:var(--muted);font-variant-numeric:tabular-nums}
+  .temp-chip-val{font-weight:700;font-variant-numeric:tabular-nums;min-width:38px;text-align:right}
+  .temp-chip-tag{font-size:10px;padding:1px 5px;border-radius:6px;line-height:1.3}
+  .temp-chip-tag.off{color:var(--blue);background:rgba(120,170,255,.12)}
+  .temp-chip-tag.on{color:var(--muted);background:#fff;border:1px solid var(--border)}
+  .temp-chip-empty{font-size:12px;color:var(--muted);padding:4px 0}
+  /* 风扇曲线编辑器：横向自适应（节点放成表格，单元更紧凑） */
+  .curve-pt-table{width:100%;border-collapse:collapse;font-size:12px}
+  .curve-pt-table th{font-weight:500;color:var(--muted);padding:3px 4px;text-align:left;border-bottom:1px solid var(--border)}
+  .curve-pt-table td{padding:4px 4px;border-bottom:1px dashed #f3f4f6;vertical-align:middle}
+  .curve-pt-table tr:last-child td{border-bottom:none}
+  .curve-pt-num{color:var(--muted);text-align:center;width:24px;font-variant-numeric:tabular-nums}
+  .curve-pt-input{display:inline-flex;align-items:stretch;border:1px solid var(--border);border-radius:6px;background:#fff;overflow:hidden}
+  .curve-pt-input input{width:52px;padding:4px 6px;font-size:12px;border:none;background:transparent;color:var(--text);text-align:right;font-variant-numeric:tabular-nums}
+  .curve-pt-input input:focus{outline:none;background:#eff6ff}
+  .curve-pt-input .unit{padding:4px 6px;font-size:11px;color:var(--muted);background:var(--bg);border-left:1px solid var(--border);min-width:22px;text-align:center}
+  .curve-pt-del{background:none;border:1px solid var(--border);color:var(--muted);border-radius:6px;padding:3px 7px;cursor:pointer;font-size:12px}
+  .curve-pt-del:hover{color:var(--red);border-color:#f0a3a3}
+  .curve-canvas{width:100%;height:120px;background:var(--bg);border:1px solid var(--border);border-radius:8px;margin-top:8px;display:block}
   /* 硬盘温度控制风扇面板 */
   .dt-panel{--dt-gap:16px;padding:18px}
   .dt-panel h3{display:flex;align-items:center;gap:10px;margin:0 0 16px;font-size:16px}
@@ -262,8 +325,6 @@
   .dt-warn{display:none;margin:6px 0;padding:9px 11px;border-radius:8px;background:#fff7ed;color:#9a3412;border:1px solid #fed7aa;font-size:12px;line-height:1.5}
   /* 风扇曲线编辑器 */
   .curve-presets{display:flex;gap:6px;margin:6px 0 10px;flex-wrap:wrap}
-  .curve-pt{display:flex;gap:6px;align-items:center;margin-bottom:6px}
-  .curve-pt input{width:80px}
   .curve-canvas{width:100%;height:150px;background:var(--bg);border:1px solid var(--border);border-radius:8px;margin-top:8px;display:block}
 </style>
 </head>
@@ -400,14 +461,10 @@ function renderPanel(id){
   else if(id==='storage'){ document.getElementById('storage').innerHTML=renderStorage(DATA.storage); }
   else if(id==='docker'){ document.getElementById('docker').innerHTML=renderDocker(DATA.docker); }
   else if(id==='fan'){
-    // 正在拖动滑块/编辑占空比时跳过整页重建，避免打断操作（转速数值由 fetchFanStatus 每2秒刷新）
-    var _fa=document.activeElement;
-    var _busy=_fa&&(_fa.classList.contains('fan-slider')||_fa.classList.contains('fan-custom-input'));
-    if(!_busy){
-      var _sd=_snapTemp('#disk-temp-panel'), _ss=_snapTemp('#sys-temp-panel');
+    // 正在拖动滑块/编辑占空比、或打开了曲线编辑器/硬盘休眠联动面板时，跳过整页重建，
+    // 避免打断操作（转速数值由 fetchFanStatus 每2秒刷新；曲线/休眠面板的编辑态不被冲掉）
+    if(!isFanPanelBusy()){
       refreshFanPanel();
-      initDiskTemp(_sd); initSysTemp(_ss);
-      drawCurve('dt'); drawCurve('st');
     }
   }
   var lu=document.getElementById('lastUpdate');
@@ -578,8 +635,8 @@ function renderSystem(s){
     let stopped = f.stopped || f.rpm < 1;
     let color = stopped ? 'var(--red)' : 'inherit';
     let rpmStr = stopped ? '0 RPM (停转)' : f.rpm + ' RPM';
-    let modeMap = {'curve':'曲线温控','manual':'手动控制','auto':'自动温控','off':'关闭'};
-    let modeStr = f.mode ? ` <span class="pill ${f.mode==='curve'||f.mode==='auto'?'b-info':'b-warn'}">${modeMap[f.mode]||f.mode}</span>` : '';
+    let _fpi = fanPillInfo(f);
+    let modeStr = _fpi.txt ? ` <span class="pill ${_fpi.cls}">${_fpi.txt}</span>` : '';
     let voltBadge = f.voltage ? ` <span class="volt-badge">${esc(f.voltage)}</span>` : '';
     let pwmStr = (f.pwm!=null) ? ` · PWM ${f.pwm}%` : '';
     let fanName = esc(f.label || f.name);
@@ -663,6 +720,25 @@ function refreshFanPanel(){
   loadFcsStatus();   // 重渲染会重置 fcs-panel 为「加载中」，需重新拉取
 }
 function toggleShowHiddenFans(){ SHOW_HIDDEN_FANS=!SHOW_HIDDEN_FANS; refreshFanPanel(); }
+// 判断风扇面板是否正处于「用户正在操作」状态：若为真则跳过整页重建，
+// 避免 30s 自动刷新把正在编辑的曲线/休眠面板冲掉（与滑块拖动保护同源）。
+// 用户最近一次在风扇面板里的操作时间（点按钮/改输入框/拖滑块），用于「正在操作就别刷新」判断。
+// 说明：曲线编辑器改为「切到曲线模式即常显」后，原先用「曲线是否展开」当忙碌信号会永远为真，
+// 会把 30s 自动刷新彻底冻住，因此改成基于最近操作时间的窗口判断。
+var FAN_TOUCH_TS=0;
+function markFanTouch(){ FAN_TOUCH_TS=Date.now(); }
+function isFanPanelBusy(){
+  var a=document.activeElement;
+  if(a && a.classList && (a.classList.contains('fan-slider')||a.classList.contains('fan-custom-input'))) return true;
+  // 焦点还停在风扇卡里的任意输入控件上（曲线节点、阈值、名称等）
+  if(a && a.closest && a.closest('.fan-card') && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName||'')) return true;
+  // 最近 60 秒在风扇面板里动过手：视为正在配置，先别整页重建
+  if(FAN_TOUCH_TS && (Date.now()-FAN_TOUCH_TS) < 60000) return true;
+  // 硬盘休眠联动面板处于展开状态
+  var sb=document.getElementById('sleep-panel-body');
+  if(sb && sb.style.display==='block') return true;
+  return false;
+}
 function renderFanControl(){
   let allFans=(DATA.system&&DATA.system.sensors&&DATA.system.sensors.fans||[]).filter(f=>f.controllable);
   let hiddenCount=allFans.filter(f=>f.hidden).length;
@@ -671,15 +747,24 @@ function renderFanControl(){
   if(!allFans.length) return '<div class="card"><div class="loading">未检测到可调控风扇（部分 NAS 由系统固件统一控温，本工具不接管）</div></div>';
   let presets=[['0','停转'],['auto','默认'],['100','全速'],['10','10%'],['20','20%'],['30','30%'],['40','40%'],['50','50%'],['60','60%'],['70','70%'],['80','80%'],['90','90%']];
   let presetHtml=presets.map(p=>`<button class="preset-btn ${p[0]==='100'?'full':''}" data-preset="${p[0]}" onclick="applyFanPreset('${p[0]}')">${p[1]}</button>`).join('');
-  let modeMap={'curve':'曲线温控','manual':'手动控制','auto':'自动温控','off':'关闭','disk_temp':'自动·硬盘温控','sys_temp':'自动·CPU/主板温控'};
   let cards=fans.map(f=>{
     let id=fanUid(f.hwmon, f.idx);
     let pct=(f.pwm!=null)?f.pwm:50;
-    let ruleHtml=fanRuleSection(f, id);
+    let isManual=(f.mode==='manual');
+    // 3 按钮：当前激活态由后端 active_mode 决定
+    //  linear  ← f.active_mode==='linear' && !isManual
+    //  curve   ← f.active_mode==='curve'  && !isManual
+    //  manual  ← isManual
+    // 旧 f.mode==='curve' 也映射到「曲线」按钮高亮（兼容老 mode 值）
+    let activeBtn = isManual ? 'manual' : (f.active_mode || (f.mode==='curve'?'curve':'linear'));
+    let noCurve = !f.has_curve;
+    // pill 直接说人话：当前这台风扇到底按哪套逻辑在转（含温度源），而不是内部 mode 代号
+    let _pi = fanPillInfo(f);
+    let pillTxt = _pi.txt, pillCls = _pi.cls;
     return `<div class="fan-card" id="${id}-box">
       <div class="fan-card-head">
         <input class="fan-label-input" id="${id}-label" value="${esc(f.label||f.name||'')}" placeholder="自定义名称（如 CPU 风扇）" maxlength="40">
-        <span class="pill ${f.mode==='curve'||f.mode==='auto'||f.mode==='disk_temp'||f.mode==='sys_temp'?'b-info':'b-warn'}" id="${id}-pill">${modeMap[f.mode]||f.mode||''}</span>
+        <span class="pill ${pillCls}" id="${id}-pill">${pillTxt}</span>
         <span class="fan-label-save">
           <select class="fan-volt-select" id="${id}-volt" title="风扇供电电压">
             <option value="12V" ${f.voltage==='12V'?'selected':''}>12V</option>
@@ -691,123 +776,464 @@ function renderFanControl(){
         </span>
       </div>
       <div class="fan-rpm" ${f.has_tach?'':'title="读不到转速：可能是一分二分线器的副风扇（转速线未接）、风扇本身未接转速线，或主板未把该通道布线到风扇接口。若此通道无风扇，可点下方『隐藏』把它收起。"'}><span id="${id}-rpm">${f.has_tach?(f.rpm||0):'—'}</span><small id="${id}-rpm-unit">${f.has_tach?'RPM':'无转速信号'}</small></div>
+      <div class="fan-hw-note" id="${id}-hwnote" style="display:none"></div>
       <div class="fan-speed-bar"><div class="fan-speed-fill" id="${id}-bar" style="width:${pct}%"></div></div>
       <div class="fan-pct-line">
         <span>当前 <b id="${id}-cur">${pct}</b>%</span>
         <span>目标 <b id="${id}-tgt"></b></span>
       </div>
-      <input type="range" min="0" max="100" value="${pct}" class="fan-slider" data-hwmon="${f.hwmon}" data-idx="${f.idx}" id="${id}-slider">
-      <div class="fan-card-actions">
-        <button class="btn-mini" onclick="setFanAuto('${f.hwmon}', ${f.idx})">恢复自动</button>
-        <span class="fan-custom">
-          <input type="number" min="0" max="100" step="1" value="${pct}" class="fan-custom-input" id="${id}-custom" data-hwmon="${f.hwmon}" data-idx="${f.idx}" title="自定义该风扇占空比（0=停转）"> %
-          <button class="btn-mini" onclick="applyFanCustom('${f.hwmon}', ${f.idx})">应用</button>
-        </span>
-        <button class="btn-mini" onclick="toggleFanHidden('${f.hwmon}', ${f.idx}, ${f.hidden?'false':'true'})" title="隐藏无风扇/无转速的空通道，可随时恢复">${f.hidden?'取消隐藏':'隐藏'}</button>
-        <span class="fan-card-state" id="${id}-state"></span>
+      <div class="fan-seg fan-seg-3" id="${id}-seg">
+        <button type="button" class="seg-btn ${activeBtn==='linear'?'active':''}" data-mode="linear" onclick="setFanMode('${f.hwmon}', ${f.idx}, 'linear')">线性温控</button>
+        <button type="button" class="seg-btn ${activeBtn==='curve'?'active':''}" data-mode="curve" ${noCurve?'title="点进来画一条自己的温度-转速曲线（至少 2 个节点）"':''} onclick="setFanMode('${f.hwmon}', ${f.idx}, 'curve')">曲线温控${noCurve?'<sup class="seg-sup">未设</sup>':''}</button>
+        <button type="button" class="seg-btn ${activeBtn==='manual'?'active':''}" data-mode="manual" onclick="setFanMode('${f.hwmon}', ${f.idx}, 'manual')">手动固定</button>
       </div>
-      ${ruleHtml}
+      <div id="${id}-linear" class="fan-mode-body" style="display:${activeBtn==='linear'?'block':'none'}">
+        ${fanRuleLinearBody(f, id)}
+      </div>
+      <div id="${id}-curve" class="fan-mode-body" style="display:${activeBtn==='curve'?'block':'none'}">
+        ${fanRuleCurveBody(f, id)}
+      </div>
+      <div id="${id}-manual" class="fan-mode-body" style="display:${activeBtn==='manual'?'block':'none'}">
+        <input type="range" min="0" max="100" value="${pct}" class="fan-slider" data-hwmon="${f.hwmon}" data-idx="${f.idx}" id="${id}-slider">
+        <div class="fan-card-actions">
+          <span class="fan-custom">
+            <label class="curve-pt-input" title="自定义该风扇占空比（0=停转）">
+              <input type="number" min="0" max="100" step="1" value="${pct}" class="fan-custom-input" id="${id}-custom" data-hwmon="${f.hwmon}" data-idx="${f.idx}">
+              <span class="unit">%</span>
+            </label>
+            <button class="btn-mini" onclick="applyFanCustom('${f.hwmon}', ${f.idx})">应用</button>
+          </span>
+          <button class="btn-mini" onclick="setFanMode('${f.hwmon}', ${f.idx}, '${(f.has_curve&&f.active_mode==='curve')?'curve':'linear'}')">恢复温控</button>
+          <button class="btn-mini" onclick="toggleFanHidden('${f.hwmon}', ${f.idx}, ${f.hidden?'false':'true'})" title="隐藏无风扇/无转速的空通道，可随时恢复">${f.hidden?'取消隐藏':'隐藏'}</button>
+          <span class="fan-card-state" id="${id}-state"></span>
+        </div>
+      </div>
     </div>`;
   }).join('');
-  let dtHtml = renderDiskTempPanel();
-  let stHtml = renderSysTempPanel();
   let hideToggle = hiddenCount>0 ? `<button class="btn-mini" style="margin-left:8px" onclick="toggleShowHiddenFans()">${SHOW_HIDDEN_FANS?('收起已隐藏('+hiddenCount+')'):('显示已隐藏通道('+hiddenCount+')')}</button>` : '';
   let gridInner = cards || `<div class="loading">可见风扇均已隐藏${hiddenCount>0?'，点上方「显示已隐藏通道」可展开':''}。</div>`;
+  ensureTempPolling();
   return `<div class="fan-page">
-    ${dtHtml}
-    ${stHtml}
+    ${renderSleepLinkPanel()}
+    ${renderTempOverview()}
     <div class="fan-presets">
       <span class="label">一键调速：</span>${presetHtml}
       ${hideToggle}
       <span class="fan-global-state" id="fan-global-state"></span>
     </div>
-    <div class="fan-rule-tip">💡 每台风扇卡片内可单独设「温度联动控速」：各自选温度源（硬盘 / CPU / 主板）并配自己的曲线，互不影响。适合两台风扇跟同一组硬盘温度、却要走不同曲线（如一台 30–45°C、一台 45–60°C）。未单独设置的风扇沿用下方全局默认。硬盘温度源需先在上方「硬盘温度控制」里勾选要监控的硬盘。</div>
+    <div class="fan-rule-tip">💡 每张卡片 3 个按钮选控速方案：<b>线性温控</b>（开转/全速 直线）、<b>曲线温控</b>（≥2 节点分段插值）、<b>手动固定</b>（拖滑块）。3 选 1 即生效、互不影响，徽标实时显示当前跑的是哪个。</div>
     <div class="fan-grid">${gridInner}</div>
     <div class="card fcs-card" id="fcs-panel"><div class="loading">加载系统风扇服务状态…</div></div>
   </div>`;
 }
-// ===== 逐风扇温度联动控速（fan_rules）：每台风扇独立温度源 + 独立曲线 =====
-function fanRuleSection(f, id){
-  var r=f.rule||null;
-  var src=f.rule_source||'';
-  var sd={disk:{start:40,full:60,min:30,max:100,rec:35},
-          cpu:{start:45,full:70,min:30,max:100,rec:40},
-          mb:{start:45,full:70,min:30,max:100,rec:40}};
-  var d=sd[src]||sd.disk;
-  var v=function(k,dv){ return (r&&r[k]!=null)?r[k]:dv; };
-  var open=!!src;
-  var comp=(f.computed_pwm!=null)?(f.computed_pwm+'%'):'—';
-  return '<div class="fan-rule" id="'+id+'-rule">'
-    +'<div class="fan-rule-head">'
-      +'<span class="fan-rule-title">温度联动控速</span>'
-      +'<select class="fan-rule-src" id="'+id+'-rsrc" onchange="onRuleSrcChange(\''+f.hwmon+'\','+f.idx+')">'
-        +'<option value="" '+(src===''?'selected':'')+'>关闭（手动/默认）</option>'
-        +'<option value="disk" '+(src==='disk'?'selected':'')+'>硬盘温度</option>'
-        +'<option value="cpu" '+(src==='cpu'?'selected':'')+'>CPU 温度</option>'
-        +'<option value="mb" '+(src==='mb'?'selected':'')+'>主板温度</option>'
-      +'</select>'
-      +'<span class="fan-rule-live" id="'+id+'-rlive">'+(open?('计算目标 '+comp):'')+'</span>'
+// ===== 风扇 自动/手动 分段开关 + 极简硬盘休眠联动面板（stage2）=====
+function syncFanData(hwmon, idx, mode){
+  if(DATA && DATA.system && DATA.system.sensors && DATA.system.sensors.fans){
+    DATA.system.sensors.fans.forEach(function(ff){ if(ff.hwmon===hwmon && ff.idx===idx){ ff.mode=mode; } });
+  }
+}
+// 顶部小标签：任何模式切换后立刻改文字，保证「当前跑哪套逻辑」永远和按钮一致（不用等 30s 刷新）
+function fanSrcLabel(v){
+  if(!v) return '';
+  if(String(v).indexOf('disk')===0) return '硬盘';
+  if(v==='cpu') return 'CPU';
+  if(v==='mb') return '主板';
+  return v;
+}
+function setFanPill(id, txt, cls){
+  var p=document.getElementById(id+'-pill');
+  if(!p) return;
+  p.textContent=txt;
+  p.className='pill '+(cls||'b-info');
+}
+// 「已下发 0% 却仍在转」的持续时间跟踪：id → 首次观察到 (pwm<=0 && rpm>0) 的时间戳
+var FAN_ZERO_SINCE={};
+function updateFanFloorNote(id, f){
+  var el=document.getElementById(id+'-hwnote');
+  if(!el) return;
+  // pwm_enable==1 才是 nasdash 真正在控速；==2 是已交还主板自动，
+  // 那种情况下读到的 0 不是我们下发的，不能算「我让它停它不停」，否则误报。
+  var engaged = (f && (f.pwm_enable==1 || f.pwm_enable==='1'));
+  var zeroButSpinning = f && engaged && f.has_tach && (f.pwm!=null && f.pwm<=0) && (f.rpm>0);
+  if(!zeroButSpinning){ FAN_ZERO_SINCE[id]=0; el.style.display='none'; el.textContent=''; return; }
+  if(!FAN_ZERO_SINCE[id]) FAN_ZERO_SINCE[id]=Date.now();
+  // 风扇从高转降到停需要几秒惯性，8 秒后仍在转才判定为「硬件停不下来」
+  if(Date.now()-FAN_ZERO_SINCE[id] < 8000) return;
+  el.style.display='block';
+  el.innerHTML='⚠️ 已下发 0%，但此风扇仍在转 '+(f.rpm||0)+' RPM'
+    +'<span class="fan-hw-note-sub">多为风扇自带最低转速保护或主板对该接口锁了下限，属硬件限制，软件无法再降。'
+    +'如需真正停转：进 BIOS 找 Fan Stop / 0 RPM 相关选项，或更换支持 0 转停转的风扇。</span>';
+}
+// 状态标签的唯一真源：整页渲染(renderFanControl)与 2 秒轮询(fetchFanStatus)必须共用这一份，
+// 否则轮询会把整页算好的人话文案覆盖回内部 mode 代号（曾导致「清了曲线仍显示曲线温控」）。
+function fanPillInfo(f){
+  if(!f) return {txt:'', cls:'b-info'};
+  if(f.mode==='manual' || f.manual_active) return {txt:'手动固定', cls:'b-warn'};
+  if(!f.rule) return {txt:'未设温控', cls:'b-muted'};
+  var am = f.active_mode || (f.mode==='curve' ? 'curve' : 'linear');
+  if(am==='curve' && !f.has_curve) return {txt:'曲线温控（待设曲线）', cls:'b-muted'};
+  var src = fanSrcLabel(f.rule_source);
+  return {txt:(am==='curve'?'曲线温控':'线性温控') + (src?('·'+src):''), cls:'b-info'};
+}
+async function setFanMode(hwmon, idx, mode){
+  // mode: 'linear' / 'curve' / 'manual'
+  markFanTouch();
+  var id=fanUid(hwmon, idx);
+  var seg=document.getElementById(id+'-seg');
+  if(seg){ seg.querySelectorAll('.seg-btn').forEach(function(b){ b.classList.toggle('active', b.dataset.mode===mode); }); }
+  var linearBox=document.getElementById(id+'-linear');
+  var curveBox=document.getElementById(id+'-curve');
+  var manBox=document.getElementById(id+'-manual');
+  // 先全部隐藏
+  if(linearBox) linearBox.style.display='none';
+  if(curveBox) curveBox.style.display='none';
+  if(manBox) manBox.style.display='none';
+
+  if(mode==='manual'){
+    if(manBox) manBox.style.display='block';
+    var sl=document.getElementById(id+'-slider');
+    var cust=document.getElementById(id+'-custom');
+    var v=sl?parseInt(sl.value,10):(cust?parseInt(cust.value,10):50);
+    if(isNaN(v)) v=50;
+    await applyFan(hwmon, idx, v);
+    syncFanData(hwmon, idx, 'manual');
+    setFanPill(id, '手动固定', 'b-warn');
+  } else if(mode==='linear'){
+    if(linearBox) linearBox.style.display='block';
+    await setFanAuto(hwmon, idx, 'linear');
+    syncFanData(hwmon, idx, 'auto');
+    var lsel=document.getElementById(id+'-linear_rsrc');
+    var lsrc=lsel?fanSrcLabel(lsel.value):'';
+    setFanPill(id, lsrc?('线性温控·'+lsrc):'未设温控', lsrc?'b-info':'b-muted');
+  } else if(mode==='curve'){
+    if(curveBox){
+      curveBox.style.display='block';
+      // 首次展开时初始化曲线节点表格（DOM 已由 fanRuleCurveBody 渲染好，只需画点 + 曲线）
+      var cdata=document.getElementById(id+'-r-curve-data');
+      if(cdata && (!cdata.value || cdata.value==='[]' || cdata.value==='null')){
+        // 第一次展开：若数据为空，留空表格让用户主动添加节点
+        renderCurvePoints(id+'-r');
+        drawCurve(id+'-r');
+      } else if(cdata){
+        renderCurvePoints(id+'-r');
+        drawCurve(id+'-r');
+      }
+    }
+    // 切换 active_mode='curve' 前先校验曲线 ≥2 节点，否则后端会回退到线性
+    var pts=readCurve(id+'-r');
+    if(pts.length<2){
+      // 没曲线：提示用户先设曲线，但仍切到「曲线」按钮（让用户能继续编辑）
+      setFanPill(id, '曲线温控（待设曲线）', 'b-muted');
+    } else {
+      await setFanAuto(hwmon, idx, 'curve');
+      syncFanData(hwmon, idx, 'auto');
+      var csel=document.getElementById(id+'-curve_rsrc');
+      var csrc=csel?fanSrcLabel(csel.value):'';
+      setFanPill(id, csrc?('曲线温控·'+csrc):'曲线温控', 'b-info');
+    }
+  }
+}
+function renderSleepLinkPanel(){
+  return '<div class="card sleep-panel" id="sleep-link-panel">'
+    +'<div class="sleep-panel-head" onclick="toggleSleepPanel()">'
+      +'<span>💤 硬盘休眠联动（监控盘休眠/空闲时自动停转受控风扇）</span>'
+      +'<span class="sleep-panel-toggle" id="sleep-panel-toggle">▸</span>'
     +'</div>'
-    +'<div class="fan-rule-body" id="'+id+'-rbody" style="display:'+(open?'block':'none')+'">'
-      +'<div class="fan-rule-fields">'
-        +'<span><label>开转</label><input type="number" id="'+id+'-rstart" min="0" max="110" value="'+v('start_temp',d.start)+'">°C</span>'
-        +'<span><label>全速</label><input type="number" id="'+id+'-rfull" min="0" max="120" value="'+v('full_temp',d.full)+'">°C</span>'
-        +'<span><label>开转占空</label><input type="number" id="'+id+'-rmin" min="0" max="100" value="'+v('min_pwm',d.min)+'">%</span>'
-        +'<span><label>全速占空</label><input type="number" id="'+id+'-rmax" min="0" max="100" value="'+v('max_pwm',d.max)+'">%</span>'
-        +'<span><label>恢复</label><input type="number" id="'+id+'-rrec" min="0" max="120" value="'+v('recover_temp',d.rec)+'">°C</span>'
-      +'</div>'
-      +'<label class="fan-rule-stop"><input type="checkbox" id="'+id+'-rstop" '+(r&&r.stop_below_start?'checked':'')+'> 低于开转温度即停转（强制 0%）</label>'
-      +'<div class="fan-rule-actions">'
-        +'<button class="btn-mini" onclick="saveFanRule(\''+f.hwmon+'\','+f.idx+')">保存联动</button>'
-        +'<span class="fan-rule-state" id="'+id+'-rstate"></span>'
-      +'</div>'
+    +'<div class="sleep-panel-body" id="sleep-panel-body" style="display:none">'
+      +'<label class="dt-toggle"><input type="checkbox" id="sl-sleep"> 监控盘全部休眠时停转风扇</label>'
+      +'<label class="dt-toggle">监控盘连续无读写满 <input type="number" id="sl-idle" min="1" max="120" value="5" style="width:52px"> 分钟也停转风扇</label>'
+      +'<div class="dt-actions"><button class="btn-mini" onclick="saveSleepLink()">保存</button><span class="dt-save-state" id="sl-state"></span></div>'
+      +'<div class="dt-hint">选「硬盘温度」为温度源的风扇，会在监控盘全部休眠或连续空闲时自动停转。监控盘默认取全部硬盘；此联动仅控制「是否停转」，不影响温度曲线调速。</div>'
+      +'<div class="dt-hint-title">硬盘已经休眠，风扇却还在转？按顺序对一下：</div>'
+      +'<ol class="dt-hint-list">'
+        +'<li><b>先看风扇的温度源</b>：只有温度源选了「硬盘温度」的风扇才吃这个联动。选 CPU / 主板的风扇跟硬盘休不休眠没关系，照常按温度转。</li>'
+        +'<li><b>固态盘、NVMe、SAS 企业盘不会休眠</b>，不算在「全部休眠」里。其中 SAS 企业盘和 SATA 固态装在盘位里、风扇吹得到，温度高于开转温度时为安全不停转。</li>'
+        +'<li><b>M.2 固态（NVMe）是例外</b>：它自带散热片贴在主板上、被动散热，机箱风扇的风本来就吹不到，而且 50 多度对它是完全正常的工作温度。所以它 65°C 以下不参与温控——既不会催风扇转，也不会拦着风扇停。装了带小风扇的 M.2 主动散热器的话，超过 65°C 一样会正常响应。</li>'
+        +'<li><b>只要还有一块机械盘在读写</b>（没满上面设的空闲分钟数）就不停。后台的相册扫描、备份、快照、Docker 都可能一直在戳硬盘。</li>'
+        +'<li><b>风扇本身可能停不下来</b>：部分风扇（尤其 CPU 散热器）自带最低转速保护，软件已经下发 0% 也会保持在一个固定转速。真遇到这种，上面对应的风扇卡片会直接标出来提醒你。</li>'
+      +'</ol>'
     +'</div>'
   +'</div>';
 }
-function onRuleSrcChange(hwmon, idx){
+function toggleSleepPanel(){
+  var b=document.getElementById('sleep-panel-body');
+  var t=document.getElementById('sleep-panel-toggle');
+  if(!b) return;
+  var show=(b.style.display!=='block');
+  b.style.display=show?'block':'none';
+  if(t) t.textContent=show?'▾':'▸';
+  if(show) initSleepLink();
+}
+async function initSleepLink(){
+  try{
+    var r=await fetch('/api/fan/disk_temp?_='+Date.now());
+    var j=await r.json(); var c=j.config||{};
+    var sl=document.getElementById('sl-sleep'); if(sl) sl.checked=(c.sleep_stop!==false);
+    var idle=document.getElementById('sl-idle'); if(idle) idle.value=(c.idle_minutes!=null?c.idle_minutes:5);
+  }catch(e){}
+}
+async function saveSleepLink(){
+  var st=document.getElementById('sl-state');
+  var sl=document.getElementById('sl-sleep'); var sleep=sl?sl.checked:true;
+  var idleEl=document.getElementById('sl-idle'); var idle=idleEl?parseFloat(idleEl.value):5;
+  if(st){ st.textContent='保存中…'; st.className='dt-save-state'; }
+  try{
+    var body={sleep_stop:sleep, idle_minutes:idle};
+    var r=await fetch('/api/fan/disk_temp',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    var j=await r.json();
+    if(st){ st.textContent=j.ok?'已保存 ✓':'失败：'+(j.error||''); st.className=j.ok?'dt-save-state ok':'dt-save-state'; }
+  }catch(e){ if(st){ st.textContent='请求失败'; st.className='dt-save-state'; } }
+}
+// ===== 当前温度概览（CPU/主板/各硬盘实时温度）=====
+let LAST_TEMPS=null;
+let LAST_DISK_TEMPS={};   // 缓存 dev → {temp, asleep, no_sleep}，防休眠/读不出时数字反复跳
+let _tempTimer=null;
+function fmtTemp(t){ return t!=null?t+'°C':'N/A'; }
+// 把若干个数据点拍平成一排紧凑 chip：name=dev/CPU/主板, kind=sys|disk
+function _renderTempChip(name, val, opts){
+  opts=opts||{};
+  // 数字与状态分离：休眠时把 last 已知温度放进去 + 单独「休眠」徽标，避免数字反复消失
+  var showVal = (val!=null)? val+'°C' : '—';
+  var color = opts.asleep? 'var(--muted)' : tempColor(val, opts.trip||60);
+  var tag = '';
+  if(opts.asleep) tag = '<span class="temp-chip-tag off">休眠</span>';
+  // NVMe 与机械盘不是一个温度量纲，也几乎吹不到风：单独标注，避免用户看到 53°C 就以为过热
+  else if(opts.is_nvme) tag = '<span class="temp-chip-tag off">被动散热</span>';
+  else if(opts.no_sleep) tag = '<span class="temp-chip-tag on">常驻</span>';
+  var ti = opts.title? ' title="'+esc(opts.title)+'"' : '';
+  return '<span class="temp-chip'+(opts.asleep?' off':'')+'"'+ti+'><span class="temp-chip-name">'+esc(name)+'</span><span class="temp-chip-val" style="color:'+color+'">'+showVal+'</span>'+tag+'</span>';
+}
+function renderTempOverview(){
+  return '<div class="card temp-overview" id="temp-overview">'
+    +'<div class="temp-overview-head">🌡️ 当前温度 <span class="temp-updated" id="temp-updated"></span></div>'
+    +'<div class="temp-row" id="temp-row"></div>'
+  +'</div>';
+}
+function _paintTemps(){
+  var row=document.getElementById('temp-row'); if(!row||!LAST_TEMPS) return;
+  var cpu=LAST_TEMPS.cpu_temp, mb=LAST_TEMPS.mb_temp;
+  var disks=(LAST_TEMPS.disks||[]);
+  // 系统温度（CPU/主板）单行
+  var html=_renderTempChip('CPU', cpu, {trip:100})
+    +_renderTempChip('主板', mb, {trip:90});
+  // 硬盘按分类分行：NVMe → SSD → HDD；同分类内系统盘优先置顶
+  var cats=[{k:'NVMe',label:'NVMe'},{k:'SSD',label:'SSD'},{k:'HDD',label:'机械'}];
+  var anyDisk=false;
+  cats.forEach(function(c){
+    var inCat=disks.filter(function(d){ return d.category===c.k; });
+    if(!inCat.length) return;
+    anyDisk=true;
+    inCat.sort(function(a,b){ return (b.is_system?1:0)-(a.is_system?1:0); });
+    html += '<div class="temp-cat">';
+    html += '<span class="temp-cat-label">'+c.label+'</span>';
+    inCat.forEach(function(d){
+      var name = d.name || (d.dev||'').replace(/^\/dev\//,'');
+      var isNv = !!d.is_nvme;
+      var nvStart = d.nvme_start_temp || 65;
+      html += _renderTempChip(name, d.temp, {
+        asleep:!!d.asleep, no_sleep:!!d.no_sleep, is_nvme:isNv,
+        // 告警色阈值也要分量纲：机械盘 60°C 该警惕，M.2 固态 60°C 还很凉快
+        trip: isNv ? 75 : 60,
+        title: isNv
+          ? ('M.2 固态多为被动散热（自带散热片、贴在主板上），机箱风扇的气流基本吹不到它，'
+             + '而且 '+nvStart+'°C 以下对固态属于完全正常的工作温度。\n'
+             + '因此它不会去催风扇转、也不会阻止风扇停转。只有超过 '+nvStart+'°C（接近降频保护线）才会参与风扇温控——'
+             + '装了带小风扇的 M.2 主动散热器时，这条同样生效。')
+          : ''
+      });
+    });
+    html += '</div>';
+  });
+  if(!anyDisk){
+    html += '<span class="temp-chip-empty">未检测到硬盘</span>';
+  }
+  row.innerHTML=html;
+  var up=document.getElementById('temp-updated'); if(up) up.textContent='· 更新于 '+new Date().toLocaleTimeString();
+}
+async function fetchTemps(){
+  try{
+    var r=await fetch('/api/fan/temps?_='+Date.now());
+    var j=await r.json();
+    // 先把数据按 dev 合并 LAST_DISK_TEMPS：对未读出(temp=null)但前一刻读到的盘沿用上次值，
+    // 避免温度显示在「44°C」与「N/A」之间反复横跳（用户反馈：硬盘温度会随刷新消失）
+    var curDevs={};
+    (j.disks||[]).forEach(function(d){
+      var dev=d.dev;
+      curDevs[dev]=true;
+      var prev=LAST_DISK_TEMPS[dev];
+      if((d.temp==null) && prev && !d.asleep){
+        d.temp=prev.temp;            // 沿用上次已知温度
+      }else if(d.temp!=null){
+        // 更新缓存
+      }
+      LAST_DISK_TEMPS[dev]={temp:d.temp, asleep:!!d.asleep, no_sleep:!!d.no_sleep};
+    });
+    // 移除已下线的盘（比如临时拔了）
+    Object.keys(LAST_DISK_TEMPS).forEach(function(k){ if(!curDevs[k]) delete LAST_DISK_TEMPS[k]; });
+    LAST_TEMPS=j;
+    _paintTemps();
+  }catch(e){}
+}
+function ensureTempPolling(){
+  if(_tempTimer) return;
+  fetchTemps();
+  _tempTimer=setInterval(fetchTemps, 10000);
+}
+
+// ===== 逐风扇温度联动控速（fan_rules）：每台风扇独立温度源 + 独立曲线 =====
+// 默认阈值（按温度源分类）
+var _RULE_DEFAULT={
+  disk:{start:40,full:60,min:30,max:100,rec:35},
+  cpu:{start:45,full:70,min:30,max:100,rec:40},
+  mb:{start:45,full:70,min:30,max:100,rec:40},
+  'combo_max:cpu,mb':{start:45,full:70,min:30,max:100,rec:40},
+  'combo_avg:cpu,mb':{start:45,full:70,min:30,max:100,rec:40}
+};
+function fanRuleSourceRow(f, id, body){
+  // body: 'linear' | 'curve' —— 给两体各自的 id 加前缀避免重复
+  var src=f.rule_source||'';
+  var srcOpts=[
+    ['', '关闭（手动/默认）'],
+    ['disk', '硬盘温度'],
+    ['cpu', 'CPU 温度'],
+    ['mb', '主板温度'],
+    ['combo_max:cpu,mb', '主板+CPU（取大）'],
+    ['combo_avg:cpu,mb', '主板+CPU（平均）']
+  ].map(function(o){ return '<option value="'+o[0]+'" '+(src===o[0]?'selected':'')+'>'+o[1]+'</option>'; }).join('');
+  var pre = body+'_';  // 避免 linear / curve 两体的源下拉 id 撞车
+  return '<div class="fan-rule-source">'
+    +'<label>温度源</label>'
+    +'<select class="fan-rule-src" id="'+id+'-'+pre+'rsrc" onchange="onRuleSrcChange(\''+f.hwmon+'\','+f.idx+',\''+body+'\')">'+srcOpts+'</select>'
+    +'<span class="fan-rule-live" id="'+id+'-'+pre+'rlive">'+(f.computed_pwm!=null?('计算目标 '+f.computed_pwm+'%'):'')+'</span>'
+  +'</div>';
+}
+function fanRuleLinearBody(f, id){
+  var r=f.rule||null;
+  var src=f.rule_source||'';
+  var d=_RULE_DEFAULT[src]||_RULE_DEFAULT.disk;
+  var v=function(k,dv){ return (r&&r[k]!=null)?r[k]:dv; };
+  var sid=id+'-linear_';
+  return '<div class="fan-rule fan-rule-linear" id="'+id+'-rule-l">'
+    +fanRuleSourceRow(f, id, 'linear')
+    +'<div class="fan-rule-fields">'
+      +'<span><label>开转</label><input type="number" id="'+sid+'rstart" min="0" max="110" value="'+v('start_temp',d.start)+'">°C</span>'
+      +'<span><label>全速</label><input type="number" id="'+sid+'rfull" min="0" max="120" value="'+v('full_temp',d.full)+'">°C</span>'
+      +'<span><label>开转占空</label><input type="number" id="'+sid+'rmin" min="0" max="100" value="'+v('min_pwm',d.min)+'">%</span>'
+      +'<span><label>全速占空</label><input type="number" id="'+sid+'rmax" min="0" max="100" value="'+v('max_pwm',d.max)+'">%</span>'
+      +'<span><label>恢复</label><input type="number" id="'+sid+'rrec" min="0" max="120" value="'+v('recover_temp',d.rec)+'">°C</span>'
+    +'</div>'
+    +'<label class="fan-rule-stop"><input type="checkbox" id="'+sid+'rstop" '+(r&&r.stop_below_start?'checked':'')+'> 低于开转温度即停转（强制 0%）</label>'
+    +'<span class="fan-stop-hint">不勾：温度掉到「恢复」温度以下才把这个风扇交还主板自动控制。'
+    +'另外，部分风扇（尤其 CPU 散热器）自带最低转速保护，下发 0% 也停不到底，属于风扇/主板限制——真遇到本卡片会提示。</span>'
+    +'<div class="fan-rule-actions">'
+      +'<button class="btn-mini" onclick="saveFanRule(\''+f.hwmon+'\','+f.idx+',\'linear\')">保存为线性</button>'
+      +'<span class="fan-rule-state" id="'+sid+'rstate"></span>'
+    +'</div>'
+  +'</div>';
+}
+function fanRuleCurveBody(f, id){
+  var cprefix=id+'-r';
+  return '<div class="fan-rule fan-rule-curve" id="'+id+'-rule-c">'
+    +fanRuleSourceRow(f, id, 'curve')
+    +'<div class="fan-rule-curve-wrap" id="'+id+'-curve-wrap">'
+      +renderCurveEditor(cprefix, (f.rule&&f.rule.curve)?f.rule.curve:null)
+    +'</div>'
+    +'<div class="fan-rule-actions">'
+      +'<button class="btn-mini" onclick="saveFanRule(\''+f.hwmon+'\','+f.idx+',\'curve\')">保存为曲线</button>'
+      +'<span class="fan-rule-state" id="'+id+'-curve_rstate"></span>'
+    +'</div>'
+    +'<div class="fan-rule-hint">💡 至少设 2 个曲线节点（推荐 ≥3 个）。设完后点「保存为曲线」即激活曲线温控。</div>'
+  +'</div>';
+}
+// 向后兼容：保留 fanRuleSection 名（旧代码可能引用过）
+function fanRuleSection(f, id){
+  return fanRuleLinearBody(f, id);
+}
+function onRuleSrcChange(hwmon, idx, body){
+  body = body || 'linear';
   var id=fanUid(hwmon, idx);
-  var sel=document.getElementById(id+'-rsrc');
-  var body=document.getElementById(id+'-rbody');
-  if(!sel||!body) return;
+  var pre = body+'_';
+  var sel=document.getElementById(id+'-'+pre+'rsrc');
+  var st=document.getElementById(id+'-'+pre+'rstate');
+  if(!sel) return;
   var src=sel.value;
-  body.style.display=src?'block':'none';
   // 下拉框是「温度源开关」：选「关闭」清规则、选温度源按该源推荐默认曲线立即落盘，
   // 否则 30s 自动刷新整页重渲染会把未保存的选择打回原样（用户反馈：点关闭刷新后又回到温度联动）。
   if(src){
-    var sd={disk:{start:40,full:60,min:30,max:100,rec:35},cpu:{start:45,full:70,min:30,max:100,rec:40},mb:{start:45,full:70,min:30,max:100,rec:40}};
-    var d=sd[src]||sd.disk;
+    var d=_RULE_DEFAULT[src]||_RULE_DEFAULT.disk;
     var setv=function(elid,val){ var e=document.getElementById(elid); if(e) e.value=val; };
-    setv(id+'-rstart',d.start); setv(id+'-rfull',d.full); setv(id+'-rmin',d.min); setv(id+'-rmax',d.max); setv(id+'-rrec',d.rec);
+    setv(id+'-'+pre+'rstart',d.start); setv(id+'-'+pre+'rfull',d.full);
+    setv(id+'-'+pre+'rmin',d.min); setv(id+'-'+pre+'rmax',d.max); setv(id+'-'+pre+'rrec',d.rec);
   }
-  saveFanRule(hwmon, idx);
+  saveFanRule(hwmon, idx, body==='curve'?'curve':'linear');
 }
-async function saveFanRule(hwmon, idx){
+async function saveFanRule(hwmon, idx, activeMode){
+  // activeMode: 'linear' | 'curve' | undefined（兼容旧调用）
+  // 若提供 activeMode，保存后切换该风扇到对应模式（清手动覆盖）。
   var id=fanUid(hwmon, idx);
-  var st=document.getElementById(id+'-rstate');
-  var sel=document.getElementById(id+'-rsrc');
+  var body = activeMode || 'linear';
+  var pre = body+'_';
+  var st=document.getElementById(id+'-'+pre+'rstate');
+  var sel=document.getElementById(id+'-'+pre+'rsrc');
   var key=hwmon+'::'+idx;
   var src=sel?sel.value:'';
-  var body={key:key};
+  var body4={key:key};
   if(!src){
-    body.rule=null;  // 关闭 → 清除该风扇联动
+    body4.rule=null;  // 关闭 → 清除该风扇联动
   }else{
-    var start=parseFloat(document.getElementById(id+'-rstart').value);
-    var full=parseFloat(document.getElementById(id+'-rfull').value);
-    var minp=parseFloat(document.getElementById(id+'-rmin').value);
-    var maxp=parseFloat(document.getElementById(id+'-rmax').value);
-    var rec=parseFloat(document.getElementById(id+'-rrec').value);
-    var stopEl=document.getElementById(id+'-rstop');
+    var start=parseFloat(document.getElementById(id+'-'+pre+'rstart').value);
+    var full=parseFloat(document.getElementById(id+'-'+pre+'rfull').value);
+    var minp=parseFloat(document.getElementById(id+'-'+pre+'rmin').value);
+    var maxp=parseFloat(document.getElementById(id+'-'+pre+'rmax').value);
+    var rec=parseFloat(document.getElementById(id+'-'+pre+'rrec').value);
+    var stopEl=document.getElementById(id+'-'+pre+'rstop');
     var stopv=stopEl?stopEl.checked:false;
     if(!(full>start)){ if(st){ st.textContent='全速温度须大于开转温度'; st.className='fan-rule-state'; } return; }
     if(!(rec<start)){ if(st){ st.textContent='恢复温度须小于开转温度'; st.className='fan-rule-state'; } return; }
-    body.rule={enabled:true,source:src,start_temp:start,full_temp:full,min_pwm:minp,max_pwm:maxp,recover_temp:rec,stop_below_start:stopv};
+    var pts=readCurve(id+'-r');
+    // 保留旧 active_mode：仅当「保存为线性/曲线」显式指定时才覆盖。
+    // 旧配置可能没 active_mode 字段，按「曲线优先」推断（兼容老数据）。
+    var f=(DATA.system&&DATA.system.sensors&&DATA.system.sensors.fans||[]).find(function(x){ return x.hwmon===hwmon && x.idx===idx; });
+    var curActive = (f&&f.active_mode) || ((f&&f.rule&&f.rule.curve&&f.rule.curve.length>=2)?'curve':'linear');
+    var newActive = activeMode || curActive;
+    body4.rule={enabled:true,source:src,start_temp:start,full_temp:full,min_pwm:minp,max_pwm:maxp,recover_temp:rec,stop_below_start:stopv,curve:pts,active_mode:newActive};
   }
   if(st){ st.textContent='保存中…'; st.className='fan-rule-state'; }
   try{
-    var r=await fetch('/api/fan/rules',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    var r=await fetch('/api/fan/rules',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body4)});
     var j=await r.json();
     if(st){ st.textContent=j.ok?'已保存 ✓':('失败：'+(j.error||'')); st.className=j.ok?'fan-rule-state ok':'fan-rule-state'; }
-    if(j.ok){ loadData(); }  // 重新拉取，令徽标/计算目标随新规则更新
+    if(j.ok){
+      // 同步缓存中该风扇的 active_mode（避免刷新前徽标/按钮高亮错位）
+      if(DATA && DATA.system && DATA.system.sensors && DATA.system.sensors.fans && body4.rule){
+        DATA.system.sensors.fans.forEach(function(ff){
+          if(ff.hwmon===hwmon && ff.idx===idx){
+            ff.active_mode=body4.rule.active_mode;
+            ff.rule=body4.rule;
+            ff.has_curve=!!(body4.rule.curve&&body4.rule.curve.length>=2);
+          }
+        });
+      }
+      // 曲线已成型：抹掉「曲线温控」按钮上的「未设」角标
+      if(body4.rule && body4.rule.curve && body4.rule.curve.length>=2){
+        var curveBtn=document.querySelector('#'+id+'-seg [data-mode="curve"]');
+        if(curveBtn){ curveBtn.classList.remove('disabled'); curveBtn.removeAttribute('title'); curveBtn.textContent='曲线温控'; }
+      }
+      // 顶部标签同步成刚保存的这套方案
+      if(!body4.rule){
+        setFanPill(id, '未设温控', 'b-muted');
+      } else {
+        var savedActive = body4.rule.active_mode;
+        setFanPill(id, (savedActive==='curve'?'曲线温控':'线性温控')+'·'+fanSrcLabel(src), 'b-info');
+      }
+      // 切到该模式（清手动覆盖）
+      if(activeMode){
+        await setFanAuto(hwmon, idx, undefined);  // 已经保存了 active_mode，无需再发
+        syncFanData(hwmon, idx, 'auto');
+      } else {
+        loadData();
+      }
+    }
   }catch(e){ if(st){ st.textContent='请求失败（需管理员登录）'; st.className='fan-rule-state'; } }
 }
 // ===== 系统风扇服务（pwm-fancontrol）永久禁用 / 恢复 =====
@@ -929,13 +1355,15 @@ async function fetchFanStatus(){
       if(bar) bar.style.width=(f.pwm!=null?f.pwm:50)+'%';
       // 实时刷新状态徽标：模式可能随时变化（如拖滑块→手动、点恢复自动→自动），
       // 但卡片只在整页渲染时生成一次徽标，故这里每轮补刷，避免显示与实际脱节。
-      let pill=document.getElementById(id+'-pill');
-      if(pill){
-        let mm={'curve':'曲线温控','manual':'手动控制','auto':'自动温控','off':'关闭','disk_temp':'自动·硬盘温控','sys_temp':'自动·CPU/主板温控'};
-        pill.textContent=mm[f.mode]||f.mode||'';
-        let info=(f.mode==='curve'||f.mode==='auto'||f.mode==='disk_temp'||f.mode==='sys_temp');
-        pill.className='pill '+(info?'b-info':'b-warn');
+      // 必须走 fanPillInfo（与整页渲染同一份逻辑），否则会把人话文案覆盖回内部 mode 代号。
+      // 例外：用户刚操作完（60s 触摸窗内）不覆盖，避免把即时反馈冲掉、等后端状态落定后再接管。
+      if(!isFanPanelBusy()){
+        let pi=fanPillInfo(f);
+        setFanPill(id, pi.txt, pi.cls);
       }
+      // 「已下发 0% 却仍在转」检测：部分风扇（常见于 CPU 散热器）自带最低转速保护，
+      // 软件写 0 也停不下来。持续 8 秒以上才提示，避开风扇降速惯性造成的瞬态误报。
+      updateFanFloorNote(id, f);
       if(sl && document.activeElement!==sl){
         // 手动模式下滑块停在用户设定的目标值，不强行跟随实时爬升（避免松手后滑块回弹误以为没生效）；自动模式跟随实时值
         sl.value=(f.mode==='manual' && f.target_pct!=null)?f.target_pct:(f.pwm!=null?f.pwm:50);
@@ -954,16 +1382,39 @@ async function applyFan(hwmon, idx, pwm){
     let r=await fetch('/api/fan/set',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({hwmon:hwmon,idx:idx,pwm:pwm})});
     let j=await r.json();
     if(st) st.textContent=j.ok?('目标 '+pwm+'%，平滑过渡中'):('失败：'+(j.error||''));
+    if(j.ok) syncFanData(hwmon, idx, 'manual');
   }catch(e){ if(st) st.textContent='请求失败'; }
 }
-async function setFanAuto(hwmon, idx){
+async function setFanAuto(hwmon, idx, activeMode){
+  // activeMode: 'linear' | 'curve' | undefined（保留兼容）
+  // 切换 active_mode：发 /api/fan/rules 同步更新 fan_rules.json（不重置 curve 字段）。
   let id=fanUid(hwmon, idx), st=document.getElementById(id+'-state');
   if(st) st.textContent='恢复中…';
   try{
+    // 1) 切到 auto 控速（清除手动覆盖）
     let r=await fetch('/api/fan/set',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({hwmon:hwmon,idx:idx,mode:'auto'})});
     let j=await r.json();
     let owner=j.owner==='ext_service'?'（已交还系统风扇服务）':'（nasdash 接管温控）';
     if(st) st.textContent=j.ok?('已恢复自动 '+owner):('失败：'+(j.error||''));
+    if(j.ok) syncFanData(hwmon, idx, 'auto');
+    // 2) 同步 active_mode 到 fan_rules（如有规则）
+    if(activeMode && j.ok){
+      let srcEl=document.getElementById(id+'-rsrc');
+      let src=srcEl?srcEl.value:'';
+      if(src){
+        // 读当前规则（避免覆盖 start_temp/full_temp 等线性字段）
+        let f=(DATA.system&&DATA.system.sensors&&DATA.system.sensors.fans||[]).find(function(x){ return x.hwmon===hwmon && x.idx===idx; });
+        let curRule=(f&&f.rule)||{};
+        curRule.active_mode=activeMode;
+        // 强制重新发送完整规则（包含 active_mode）
+        let body={key:hwmon+'::'+idx, rule:curRule};
+        let r2=await fetch('/api/fan/rules',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+        let j2=await r2.json();
+        if(!j2.ok){
+          let st2=document.getElementById(id+'-rstate'); if(st2){ st2.textContent='保存方案失败：'+(j2.error||''); st2.className='fan-rule-state'; }
+        }
+      }
+    }
   }catch(e){ if(st) st.textContent='请求失败'; }
 }
 async function saveFanLabel(hwmon, idx){
@@ -998,6 +1449,23 @@ async function toggleFanHidden(hwmon, idx, hide){
   }catch(e){}
 }
 function bindFanSliders(){
+  // 事件委托挂在常驻容器 #fan 上（innerHTML 重建不影响它），记录用户最近操作时间
+  var fanRoot=document.getElementById('fan');
+  if(fanRoot && !fanRoot._touchBound){
+    fanRoot._touchBound=true;
+    ['click','input','change','focusin'].forEach(function(ev){ fanRoot.addEventListener(ev, markFanTouch, true); });
+  }
+  // 首屏就处于「曲线温控」的风扇：立刻把节点表格和曲线图画出来。
+  // （renderCurveEditor 只吐空容器，节点/画布要靠 renderCurvePoints+drawCurve 填，
+  //   不补这一步就会出现「明明是曲线模式却看不到曲线」。隐藏的曲线体等切过去时再画，
+  //   避免 display:none 下 canvas 量不到宽度画歪。）
+  (FAN_LIST||[]).forEach(function(f){
+    var fid=fanUid(f.hwmon, f.idx);
+    var cb=document.getElementById(fid+'-curve');
+    if(cb && cb.style.display==='block'){
+      try{ renderCurvePoints(fid+'-r'); drawCurve(fid+'-r'); }catch(e){}
+    }
+  });
   document.querySelectorAll('.fan-slider').forEach(sl=>{
     sl.addEventListener('input', ()=>{
       clearPresetHighlight();
@@ -1015,342 +1483,6 @@ function bindFanSliders(){
   if(!fanTimer){ fetchFanStatus(); fanTimer=setInterval(fetchFanStatus, 2000); }
 }
 
-// ===== 温控面板刷新保护 =====
-// 整页重建（refreshFanPanel / renderAll）会把 temp 面板的勾选、曲线等表单清空，
-// 并在 initDiskTemp/initSysTemp 里从服务器 config 重新回填。
-// 若用户已勾选但还没点「保存」，刷新就会把未保存的改动冲掉。
-// 解决：刷新前对面板所有表单字段拍快照，init 回填后再把未保存改动恢复回去。
-function _snapTemp(sel){
-  var o={}, box=document.querySelector(sel);
-  if(!box) return o;
-  box.querySelectorAll('input,select').forEach(function(el){
-    if(el.type==='checkbox'||el.type==='radio') o[el.id]=el.checked;
-    else o[el.id]=el.value;
-  });
-  return o;
-}
-function _restoreTemp(sel, snap){
-  if(!snap) return;
-  var box=document.querySelector(sel);
-  if(!box) return;
-  Object.keys(snap).forEach(function(id){
-    var el=document.getElementById(id); if(!el) return;
-    if(el.type==='checkbox'||el.type==='radio') el.checked=snap[id];
-    else el.value=snap[id];
-  });
-  if(sel.indexOf('disk')>=0){ renderCurvePoints('dt'); drawCurve('dt'); }
-  else { renderCurvePoints('st'); drawCurve('st'); }
-  updateDiskTempCounts(); updateSysTempCounts();
-}
-
-// ===== 硬盘温度控制风扇（disk_temp）=====
-function renderDiskTempPanel(){
-  var fans=(typeof FAN_LIST!=='undefined'?FAN_LIST:[])||[];
-  var disks=(DATA&&DATA.disks)||[];
-  var fanOptsHtml='', diskOptsHtml='';
-  if(fans.length){
-    fanOptsHtml=fans.map(function(f){
-      var id='dt-fan-'+f.hwmon+'-'+f.idx;
-      var label=esc((f.label||f.name||('风扇'+f.idx))).replace(/</g,'&lt;');
-      var meta=(f.rpm||0)+' RPM';
-      return '<label class="dt-opt" for="'+id+'"><input type="checkbox" class="dt-fan" id="'+id+'" data-hwmon="'+f.hwmon+'" data-idx="'+f.idx+'"> <span class="dt-txt"><span class="dt-name">'+label+'</span><span class="dt-meta">'+meta+'</span></span></label>';
-    }).join('');
-  }else{
-    fanOptsHtml='<div class="dt-empty">未检测到可调控风扇</div>';
-  }
-  if(disks.length){
-    diskOptsHtml=disks.map(function(d){
-      var shortDev=(d.dev||'').replace(/^\/dev\//,'');
-      var id='dt-disk-'+shortDev;
-      var name=esc(shortDev);
-      var meta='';
-      if(d.model||d.vendor) meta=esc((d.vendor||'')+' '+(d.model||'')).trim();
-      return '<label class="dt-opt" for="'+id+'"><input type="checkbox" class="dt-disk" id="'+id+'" value="'+d.dev+'"> <span class="dt-txt"><span class="dt-name">'+name+'</span><span class="dt-meta" id="dt-temp-'+shortDev+'">'+(meta?meta:'')+'</span></span></label>';
-    }).join('');
-  }else{
-    diskOptsHtml='<div class="dt-empty">未检测到硬盘</div>';
-  }
-  return '<div class="card dt-panel" id="disk-temp-panel">'
-    +'<h3>硬盘温度控制风扇 <span class="badge b-info">新功能</span></h3>'
-    +'<label class="dt-toggle" style="margin-bottom:14px"><input type="checkbox" id="dt-enabled"> 启用硬盘温控</label>'
-    +'<div class="dt-section">'
-      +'<div class="dt-section-title">监控硬盘 <span class="count" id="dt-disk-count">0</span></div>'
-      +'<div class="dt-hint">每块盘右侧会显示：<b>温度</b>=当前实时温度 · <b>休眠</b>=盘已停转省电 · <b>常驻</b>=SAS 企业盘或固态盘(SSD)，厂商为数据安全锁定不休眠，因此不参与「全部休眠→停风扇」判断（但它若发烫仍会触发风扇散热）。<br><b>提示</b>：勾选某块盘＝它的温度<b>参与风扇曲线控速</b>——勾了 SAS/固态，它们一发烧受控风扇就会提速；不勾则完全不监控、也不影响停转功能。</div>'
-      +'<div class="dt-grid">'+diskOptsHtml+'</div>'
-    +'</div>'
-    +'<div class="dt-section">'
-      +'<div class="dt-section-title">受控风扇 <span class="count" id="dt-fan-count">0</span></div>'
-      +'<div class="dt-grid">'+fanOptsHtml+'</div>'
-    +'</div>'
-    +'<div class="dt-warn" id="dt-warn" style="display:none"></div>'
-    +'<div class="dt-section">'
-      +'<div class="dt-section-title">温控曲线</div>'
-      +'<div class="dt-thresholds">'
-        +'<div class="dt-field"><label>开转温度</label><input type="number" id="dt-start" min="20" max="80" value="40"><span class="unit">°C</span></div>'
-        +'<div class="dt-field"><label>全速温度</label><input type="number" id="dt-full" min="30" max="90" value="60"><span class="unit">°C</span></div>'
-        +'<div class="dt-field"><label>开转占空比</label><input type="number" id="dt-min" min="0" max="100" value="30"><span class="unit">%</span></div>'
-        +'<div class="dt-field"><label>全速占空比</label><input type="number" id="dt-max" min="0" max="100" value="100"><span class="unit">%</span></div>'
-        +'<div class="dt-field"><label>恢复自动温度</label><input type="number" id="dt-recover" min="20" max="80" value="35"><span class="unit">°C</span></div>'
-      +'</div>'
-    +'</div>'
-    +'<div class="dt-section">'
-        +'<div class="dt-options">'
-        +'<label class="dt-toggle"><input type="checkbox" id="dt-sleep" checked> 监控盘全部休眠时停转风扇</label>'
-        +'<label class="dt-toggle">监控盘连续无读写满 <input type="number" id="dt-idle" min="1" max="120" value="5" style="width:52px"> 分钟也停转风扇（与休眠满足其一即停）</label>'
-        +'</div>'
-    +'</div>'
-    + renderCurveEditor('dt')
-    +'<div class="dt-actions">'
-      +'<button class="btn-mini" id="dt-save" onclick="saveDiskTempConfig()">保存配置</button>'
-      +'<span class="dt-live">当前计算目标占空比：<b id="dt-live-pwm">—</b></span>'
-      +'<span class="dt-save-state" id="dt-save-state"></span>'
-    +'</div>'
-  +'</div>';
-}
-function updateDiskTempCounts(){
-  var dc=document.querySelectorAll('.dt-disk:checked').length;
-  var fc=document.querySelectorAll('.dt-fan:checked').length;
-  var dce=document.getElementById('dt-disk-count'); if(dce) dce.textContent=dc;
-  var fce=document.getElementById('dt-fan-count'); if(fce) fce.textContent=fc;
-  var warn=document.getElementById('dt-warn');
-  if(warn){
-    var en=document.getElementById('dt-enabled');
-    if(en && en.checked && fc===0){
-      warn.textContent='⚠️ 已启用硬盘温控，但没勾选任何「受控风扇」。这样风扇不会被接管，「监控盘全部休眠时停转风扇」等设置也不会生效。请在上方「受控风扇」里勾选要由硬盘温度控制的风扇。';
-      warn.style.display='block';
-    }else{ warn.style.display='none'; }
-  }
-}
-var dtTimer=null;
-async function initDiskTemp(snap){
-  try{
-    var r=await fetch('/api/fan/disk_temp?_='+Date.now());
-    var j=await r.json();
-    var c=j.config||{};
-    var en=document.getElementById('dt-enabled'); if(en) en.checked=!!c.enabled;
-    var st=document.getElementById('dt-start'); if(st) st.value=(c.start_temp!=null?c.start_temp:40);
-    var fu=document.getElementById('dt-full'); if(fu) fu.value=(c.full_temp!=null?c.full_temp:60);
-    var mn=document.getElementById('dt-min'); if(mn) mn.value=(c.min_pwm!=null?c.min_pwm:30);
-    var mx=document.getElementById('dt-max'); if(mx) mx.value=(c.max_pwm!=null?c.max_pwm:100);
-    var rc=document.getElementById('dt-recover'); if(rc) rc.value=(c.recover_temp!=null?c.recover_temp:35);
-    var cd=document.getElementById('dt-curve-data'); if(cd){ cd.value=JSON.stringify(c.curve||[]); renderCurvePoints('dt'); drawCurve('dt'); }
-    var sl=document.getElementById('dt-sleep'); if(sl) sl.checked=(c.sleep_stop!==false);
-    var idleEl=document.getElementById('dt-idle'); if(idleEl) idleEl.value=(c.idle_minutes!=null?c.idle_minutes:5);
-    (c.disks||[]).forEach(function(dev){
-      var shortDev=String(dev).replace(/^\/dev\//,'');
-      var cbs=document.querySelectorAll('.dt-disk');
-      for(var i=0;i<cbs.length;i++){ if(cbs[i].value===shortDev){ cbs[i].checked=true; break; } }
-    });
-    var cf=c.controlled_fans||'all';
-    var fanCbs=document.querySelectorAll('.dt-fan');
-    if(cf==='all' && fanCbs.length){ fanCbs.forEach(function(cb){cb.checked=true;}); }
-    else if(Array.isArray(cf)){
-      fanCbs.forEach(function(cb){
-        var h=cb.dataset.hwmon, idx=parseInt(cb.dataset.idx);
-        cf.forEach(function(pair){ if(pair && pair[0]===h && pair[1]===idx){ cb.checked=true; } });
-      });
-    }
-    var panel=document.getElementById('disk-temp-panel');
-    if(panel && !panel.dataset.bound){ panel.dataset.bound='1'; panel.addEventListener('change', function(e){
-        if(e.target && (e.target.classList.contains('dt-disk') || e.target.classList.contains('dt-fan'))) updateDiskTempCounts();
-      }); }
-    updateDiskTempCounts();
-    refreshDiskTempPanel();
-    if(dtTimer) clearInterval(dtTimer);
-    dtTimer=setInterval(refreshDiskTempPanel,5000);
-    if(snap) _restoreTemp('#disk-temp-panel', snap);
-  }catch(e){}
-}
-async function refreshDiskTempPanel(){
-  var panel=document.getElementById('disk-temp-panel');
-  if(!panel) return;
-  try{
-    var r=await fetch('/api/fan/disk_temp?_='+Date.now());
-    var j=await r.json();
-    (j.disks||[]).forEach(function(d){
-      var shortDev=(d.dev||'').replace(/^\/dev\//,'');
-      var el=document.getElementById('dt-temp-'+shortDev);
-      if(el){
-        if(d.asleep) el.textContent='休眠';
-        else if(d.no_sleep){ el.textContent=(d.temp!=null?d.temp+'°C':'N/A')+' · 常驻'; el.title='常驻：SAS 企业盘或固态盘(SSD)，厂商为数据安全锁定不休眠，不参与「全部休眠→停风扇」判断，但高温时仍会触发风扇散热'; }
-        else if(d.temp!=null) el.textContent=d.temp+'°C';
-        else el.textContent='N/A';
-      }
-    });
-    var live=document.getElementById('dt-live-pwm');
-    if(live){ live.textContent=(j.computed_pwm!=null?j.computed_pwm+'%':'—'); }
-  }catch(e){}
-}
-async function saveDiskTempConfig(){
-  var st=document.getElementById('dt-save-state');
-  var en=document.getElementById('dt-enabled'); var enabled=en?en.checked:false;
-  var devs=[].slice.call(document.querySelectorAll('.dt-disk:checked')).map(function(cb){return cb.value;});
-  var fanCbs=[].slice.call(document.querySelectorAll('.dt-fan:checked'));
-  var allFans=[].slice.call(document.querySelectorAll('.dt-fan'));
-  var controlled_fans='all';
-  if(fanCbs.length && fanCbs.length<allFans.length){
-    controlled_fans=fanCbs.map(function(cb){return [cb.dataset.hwmon, parseInt(cb.dataset.idx)];});
-  }
-  var start=parseFloat(document.getElementById('dt-start').value);
-  var full=parseFloat(document.getElementById('dt-full').value);
-  var minp=parseFloat(document.getElementById('dt-min').value);
-  var maxp=parseFloat(document.getElementById('dt-max').value);
-  var rec=parseFloat(document.getElementById('dt-recover').value);
-  var sl=document.getElementById('dt-sleep'); var sleep=sl?sl.checked:true;
-  var idleEl=document.getElementById('dt-idle'); var idle=idleEl?parseFloat(idleEl.value):5;
-  if(!devs.length){ if(st){ st.textContent='请至少勾选一个硬盘'; st.className='dt-save-state'; } return; }
-  if(!(full>start)){ if(st){ st.textContent='全速温度须大于开转温度'; st.className='dt-save-state'; } return; }
-  if(!(rec<start)){ if(st){ st.textContent='恢复自动温度须小于开转温度'; st.className='dt-save-state'; } return; }
-  if(st){ st.textContent='保存中…'; st.className='dt-save-state'; }
-  try{
-    var body={enabled:enabled,disks:devs,start_temp:start,full_temp:full,min_pwm:minp,max_pwm:maxp,recover_temp:rec,sleep_stop:sleep,idle_minutes:idle,controlled_fans:controlled_fans,curve:readCurve('dt')};
-    var r=await fetch('/api/fan/disk_temp',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-    var j=await r.json();
-    if(st){ st.textContent=j.ok?'已保存 ✓':'失败：'+(j.error||''); st.className=j.ok?'dt-save-state ok':'dt-save-state'; }
-    if(j.ok){ refreshDiskTempPanel(); }
-  }catch(e){ if(st){ st.textContent='请求失败'; st.className='dt-save-state'; } }
-}
-
-// ===== 主板/CPU 温度控制风扇（sys_temp）=====
-function renderSysTempPanel(){
-  var fans=(typeof FAN_LIST!=='undefined'?FAN_LIST:[])||[];
-  var fanOptsHtml='';
-  if(fans.length){
-    fanOptsHtml=fans.map(function(f){
-      var id='st-fan-'+f.hwmon+'-'+f.idx;
-      var label=esc((f.label||f.name||('风扇'+f.idx))).replace(/</g,'&lt;');
-      var meta=(f.rpm||0)+' RPM';
-      return '<label class="dt-opt" for="'+id+'"><input type="checkbox" class="st-fan" id="'+id+'" data-hwmon="'+f.hwmon+'" data-idx="'+f.idx+'"> <span class="dt-name">'+label+'</span><span class="dt-meta">'+meta+'</span></label>';
-    }).join('');
-  }else{
-    fanOptsHtml='<div class="dt-empty">未检测到可调控风扇</div>';
-  }
-  return '<div class="card dt-panel" id="sys-temp-panel">'
-    +'<h3>主板 / CPU 温度控制风扇 <span class="badge b-info">新功能</span></h3>'
-    +'<label class="dt-toggle" style="margin-bottom:14px"><input type="checkbox" id="st-enabled"> 启用主板/CPU 温控</label>'
-    +'<div class="dt-section">'
-      +'<div class="dt-section-title">温度来源</div>'
-      +'<div class="dt-options">'
-        +'<label class="dt-toggle"><input type="radio" name="st-source" value="cpu" checked> CPU 封装温度</label>'
-        +'<label class="dt-toggle"><input type="radio" name="st-source" value="mb"> 主板温度</label>'
-      +'</div>'
-    +'</div>'
-    +'<div class="dt-section">'
-      +'<div class="dt-section-title">受控风扇 <span class="count" id="st-fan-count">0</span></div>'
-      +'<div class="dt-grid">'+fanOptsHtml+'</div>'
-    +'</div>'
-    +'<div class="dt-warn" id="st-warn" style="display:none"></div>'
-    +'<div class="dt-section">'
-      +'<div class="dt-section-title">温控曲线</div>'
-      +'<div class="dt-thresholds">'
-        +'<div class="dt-field"><label>开转温度</label><input type="number" id="st-start" min="20" max="90" value="45"><span class="unit">°C</span></div>'
-        +'<div class="dt-field"><label>全速温度</label><input type="number" id="st-full" min="30" max="100" value="70"><span class="unit">°C</span></div>'
-        +'<div class="dt-field"><label>开转占空比</label><input type="number" id="st-min" min="0" max="100" value="30"><span class="unit">%</span></div>'
-        +'<div class="dt-field"><label>全速占空比</label><input type="number" id="st-max" min="0" max="100" value="100"><span class="unit">%</span></div>'
-        +'<div class="dt-field"><label>恢复自动温度</label><input type="number" id="st-recover" min="20" max="90" value="40"><span class="unit">°C</span></div>'
-      +'</div>'
-    +'</div>'
-    + renderCurveEditor('st')
-    +'<div class="dt-actions">'
-      +'<button class="btn-mini" id="st-save" onclick="saveSysTempConfig()">保存配置</button>'
-      +'<span class="dt-live">当前<span id="st-src-label">CPU</span>温度：<b id="st-live-temp">—</b> · 计算目标占空比：<b id="st-live-pwm">—</b></span>'
-      +'<span class="dt-save-state" id="st-save-state"></span>'
-    +'</div>'
-  +'</div>';
-}
-function updateSysTempCounts(){
-  var fc=document.querySelectorAll('.st-fan:checked').length;
-  var fce=document.getElementById('st-fan-count'); if(fce) fce.textContent=fc;
-  var warn=document.getElementById('st-warn');
-  if(warn){
-    var en=document.getElementById('st-enabled');
-    if(en && en.checked && fc===0){
-      warn.textContent='⚠️ 已启用主板/CPU 温控，但没勾选任何「受控风扇」。这样风扇不会被接管，温控曲线也不会生效。请在上方「受控风扇」里勾选要由主板/CPU 温度控制的风扇。';
-      warn.style.display='block';
-    }else{ warn.style.display='none'; }
-  }
-}
-var stTimer=null;
-async function initSysTemp(snap){
-  try{
-    var r=await fetch('/api/fan/sys_temp?_='+Date.now());
-    var j=await r.json();
-    var c=j.config||{};
-    var en=document.getElementById('st-enabled'); if(en) en.checked=!!c.enabled;
-    var cpuRb=document.querySelector('input[name="st-source"][value="cpu"]');
-    var mbRb=document.querySelector('input[name="st-source"][value="mb"]');
-    var src=c.source||'cpu';
-    if(cpuRb) cpuRb.checked=(src==='cpu');
-    if(mbRb) mbRb.checked=(src==='mb');
-    var lbl=document.getElementById('st-src-label'); if(lbl) lbl.textContent=(src==='mb'?'主板':'CPU');
-    var st=document.getElementById('st-start'); if(st) st.value=(c.start_temp!=null?c.start_temp:45);
-    var fu=document.getElementById('st-full'); if(fu) fu.value=(c.full_temp!=null?c.full_temp:70);
-    var mn=document.getElementById('st-min'); if(mn) mn.value=(c.min_pwm!=null?c.min_pwm:30);
-    var mx=document.getElementById('st-max'); if(mx) mx.value=(c.max_pwm!=null?c.max_pwm:100);
-    var rc=document.getElementById('st-recover'); if(rc) rc.value=(c.recover_temp!=null?c.recover_temp:40);
-    var cd=document.getElementById('st-curve-data'); if(cd){ cd.value=JSON.stringify(c.curve||[]); renderCurvePoints('st'); drawCurve('st'); }
-    var cf=c.controlled_fans||'all';
-    var fanCbs=document.querySelectorAll('.st-fan');
-    if(cf==='all' && fanCbs.length){ fanCbs.forEach(function(cb){cb.checked=true;}); }
-    else if(Array.isArray(cf)){
-      fanCbs.forEach(function(cb){
-        var h=cb.dataset.hwmon, idx=parseInt(cb.dataset.idx);
-        cf.forEach(function(pair){ if(pair && pair[0]===h && pair[1]===idx){ cb.checked=true; } });
-      });
-    }
-    var panel=document.getElementById('sys-temp-panel');
-    if(panel && !panel.dataset.bound){ panel.dataset.bound='1'; panel.addEventListener('change', function(e){
-        if(e.target && e.target.classList.contains('st-fan')) updateSysTempCounts();
-        if(e.target && e.target.name==='st-source'){
-          var l=document.getElementById('st-src-label');
-          if(l) l.textContent=(e.target.value==='mb'?'主板':'CPU');
-        }
-      }); }
-    updateSysTempCounts();
-    refreshSysTempPanel();
-    if(stTimer) clearInterval(stTimer);
-    stTimer=setInterval(refreshSysTempPanel,5000);
-    if(snap) _restoreTemp('#sys-temp-panel', snap);
-  }catch(e){}
-}
-async function refreshSysTempPanel(){
-  var panel=document.getElementById('sys-temp-panel');
-  if(!panel) return;
-  try{
-    var r=await fetch('/api/fan/sys_temp?_='+Date.now());
-    var j=await r.json();
-    var tEl=document.getElementById('st-live-temp');
-    if(tEl){ tEl.textContent=(j.source_temp!=null?j.source_temp+'°C':'N/A'); }
-    var live=document.getElementById('st-live-pwm');
-    if(live){ live.textContent=(j.computed_pwm!=null?j.computed_pwm+'%':'—'); }
-  }catch(e){}
-}
-async function saveSysTempConfig(){
-  var st=document.getElementById('st-save-state');
-  var en=document.getElementById('st-enabled'); var enabled=en?en.checked:false;
-  var srcRb=document.querySelector('input[name="st-source"]:checked'); var source=srcRb?srcRb.value:'cpu';
-  var fanCbs=[].slice.call(document.querySelectorAll('.st-fan:checked'));
-  var allFans=[].slice.call(document.querySelectorAll('.st-fan'));
-  var controlled_fans='all';
-  if(fanCbs.length && fanCbs.length<allFans.length){
-    controlled_fans=fanCbs.map(function(cb){return [cb.dataset.hwmon, parseInt(cb.dataset.idx)];});
-  }
-  var start=parseFloat(document.getElementById('st-start').value);
-  var full=parseFloat(document.getElementById('st-full').value);
-  var minp=parseFloat(document.getElementById('st-min').value);
-  var maxp=parseFloat(document.getElementById('st-max').value);
-  var rec=parseFloat(document.getElementById('st-recover').value);
-  if(!(full>start)){ if(st){ st.textContent='全速温度须大于开转温度'; st.className='dt-save-state'; } return; }
-  if(!(rec<start)){ if(st){ st.textContent='恢复自动温度须小于开转温度'; st.className='dt-save-state'; } return; }
-  if(st){ st.textContent='保存中…'; st.className='dt-save-state'; }
-  try{
-    var body={enabled:enabled,source:source,start_temp:start,full_temp:full,min_pwm:minp,max_pwm:maxp,recover_temp:rec,controlled_fans:controlled_fans,curve:readCurve('st')};
-    var r=await fetch('/api/fan/sys_temp',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-    var j=await r.json();
-    if(st){ st.textContent=j.ok?'已保存 ✓':'失败：'+(j.error||''); st.className=j.ok?'dt-save-state ok':'dt-save-state'; }
-    if(j.ok){ refreshSysTempPanel(); }
-  }catch(e){ if(st){ st.textContent='请求失败'; st.className='dt-save-state'; } }
-}
 
 // ===== 风扇温度→PWM 曲线编辑器（自定义多点曲线 + 预设档）=====
 var CURVE_PRESETS={
@@ -1358,7 +1490,7 @@ var CURVE_PRESETS={
   balanced: [[30,30],[45,45],[60,65],[75,90]],
   perf:     [[30,45],[45,65],[60,85],[75,100]]
 };
-function renderCurveEditor(prefix){
+function renderCurveEditor(prefix, initCurve){
   return `<div class="dt-section">
     <div class="dt-section-title">自定义温度→PWM 曲线 <span class="badge b-info">可选</span></div>
     <div style="font-size:12px;color:var(--muted);margin-bottom:6px">不设置则使用上方「开转/全速」线性映射。设了曲线后，按曲线分段插值调速（点击预设一键生成，可再微调每个节点）。</div>
@@ -1368,7 +1500,7 @@ function renderCurveEditor(prefix){
       <button class="preset-btn" onclick="applyCurvePreset('${prefix}','perf')">性能</button>
       <button class="preset-btn" onclick="applyCurvePreset('${prefix}','clear')">清除曲线</button>
     </div>
-    <input type="hidden" id="${prefix}-curve-data" value="[]">
+    <input type="hidden" id="${prefix}-curve-data" value="${initCurve?JSON.stringify(initCurve):'[]'}">
     <div id="${prefix}-curve-pts"></div>
     <button class="btn-mini" onclick="addCurvePoint('${prefix}')">+ 添加节点</button>
     <canvas id="${prefix}-curve-canvas" class="curve-canvas"></canvas>
@@ -1380,6 +1512,26 @@ function applyCurvePreset(prefix, kind){
   data.value=JSON.stringify(pts);
   renderCurvePoints(prefix);
   drawCurve(prefix);
+  // 分段按钮的「未设」角标与顶部 pill 是在 renderFanControl 时按 f.has_curve 算的，
+  // 编辑器内清空/预设切换不会触发重绘，需在此手动同步：
+  //   点数≥2 → 移除「未设」角标（与 saveFanRule 成功后的处理一致）；
+  //   点数<2 → 补回「未设」角标 + 提示 title，并把 pill 同步成「未设温控」，
+  //            与曲线编辑器里「未设置曲线，使用线性映射」的提示语义对齐。
+  var id=prefix.replace(/-r$/,'');
+  var curveBtn=document.querySelector('#'+id+'-seg [data-mode="curve"]');
+  var hasEnough = pts.length>=2;
+  if(curveBtn){
+    if(hasEnough){
+      curveBtn.innerHTML='曲线温控';
+      curveBtn.removeAttribute('title');
+    } else {
+      curveBtn.innerHTML='曲线温控<sup class="seg-sup">未设</sup>';
+      curveBtn.setAttribute('title','点进来画一条自己的温度-转速曲线（至少 2 个节点）');
+    }
+  }
+  if(!hasEnough){
+    setFanPill(id, '未设温控', 'b-muted');
+  }
 }
 function renderCurvePoints(prefix){
   var data=document.getElementById(prefix+'-curve-data');
@@ -1387,11 +1539,18 @@ function renderCurvePoints(prefix){
   if(!data||!box) return;
   var pts=[]; try{ pts=JSON.parse(data.value||'[]'); }catch(e){}
   if(!pts.length){ box.innerHTML='<div class="dt-empty" style="padding:6px">未设置曲线，使用线性映射</div>'; return; }
-  box.innerHTML=pts.map(function(p,i){
-    return '<div class="curve-pt"><input type="number" class="cp-temp" data-i="'+i+'" value="'+p[0]+'" min="20" max="95" step="1">°C'+
-           '<input type="number" class="cp-pwm" data-i="'+i+'" value="'+p[1]+'" min="0" max="100" step="1">%'+
-           '<button class="btn-mini" onclick="removeCurvePoint(\''+prefix+'\','+i+')">✕</button></div>';
+  // 横向自适应表格：一行一个节点，列宽随容器自动伸展；列少时瘦、多时仍可读
+  var rows = pts.map(function(p,i){
+    return '<tr>'
+      +'<td class="curve-pt-num">'+(i+1)+'</td>'
+      +'<td><label class="curve-pt-input"><input type="number" class="cp-temp" data-i="'+i+'" value="'+p[0]+'" min="20" max="95" step="1"><span class="unit">°C</span></label></td>'
+      +'<td><label class="curve-pt-input"><input type="number" class="cp-pwm" data-i="'+i+'" value="'+p[1]+'" min="0" max="100" step="1"><span class="unit">%</span></label></td>'
+      +'<td style="text-align:right"><button class="curve-pt-del" type="button" title="删除该节点" onclick="removeCurvePoint(\''+prefix+'\','+i+')">✕</button></td>'
+    +'</tr>';
   }).join('');
+  box.innerHTML = '<table class="curve-pt-table">'
+    +'<thead><tr><th>#</th><th>温度</th><th>占空比</th><th></th></tr></thead>'
+    +'<tbody>'+rows+'</tbody></table>';
   box.querySelectorAll('input').forEach(function(inp){
     inp.addEventListener('change', function(){
       var i=parseInt(inp.dataset.i);
@@ -1957,20 +2116,14 @@ function renderAll(){
   document.getElementById('system').innerHTML = renderSystem(DATA.system);
   let _fa=document.activeElement;
   let _fanBusy = _fa && (_fa.classList.contains('fan-slider') || _fa.classList.contains('fan-custom-input'));
-  var _sd=_snapTemp('#disk-temp-panel'), _ss=_snapTemp('#sys-temp-panel');
   if(!_fanBusy){
     document.getElementById('fan').innerHTML = renderFanControl();
     bindFanSliders();
-    // 重渲染会把 fcs-panel 重置为静态“加载中”，必须重新拉取一次 FCS 状态，
-    // 否则首次轮询数据回来后卡片会永久卡在“加载系统风扇服务状态…”。
     loadFcsStatus();
   }
-  // 正在拖动滑块/编辑自定义占空比时跳过风扇页整页重建，避免打断操作；转速数值由 fetchFanStatus 每2秒刷新
   document.getElementById('storage').innerHTML = renderStorage(DATA.storage);
   document.getElementById('docker').innerHTML = renderDocker(DATA.docker);
   document.getElementById('lastUpdate').textContent = '更新于 '+DATA.time+' ('+DATA.elapsed+'s)';
-  initDiskTemp(_sd);
-  initSysTemp(_ss);
   showAlerts(DATA.alerts);
 }
 
@@ -2127,6 +2280,26 @@ async function checkUpdate(force){
 function dismissUpdate(){ document.getElementById('updateBanner').classList.remove('show'); updateDismissed = true; }
 
 checkUpdate(false);
+
+// 滚动条自动隐藏：不用时彻底不渲染（隐藏），滚动时才浮现，停手约 0.9s 后消失（左侧栏与页面共用）
+(function(){
+  function autoHide(el){
+    if(!el) return;
+    var t;
+    el.addEventListener('scroll', function(){
+      el.classList.add('scrolling');
+      clearTimeout(t);
+      t = setTimeout(function(){ el.classList.remove('scrolling'); }, 900);
+    }, {passive:true});
+  }
+  autoHide(document.querySelector('.sidebar'));
+  var html = document.documentElement, t2;
+  window.addEventListener('scroll', function(){
+    html.classList.add('scrolling');
+    clearTimeout(t2);
+    t2 = setTimeout(function(){ html.classList.remove('scrolling'); }, 900);
+  }, {passive:true});
+})();
 </script>
 </body>
 </html>
