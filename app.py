@@ -3128,17 +3128,28 @@ def manual():
     try:
         md = open(p, "r", encoding="utf-8").read()
     except Exception as e:
-        return "<h1>操作手册未找到</h1><p>%s</p>" % _md_inline(str(e)), 404
+        resp = make_response("<h1>操作手册未找到</h1><p>%s</p>" % _md_inline(str(e)), 404)
+        resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        resp.headers["Pragma"] = "no-cache"
+        resp.headers["Expires"] = "0"
+        return resp
     body = _render_markdown(md)
     if request.args.get("embed") == "1":
         # 应用内嵌：仅返回片段（无 html/head/body 外壳），由前端塞进面板，停留在应用内
-        return "<style>%s</style>\n<div class=\"man-body\">%s</div>" % (_MANUAL_CSS_EMBED, body)
-    return ("<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">"
-            "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-            "<title>nasdash 操作手册</title><style>%s</style></head>"
-            "<body><div class=\"topbar\">nasdash 操作手册 · <b>v%s</b> · "
-            "<a href=\"/\">← 返回面板</a></div>"
-            "<div class=\"wrap\">%s</div></body></html>") % (_MANUAL_CSS, APP_VERSION, body)
+        html = "<style>%s</style>\n<div class=\"man-body\">%s</div>" % (_MANUAL_CSS_EMBED, body)
+    else:
+        html = ("<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">"
+                "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+                "<title>nasdash 操作手册</title><style>%s</style></head>"
+                "<body><div class=\"topbar\">nasdash 操作手册 · <b>v%s</b> · "
+                "<a href=\"/\">← 返回面板</a></div>"
+                "<div class=\"wrap\">%s</div></body></html>") % (_MANUAL_CSS, APP_VERSION, body)
+    # no-store：手册走网关反代，不缓存否则首次打开可能拿到空白/旧响应（同 / 路由）
+    resp = make_response(html)
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
 
 # ===================== 采集层：实时指标（网络吞吐 / 磁盘 I/O / CPU 功耗） =====================
 # 这些指标需「两次采样差」才算速率，故由常驻 daemon 线程周期采样，/api/all 仅读最新值。
