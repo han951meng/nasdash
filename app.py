@@ -712,8 +712,9 @@ def fan_smooth_loop():
             # 逐风扇温控：每台风扇按各自「温度源 + 曲线」独立决策（论坛需求：同温源不同曲线）。
             # 温度源每种只算一次，多台同源风扇复用（硬盘温度采集较重，避免重复扫盘）。
             need_disk = any((r.get("source", "disk") == "disk") for r in rules.values())
-            need_cpu = any((r.get("source") == "cpu") for r in rules.values())
-            need_mb = any((r.get("source") == "mb") for r in rules.values())
+            _need_combo = any((r.get("source") or "").startswith("combo") for r in rules.values())
+            need_cpu = any((r.get("source") == "cpu") for r in rules.values()) or _need_combo
+            need_mb = any((r.get("source") == "mb") for r in rules.values()) or _need_combo
             disk_all_idle, disk_T, disk_has = (False, None, False)
             if need_disk:
                 _dt_eff = dt
@@ -734,10 +735,10 @@ def fan_smooth_loop():
                     if not disk_has:
                         continue  # 未配置监控盘 → 该风扇本轮不温控（保持原样）
                     T, all_idle = disk_T, disk_all_idle
-                elif src == "cpu":
-                    T, all_idle = cpu_T, False
                 else:
-                    T, all_idle = mb_T, False
+                    # cpu / mb / combo_max:cpu,mb / combo_avg:cpu,mb 统一经 _resolve_rule_temp 解析。
+                    # 任一子源读数缺失则 T=None，由 _fan_rule_decision 保守交还自动（与旧逻辑一致）。
+                    T, all_idle = _resolve_rule_temp(src, cpu_T, mb_T, disk_T, disk_all_idle, disk_has)
                 key = (hwmon, idx)
                 # #4 修复（huhaibo820）：用户显式手动调速（FAN_TARGETS 该风扇 mode=manual）
                 # 时，手动优先于温度联动——否则一旦设了温度联控速，手动滑块就完全失效。
@@ -1399,6 +1400,44 @@ def _fan_rule_decision(key, rule, T, all_idle=False):
     # 已达开转温度：接管并按曲线控速
     _FAN_ENGAGED[key] = True
     return ("control", _fan_rule_pwm(T, rule))
+
+def _resolve_rule_temp(src, cpu_T, mb_T, disk_T, disk_all_idle, disk_has):
+    """按温度源解析出 (T, all_idle)，供 _fan_rule_decision 使用。
+    src 支持：
+      disk                → 硬盘温度（disk_has 为假时返回 (None, False) 表示本轮跳过）
+      cpu / mb            → CPU / 主板温度
+      combo_max:cpu,mb    → 取 CPU 与主板温度的【较大值】
+      combo_avg:cpu,mb    → 取 CPU 与主板温度的【平均值】
+    子项可递归（combo 里还能套 sensor: 等）。任一子源不可用时忽略该子源；
+    全部不可用时返回 (None, False)。移植自 guan-ry/FanControlServerApp 的 resolveSourceTemp。
+    彻底解决「选了主板 CPU 就没了」的单选互斥痛点（论坛 huhaibo820 反馈）。"""
+    src = (src or "disk").strip()
+    if src == "disk":
+        return (disk_T if disk_has else None, disk_all_idle)
+    if src == "cpu":
+        return (cpu_T, False)
+    if src == "mb":
+        return (mb_T, False)
+    if src.startswith("combo_avg:") or src.startswith("combo_max:"):
+        parts = [s.strip() for s in src.split(":", 1)[1].split(",") if s.strip()]
+        vals = []
+        for p in parts:
+            if p == "cpu":
+                vals.append(cpu_T)
+            elif p == "mb":
+                vals.append(mb_T)
+            elif p == "disk":
+                vals.append(disk_T if disk_has else None)
+            else:
+                t, _ = _resolve_rule_temp(p, cpu_T, mb_T, disk_T, disk_all_idle, disk_has)
+                vals.append(t)
+        vals = [v for v in vals if isinstance(v, (int, float))]
+        if not vals:
+            return (None, False)
+        if src.startswith("combo_max"):
+            return (max(vals), False)
+        return (sum(vals) / len(vals), False)
+    return (None, False)
 
 # ===================== 采集：阵列卡 =====================
 def detect_storage_controllers():
@@ -2314,29 +2353,10 @@ def get_system():
                             d["sensors"]["temps"].append({"name": nm, "value": round(fv, 1), "max": mx, "crit": cr})
                             break
                         elif fn.startswith("fan"):
-                            fan_key = fn.replace("_input", "")
-                            default_name = fan_key.replace("fan", "风扇")
-                            fi = fan_info.get(fan_key, {})
-                            _lab = _fan_label_for(fi.get("hwmon", ""), fi.get("idx", 0))
-                            display_name = _lab.get("name") or fi.get("name", default_name)
-                            mode = fi.get("mode", "")
-                            pwm = fi.get("pwm")
-                            d["sensors"]["fans"].append({
-                                "name": display_name,
-                                "label": _lab.get("name", ""),
-                                "voltage": _lab.get("voltage", ""),
-                                "rpm": int(fv),
-                                "stopped": fv < 1,
-                                "mode": mode,
-                                "pwm": pwm,
-                                "controllable": fi.get("controllable", False),
-                                "hwmon": fi.get("hwmon", ""),
-                                "idx": fi.get("idx", 0),
-                                # has_tach=False：读不到转速（分线器副扇/未接转速线/主板未布线该通道）
-                                "has_tach": int(fv) > 0,
-                                "hidden": bool(_lab.get("hidden")),
-                            })
-                            break
+                            # 风扇卡片不再从 sensors -j 逐条生成：华硕双芯片主板（nct6798 / asus-ec）
+                            # 会把同一物理风扇报两遍，造成「两个 FAN1」幽灵卡。统一改由下方
+                            # 「风扇卡片」段用 _enumerate_fans() 生成（只含 pwm 通道 + 芯片前缀命名）。
+                            continue
                         elif fn.startswith("in"):
                             v = fv / 1000 if fv > 100 else fv
                             nm = ename
@@ -2360,6 +2380,38 @@ def get_system():
                         _f["name"] = f"{_f['name']} #fan{_f['idx']}"
         except (json.JSONDecodeError, ValueError):
             pass
+    # 风扇卡片：唯一来源 = 本机可控制风扇全集（_enumerate_fans，与温控循环 / 风扇专页同一份）。
+    # 仅枚举有 pwm 的通道，故华硕双芯片主板(asus-ec 无 pwm)不会生成幽灵卡；
+    # 默认名带芯片前缀（如 nct6798·风扇1），从根上杜绝重名（论坛 #1 反馈：两个 FAN1）。
+    # rpm 直接从同 hwmon 目录的 fan{idx}_input 读（移植 FanControlServerApp 同思路），不依赖 sensors 解析。
+    for (_hw, _fi) in _enumerate_fans():
+        _chip = read_file(f"{_hw}/name").strip() or os.path.basename(_hw)
+        _pe = read_file(f"{_hw}/pwm{_fi}_enable").strip()
+        _pv = read_file(f"{_hw}/pwm{_fi}").strip()
+        _rpm_path = f"{_hw}/fan{_fi}_input"
+        _rpm = 0
+        if os.path.exists(_rpm_path):
+            try:
+                _rpm = int(read_file(_rpm_path).strip())
+            except (ValueError, Exception):
+                _rpm = 0
+        _lab = _fan_label_for(_hw, _fi)
+        display = _lab.get("name") or f"{_chip}·风扇{_fi}"
+        _mm = {"0": "off", "1": "manual", "2": "auto"}
+        d["sensors"]["fans"].append({
+            "name": display,
+            "label": _lab.get("name", ""),
+            "voltage": _lab.get("voltage", ""),
+            "rpm": _rpm,
+            "stopped": _rpm < 1,
+            "mode": _mm.get(_pe, ""),
+            "pwm": round(int(_pv) / 255 * 100) if _pv else None,
+            "controllable": bool(_pe),
+            "hwmon": _hw,
+            "idx": _fi,
+            "has_tach": _rpm > 0,
+            "hidden": bool(_lab.get("hidden")),
+        })
     # 合并风扇控速元数据（温控规则来源 / 逻辑模式 / 计算目标 / 目标占空比），
     # 供前端首屏即正确显示「温度联动控速」来源与逻辑模式（手动 / 自动·CPU·主板·硬盘温控），
     # 而非仅按硬件寄存器位误报。否则下拉框恒显「关闭（手动/默认）」、状态标签错显（#2/#3 回归）。
@@ -3386,8 +3438,9 @@ def get_fan_status():
     _rules = _effective_fan_rules()   # 逐风扇温控规则（判定每台风扇是否被温控接管 + 算目标）
     # 逐风扇温控目标：温度源每种只算一次，供状态展示（与调速线程口径一致）
     _need_disk = any((r.get("source", "disk") == "disk") for r in _rules.values())
-    _need_cpu = any((r.get("source") == "cpu") for r in _rules.values())
-    _need_mb = any((r.get("source") == "mb") for r in _rules.values())
+    _need_combo = any((r.get("source") or "").startswith("combo") for r in _rules.values())
+    _need_cpu = any((r.get("source") == "cpu") for r in _rules.values()) or _need_combo
+    _need_mb = any((r.get("source") == "mb") for r in _rules.values()) or _need_combo
     _disk_idle_s, _disk_T, _disk_has = (False, None, False)
     if _need_disk:
         _dt_eff = _dt
@@ -3435,18 +3488,13 @@ def get_fan_status():
         if _rule:
             _src = _rule.get("source", "disk")
             rule_source = _src
-            if _src == "disk":
-                _rt, _ridle, _rhas = _disk_T, _disk_idle_s, _disk_has
-            elif _src == "cpu":
-                _rt, _ridle, _rhas = _cpu_T, False, True
-            else:
-                _rt, _ridle, _rhas = _mb_T, False, True
-            if _rhas:
+            _rt, _ridle = _resolve_rule_temp(_src, _cpu_T, _mb_T, _disk_T, _disk_idle_s, _disk_has)
+            if _rt is not None or _ridle:
                 _raw = 0 if _ridle else _fan_rule_pwm(_rt, _rule)
                 if _raw is not None:
                     computed_pwm = round(_raw / 255 * 100)
             rule_out = _rule
-            mode = "sys_temp" if _src in ("cpu", "mb") else "disk_temp"
+            mode = "sys_temp" if (_src in ("cpu", "mb") or _src.startswith("combo")) else "disk_temp"
         else:
             # 无温控规则：以用户设的逻辑模式为准。nasdash 接管控速时硬件 pwm_enable 恒为 1（manual），
             # 不能据此判断，故显示 auto（下面若 tcfg 为 manual 会再覆盖为 manual）。
@@ -3477,6 +3525,10 @@ def get_fan_status():
             "has_tach": rpm > 0,
             # 用户可把「无风扇的幽灵通道」隐藏（持久化到 fan_labels.json）
             "hidden": bool(_lbl.get("hidden")),
+            # 手动/曲线共存模型：曲线(rule)与手动覆盖相互独立，互不销毁（论坛 #3 反馈）。
+            # has_curve=是否存了曲线；manual_active=当前是否处于手动态（曲线被临时盖住）。
+            "has_curve": _rule is not None,
+            "manual_active": bool(tcfg and tcfg.get("mode") == "manual"),
         })
     fans = _apply_fan_aliases(fans)
     return _dedup_fan_names(fans)
@@ -3581,8 +3633,8 @@ def _validate_fan_rule(r):
     if not isinstance(r, dict):
         return (None, "规则需为对象")
     src = r.get("source", "disk")
-    if src not in _FAN_RULE_SOURCES:
-        return (None, "source 需为 disk / cpu / mb")
+    if src not in _FAN_RULE_SOURCES and not (src.startswith("combo_max:") or src.startswith("combo_avg:")):
+        return (None, "source 需为 disk / cpu / mb 或 combo_max:/combo_avg: 组合（如 combo_max:cpu,mb）")
     clean = {"enabled": bool(r.get("enabled", True)), "source": src}
     for k, lo, hi, dv in (("start_temp", 0, 110, 40), ("full_temp", 0, 120, 60),
                           ("min_pwm", 0, 100, 30), ("max_pwm", 0, 100, 100),
@@ -3633,8 +3685,9 @@ def api_fan_rules_get():
         _all_devs = _list_all_disk_devs()
         if _all_devs:
             _dt_eff = dict(dt, disks=_all_devs)
-    disk_all_idle, disk_T, disk_has = _disk_source_state(_dt_eff) if any(
-        (r.get("source", "disk") == "disk") for r in rules.values()) else (False, None, bool(_dt_eff.get("disks")))
+    _need_disk_state = any(
+        (r.get("source", "disk") == "disk") or "disk" in (r.get("source") or "") for r in rules.values())
+    disk_all_idle, disk_T, disk_has = _disk_source_state(_dt_eff) if _need_disk_state else (False, None, bool(_dt_eff.get("disks")))
     cpu_T = _fan_read_sys_temp("cpu")
     mb_T = _fan_read_sys_temp("mb")
     fans_out = []
@@ -3670,7 +3723,7 @@ def api_fan_rules_get():
                  "all_idle": disk_all_idle, "temp": round(disk_T, 1) if isinstance(disk_T, (int, float)) else None},
         "cpu_temp": round(cpu_T, 1) if isinstance(cpu_T, (int, float)) else None,
         "mb_temp": round(mb_T, 1) if isinstance(mb_T, (int, float)) else None,
-        "sources": list(_FAN_RULE_SOURCES),
+        "sources": list(_FAN_RULE_SOURCES) + ["combo_max:cpu,mb", "combo_avg:cpu,mb"],
     })
 
 
@@ -3684,19 +3737,9 @@ def api_fan_rules_set():
     data = request.get_json(force=True, silent=True) or {}
     saved = _load_fan_rules_raw() or {"rules": {}}
     cur = dict(saved.get("rules") or {})
-    def _clear_manual_for_rule(rule_key):
-        # 写入温度联动规则时，清掉该风扇的手动覆盖，使规则立即生效。
-        # 否则 FAN_TARGETS 残留 manual 会让控速循环跳过温度规则（见 fan_smooth_loop 745-747），
-        # 表现为「保存了但温度联动不生效 / 点保存无法应用」。#4 修复的『手动优先』仅在
-        # 用户仍处手动态时成立；一旦显式设回温度联动，手动态须让位。
-        try:
-            _h, _is = rule_key.split("::", 1)
-            _idx = int(_is)
-            with FAN_LOCK:
-                FAN_TARGETS.pop((_h, _idx), None)
-            _save_fan_mode(_idx, "auto", None)
-        except Exception:
-            pass
+    # 注意：保存温度联动规则【不再】清掉该风扇的手动覆盖（移除旧 _clear_manual_for_rule）。
+    # 手动与曲线是两套独立状态：手动只是临时钉转速，曲线(fan_rules)始终保留；
+    # 用户点「回到我的曲线」即恢复（见 api_fan_set mode=auto）。两者不再互斥。
 
     if "key" in data:
         k = data.get("key")
@@ -3709,7 +3752,6 @@ def api_fan_rules_set():
             cur.pop(k, None)
         else:
             cur[k] = clean
-            _clear_manual_for_rule(k)
     elif "rules" in data:
         incoming = data.get("rules")
         if not isinstance(incoming, dict):
@@ -3724,7 +3766,6 @@ def api_fan_rules_set():
                 cur.pop(k, None)
             else:
                 cur[k] = clean
-                _clear_manual_for_rule(k)
     else:
         return jsonify({"ok": False, "error": "缺少 key 或 rules"}), 400
     if _save_fan_rules({"rules": cur}):
