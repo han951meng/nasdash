@@ -166,8 +166,12 @@
   .volt-badge{display:inline-block;font-size:11px;font-weight:600;padding:1px 7px;border-radius:10px;background:var(--bg);color:var(--muted);border:1px solid var(--border);margin-left:4px}
   .fan-rpm{font-size:26px;font-weight:700;color:var(--blue);line-height:1.1}
   .fan-rpm small{font-size:12px;color:var(--muted);font-weight:400;margin-left:4px}
-  .fan-hw-note{margin-top:8px;padding:7px 9px;border-radius:7px;background:rgba(245,158,11,.10);border:1px solid rgba(245,158,11,.35);font-size:12px;font-weight:600;color:var(--orange);line-height:1.5}
-  .fan-hw-note-sub{display:block;margin-top:3px;font-size:11px;font-weight:400;color:var(--muted)}
+  .fan-hw-note{margin-top:8px;padding:6px 10px;border-radius:7px;background:rgba(245,158,11,.10);border:1px solid rgba(245,158,11,.35);font-size:12px;line-height:1.5;display:none;align-items:center;flex-wrap:wrap;gap:8px}
+  .fan-hw-sum{font-weight:600;color:var(--orange)}
+  .fan-hw-toggle{margin-left:auto;font-size:11px;font-weight:400;color:var(--muted);background:none;border:1px solid var(--border-tertiary);border-radius:5px;padding:1px 7px;cursor:pointer}
+  .fan-hw-toggle:hover{color:var(--orange);border-color:var(--orange)}
+  .fan-hw-detail{display:none;flex-basis:100%;margin-top:6px;font-size:11px;font-weight:400;color:var(--muted);line-height:1.7}
+  .fan-hw-detail b{color:var(--orange);font-weight:600}
   .fan-stop-hint{display:block;margin:3px 0 0 22px;font-size:11px;color:var(--muted);line-height:1.5}
   .dt-hint-list{margin:6px 0 0;padding-left:18px;font-size:11px;color:var(--muted);line-height:1.7}
   .dt-hint-list li{margin:0}
@@ -772,11 +776,16 @@ function renderFanControl(){
             <option value="未知" ${(!f.voltage||f.voltage==='未知')?'selected':''}>未知</option>
           </select>
           <button class="btn-mini" onclick="saveFanLabel('${f.hwmon}', ${f.idx})">保存标注</button>
+          <button class="btn-mini" onclick="toggleFanHidden('${f.hwmon}', ${f.idx}, ${f.hidden?'false':'true'})" title="隐藏无风扇/无转速的空通道，可随时恢复">${f.hidden?'取消隐藏':'隐藏'}</button>
           <span id="${id}-label-state" class="fan-label-state"></span>
         </span>
       </div>
       <div class="fan-rpm" ${f.has_tach?'':'title="读不到转速：可能是一分二分线器的副风扇（转速线未接）、风扇本身未接转速线，或主板未把该通道布线到风扇接口。若此通道无风扇，可点下方『隐藏』把它收起。"'}><span id="${id}-rpm">${f.has_tach?(f.rpm||0):'—'}</span><small id="${id}-rpm-unit">${f.has_tach?'RPM':'无转速信号'}</small></div>
-      <div class="fan-hw-note" id="${id}-hwnote" style="display:none"></div>
+      <div class="fan-hw-note" id="${id}-hwnote" style="display:none">
+        <span class="fan-hw-sum" id="${id}-hwsum"></span>
+        <button class="fan-hw-toggle" id="${id}-hwtoggle" type="button" onclick="toggleFanHwNote('${id}')">说明 ▾</button>
+        <div class="fan-hw-detail" id="${id}-hwdetail" style="display:none"></div>
+      </div>
       <div class="fan-speed-bar"><div class="fan-speed-fill" id="${id}-bar" style="width:${pct}%"></div></div>
       <div class="fan-pct-line">
         <span>当前 <b id="${id}-cur">${pct}</b>%</span>
@@ -804,7 +813,6 @@ function renderFanControl(){
             <button class="btn-mini" onclick="applyFanCustom('${f.hwmon}', ${f.idx})">应用</button>
           </span>
           <button class="btn-mini" onclick="setFanMode('${f.hwmon}', ${f.idx}, '${(f.has_curve&&f.active_mode==='curve')?'curve':'linear'}')">恢复温控</button>
-          <button class="btn-mini" onclick="toggleFanHidden('${f.hwmon}', ${f.idx}, ${f.hidden?'false':'true'})" title="隐藏无风扇/无转速的空通道，可随时恢复">${f.hidden?'取消隐藏':'隐藏'}</button>
           <span class="fan-card-state" id="${id}-state"></span>
         </div>
       </div>
@@ -846,8 +854,18 @@ function setFanPill(id, txt, cls){
   p.textContent=txt;
   p.className='pill '+(cls||'b-info');
 }
-// 「已下发 0% 却仍在转」的持续时间跟踪：id → 首次观察到 (pwm<=0 && rpm>0) 的时间戳
+// 「已下发 0% 却仍在转」的折叠提示：默认只显示一行摘要，点「说明」才展开完整解释
+// 入场 8s 才显示（等风扇惯性减速，避免刚下发 0% 时因惯性还在转误报）
 var FAN_ZERO_SINCE={};
+var FAN_HIDE_SINCE={};
+var FAN_HW_EXPANDED={};   // id → 是否展开详情（点「说明」切换，轮询不重置）
+function toggleFanHwNote(id){
+  FAN_HW_EXPANDED[id] = !FAN_HW_EXPANDED[id];
+  var d=document.getElementById(id+'-hwdetail');
+  if(d) d.style.display = FAN_HW_EXPANDED[id] ? 'block' : 'none';
+  var t=document.getElementById(id+'-hwtoggle');
+  if(t) t.textContent = FAN_HW_EXPANDED[id] ? '收起 ▴' : '说明 ▾';
+}
 function updateFanFloorNote(id, f){
   var el=document.getElementById(id+'-hwnote');
   if(!el) return;
@@ -855,14 +873,34 @@ function updateFanFloorNote(id, f){
   // 那种情况下读到的 0 不是我们下发的，不能算「我让它停它不停」，否则误报。
   var engaged = (f && (f.pwm_enable==1 || f.pwm_enable==='1'));
   var zeroButSpinning = f && engaged && f.has_tach && (f.pwm!=null && f.pwm<=0) && (f.rpm>0);
-  if(!zeroButSpinning){ FAN_ZERO_SINCE[id]=0; el.style.display='none'; el.textContent=''; return; }
-  if(!FAN_ZERO_SINCE[id]) FAN_ZERO_SINCE[id]=Date.now();
-  // 风扇从高转降到停需要几秒惯性，8 秒后仍在转才判定为「硬件停不下来」
-  if(Date.now()-FAN_ZERO_SINCE[id] < 8000) return;
-  el.style.display='block';
-  el.innerHTML='⚠️ 已下发 0%，但此风扇仍在转 '+(f.rpm||0)+' RPM'
-    +'<span class="fan-hw-note-sub">多为风扇自带最低转速保护或主板对该接口锁了下限，属硬件限制，软件无法再降。'
-    +'如需真正停转：进 BIOS 找 Fan Stop / 0 RPM 相关选项，或更换支持 0 转停转的风扇。</span>';
+  if(zeroButSpinning){
+    FAN_HIDE_SINCE[id]=0;
+    if(!FAN_ZERO_SINCE[id]) FAN_ZERO_SINCE[id]=Date.now();
+    // 风扇从高转降到停需要几秒惯性，8 秒后仍在转才判定为「硬件停不下来」
+    if(Date.now()-FAN_ZERO_SINCE[id] < 8000) return;
+    el.style.display='flex';
+    // 摘要：固定文案，不写实时 rpm，避免硬件在「0 ↔ 下限」间抖时这行字跟着闪
+    var sum=document.getElementById(id+'-hwsum');
+    if(sum) sum.textContent='⚠️ 已下发 0%，但此风扇仍在转（硬件最低转速保护，软件停不下来）';
+    var d=document.getElementById(id+'-hwdetail');
+    if(d){
+      d.style.display = FAN_HW_EXPANDED[id] ? 'block' : 'none';
+      d.innerHTML='多为风扇自带最低转速保护或主板对该接口锁了下限，属<b>硬件限制</b>，软件无法再降。'
+        +'<b>临时绕过：</b>把该风扇「低于开转温度即停转（强制 0%）」的勾去掉，温度低时降到 min_pwm 即可，不再卡在尴尬的中间转速。'
+        +'<b>真正停转：</b>进 BIOS 找 Fan Stop / 0 RPM 相关选项，或更换支持 0 转停转的风扇。';
+    }
+    var t=document.getElementById(id+'-hwtoggle');
+    if(t) t.textContent = FAN_HW_EXPANDED[id] ? '收起 ▴' : '说明 ▾';
+  } else {
+    FAN_ZERO_SINCE[id]=0;
+    if(el.style.display!=='none'){
+      // 当前显示中：记退场时间，1.5s 后才真正隐藏（防硬件在「0 ↔ 下限」间抖时反复闪）
+      if(!FAN_HIDE_SINCE[id]) FAN_HIDE_SINCE[id]=Date.now();
+      if(Date.now()-FAN_HIDE_SINCE[id] < 1500) return;
+    }
+    FAN_HIDE_SINCE[id]=0;
+    el.style.display='none';
+  }
 }
 // 状态标签的唯一真源：整页渲染(renderFanControl)与 2 秒轮询(fetchFanStatus)必须共用这一份，
 // 否则轮询会把整页算好的人话文案覆盖回内部 mode 代号（曾导致「清了曲线仍显示曲线温控」）。
@@ -1104,7 +1142,6 @@ function fanRuleSourceRow(f, id, body){
   return '<div class="fan-rule-source">'
     +'<label>温度源</label>'
     +'<select class="fan-rule-src" id="'+id+'-'+pre+'rsrc" onchange="onRuleSrcChange(\''+f.hwmon+'\','+f.idx+',\''+body+'\')">'+srcOpts+'</select>'
-    +'<span class="fan-rule-live" id="'+id+'-'+pre+'rlive">'+(f.computed_pwm!=null?('计算目标 '+f.computed_pwm+'%'):'')+'</span>'
   +'</div>';
 }
 function fanRuleLinearBody(f, id){
@@ -1348,7 +1385,7 @@ async function fetchFanStatus(){
       let rpm=document.getElementById(id+'-rpm');
       let sl=document.getElementById(id+'-slider');
       if(cur) cur.textContent=(f.pwm!=null?f.pwm:'--');
-      if(tgt) tgt.textContent=(f.target_pct!=null && f.target_pct!==f.pwm)?('→ 目标 '+f.target_pct+'%'):(f.mode==='auto'?'· 自动控温':'');
+      if(tgt) tgt.textContent=(f.target_pct!=null && f.target_pct!==f.pwm)?('→ 目标 '+f.target_pct+'%'):(f.mode==='auto'?'· 自动控温':(f.mode==='sys_temp'?'· 系统温度控':(f.mode==='disk_temp'?'· 硬盘温度控':'')));
       if(rpm) rpm.textContent=(f.has_tach?(f.rpm||0):'—');
       let unit=document.getElementById(id+'-rpm-unit'); if(unit) unit.textContent=(f.has_tach?'RPM':'无转速信号');
       let bar=document.getElementById(id+'-bar');
@@ -1370,7 +1407,8 @@ async function fetchFanStatus(){
       }
       // 逐风扇温度联动：实时刷新「计算目标」（手动覆盖时不显示，避免误以为仍在温控）
       let rlive=document.getElementById(id+'-rlive');
-      if(rlive){ if(f.rule_source && f.mode!=='manual'){ rlive.textContent='计算目标 '+(f.computed_pwm!=null?f.computed_pwm+'%':'—'); } else { rlive.textContent=''; } }
+      // 「计算目标 N%」红字已移除（v1.9.2 反馈：磁盘温度低时显示「—」像乱码、纯噪音）
+      if(rlive) rlive.textContent='';
     });
     updatePresetHighlight(j.fans);
   }catch(e){}
@@ -2002,9 +2040,12 @@ async function initManual(){
   var box=document.getElementById('manual');
   if(!box) return;
   if(box.dataset.loaded) return;  // 已加载过，不重复请求
-  box.innerHTML='<div class="loading">加载操作手册…</div>';
+  // 手册只有 ~14KB，整段取回比流式（reader.read 多次 await）反而更快感知；
+  // 流式留给独立页（/manual 不带 embed）由浏览器原生边收边解析，体验更顺。
+  // 不显示"加载中"占位——点开即出，避免"等一会儿才出来"的等待感。
   try{
     var r=await fetch('/manual?embed=1&_='+Date.now());
+    if(!r.ok){ throw new Error('HTTP '+r.status); }
     var html=await r.text();
     box.innerHTML=html;
     box.dataset.loaded='1';

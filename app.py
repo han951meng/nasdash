@@ -3060,20 +3060,24 @@ def _md_inline(text):
     return text
 
 def _render_markdown(md):
-    """极简 markdown → HTML，覆盖手册用到的：标题/段落/列表/表格/引用/分隔线/粗体/行内代码。"""
+    """极简 markdown → HTML，覆盖手册用到的：标题/段落/列表/表格/引用/分隔线/粗体/行内代码。
+    保留旧接口（一次性返回整段），供非流式场景使用。"""
+    return '\n'.join(_render_markdown_stream(md))
+
+def _render_markdown_stream(md):
+    """流式版：逐行/逐块 yield HTML 片段，配合 /manual 的 chunked 响应边传边显。"""
     lines = md.split('\n')
-    out = []
     in_list = False; list_type = None
     table_rows = []; in_table = False
 
     def close_list():
         nonlocal in_list, list_type
         if in_list:
-            out.append('</%s>' % list_type); in_list = False; list_type = None
+            yield '</%s>' % list_type; in_list = False; list_type = None
     def close_table():
         nonlocal in_table, table_rows
         if in_table:
-            out.append('</tbody></table>'); in_table = False; table_rows = []
+            yield '</tbody></table>'; in_table = False; table_rows = []
 
     i = 0
     while i < len(lines):
@@ -3089,38 +3093,56 @@ def _render_markdown(md):
             table_rows.append(cells)
             nxt = lines[i+1].strip() if i+1 < len(lines) else ''
             if not (nxt.startswith('|') and nxt.count('|') >= 2):
-                close_list()
-                out.append('<table class="man-table"><thead><tr>'
-                           + ''.join('<th>%s</th>' % _md_inline(c) for c in table_rows[0])
-                           + '</tr></thead><tbody>')
+                for chunk in close_list():
+                    yield chunk
+                yield '<table class="man-table"><thead><tr>' \
+                           + ''.join('<th>%s</th>' % _md_inline(c) for c in table_rows[0]) \
+                           + '</tr></thead><tbody>'
                 for r in table_rows[1:]:
-                    out.append('<tr>' + ''.join('<td>%s</td>' % _md_inline(c) for c in r) + '</tr>')
-                out.append('</tbody></table>')
+                    yield '<tr>' + ''.join('<td>%s</td>' % _md_inline(c) for c in r) + '</tr>'
+                yield '</tbody></table>'
                 in_table = False; table_rows = []
             i += 1; continue
-        close_table()
+        for chunk in close_table():
+            yield chunk
         if s == '---':
-            close_list(); out.append('<hr>'); i += 1; continue
+            for chunk in close_list():
+                yield chunk
+            yield '<hr>'; i += 1; continue
         if s.startswith('#'):
-            close_list(); lvl = len(s) - len(s.lstrip('#'))
-            out.append('<h%d>%s</h%d>' % (lvl, _md_inline(s.lstrip('#').strip()), lvl)); i += 1; continue
+            for chunk in close_list():
+                yield chunk
+            lvl = len(s) - len(s.lstrip('#'))
+            yield '<h%d>%s</h%d>' % (lvl, _md_inline(s.lstrip('#').strip()), lvl); i += 1; continue
         if s.startswith('>'):
-            close_list(); out.append('<blockquote>%s</blockquote>' % _md_inline(s.lstrip('>').strip())); i += 1; continue
+            for chunk in close_list():
+                yield chunk
+            yield '<blockquote>%s</blockquote>' % _md_inline(s.lstrip('>').strip()); i += 1; continue
         st = line.lstrip()
         if st.startswith('- ') or st.startswith('* '):
             if not in_list or list_type != 'ul':
-                close_list(); out.append('<ul>'); in_list = True; list_type = 'ul'
-            out.append('<li>%s</li>' % _md_inline(st[2:].strip())); i += 1; continue
+                for chunk in close_list():
+                    yield chunk
+                yield '<ul>'; in_list = True; list_type = 'ul'
+            yield '<li>%s</li>' % _md_inline(st[2:].strip()); i += 1; continue
         m = re.match(r'^\d+\.\s+(.*)$', st)
         if m:
             if not in_list or list_type != 'ol':
-                close_list(); out.append('<ol>'); in_list = True; list_type = 'ol'
-            out.append('<li>%s</li>' % _md_inline(m.group(1))); i += 1; continue
+                for chunk in close_list():
+                    yield chunk
+                yield '<ol>'; in_list = True; list_type = 'ol'
+            yield '<li>%s</li>' % _md_inline(m.group(1)); i += 1; continue
         if not s:
-            close_list(); i += 1; continue
-        close_list(); out.append('<p>%s</p>' % _md_inline(s)); i += 1
-    close_list(); close_table()
-    return '\n'.join(out)
+            for chunk in close_list():
+                yield chunk
+            i += 1; continue
+        for chunk in close_list():
+            yield chunk
+        yield '<p>%s</p>' % _md_inline(s); i += 1
+    for chunk in close_list():
+        yield chunk
+    for chunk in close_table():
+        yield chunk
 
 @app.route("/manual")
 def manual():
@@ -3133,22 +3155,31 @@ def manual():
         resp.headers["Pragma"] = "no-cache"
         resp.headers["Expires"] = "0"
         return resp
-    body = _render_markdown(md)
     if request.args.get("embed") == "1":
         # 应用内嵌：仅返回片段（无 html/head/body 外壳），由前端塞进面板，停留在应用内
-        html = "<style>%s</style>\n<div class=\"man-body\">%s</div>" % (_MANUAL_CSS_EMBED, body)
+        # 同样走流式，前端用 reader 边收边 append，避免大手册整段等待
+        head = "<style>%s</style>\n<div class=\"man-body\">" % _MANUAL_CSS_EMBED
+        tail = "</div>"
     else:
-        html = ("<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">"
+        head = ("<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">"
                 "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
                 "<title>nasdash 操作手册</title><style>%s</style></head>"
                 "<body><div class=\"topbar\">nasdash 操作手册 · <b>v%s</b> · "
                 "<a href=\"/\">← 返回面板</a></div>"
-                "<div class=\"wrap\">%s</div></body></html>") % (_MANUAL_CSS, APP_VERSION, body)
+                "<div class=\"wrap\">") % (_MANUAL_CSS, APP_VERSION)
+        tail = "</div></body></html>"
     # no-store：手册走网关反代，不缓存否则首次打开可能拿到空白/旧响应（同 / 路由）
-    resp = make_response(html)
+    # 流式（chunked）：后端边渲染边推给网关/浏览器，手册长也不卡在「加载中」
+    def gen():
+        yield head
+        for chunk in _render_markdown_stream(md):
+            yield chunk
+        yield tail
+    resp = Response(stream_with_context(gen()), mimetype="text/html")
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     resp.headers["Pragma"] = "no-cache"
     resp.headers["Expires"] = "0"
+    resp.headers["X-Accel-Buffering"] = "no"  # 关掉反代缓冲，确保 chunked 真生效
     return resp
 
 # ===================== 采集层：实时指标（网络吞吐 / 磁盘 I/O / CPU 功耗） =====================
@@ -4009,7 +4040,10 @@ def api_fan_rules_set():
         if err:
             return jsonify({"ok": False, "error": err}), 400
         if clean is None:
-            cur.pop(k, None)
+            # 显式写入 null 占位：saved 里这条 key 不存在时 _derive_rules_from_legacy()
+            # 仍会派生默认规则给该风扇，必须靠占位让 _effective_fan_rules() 的
+            # `if r is None: rules.pop(k, None)` 把 legacy 默认也摘掉，关闭才真正生效。
+            cur[k] = None
         else:
             cur[k] = clean
     elif "rules" in data:
@@ -4023,7 +4057,8 @@ def api_fan_rules_set():
             if err:
                 return jsonify({"ok": False, "error": "%s: %s" % (k, err)}), 400
             if clean is None:
-                cur.pop(k, None)
+                # 同单条入口：必须写 null 占位，否则 legacy 派生默认会重新覆盖。
+                cur[k] = None
             else:
                 cur[k] = clean
     else:
