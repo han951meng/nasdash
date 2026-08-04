@@ -2117,51 +2117,96 @@ def _mem_brand_cn(manu):
 
 
 def get_chipset():
-    """用 lspci 的 Host bridge 设备 ID 推断 Intel 芯片组系列。
+    """用 lspci 的 Host bridge 设备 ID 推断芯片组系列。
     必须用 lspci -nn：plain lspci 在系统带 pciids 数据库时会打印设备中文/英文全名而不再带
-    "Device XXXX"，导致正则抓不到 ID、识别成「未知」。-nn 强制输出 [vendor:device] 原始号。"""
+    "Device XXXX"，导致正则抓不到 ID、识别成「未知」。-nn 强制输出 [vendor:device] 原始号。
+    - Intel：用 [8086:xxxx] 原始号按代范围映射（不依赖 pciids 数据库，主流板不再误报未知）。
+    - AMD：用 [1022:xxxx] 判定为 AMD 平台后，再用 /proc/cpuinfo 的 Ryzen 型号名推断代数
+           （比易变的设备号表更稳，不会把 5600G 误标成 3000 系之类）。"""
     out = sudo_cmd(["lspci", "-nn"], 5)
-    hid = ""
+    intel_hid = ""
+    amd_hid = ""
     for line in out.splitlines():
         if "Host bridge" in line:
             m = re.search(r"\[8086:([0-9a-fA-F]{4})\]", line)
             if not m:
                 m = re.search(r"Device ([0-9a-fA-F]{4})", line)  # 兜底：个别环境 -nn 未输出 [vendor:device]
             if m:
-                hid = m.group(1).lower()
+                intel_hid = m.group(1).lower()
                 break
-    if not hid:
-        return ""
-    table = {
-        "190f": "100/200 系列（6/7代酷睿）", "1910": "100 系列", "1900": "100 系列（如 H110/B150）",
-        "590f": "200 系列（7代）", "5910": "200 系列",
-        "3e0f": "300 系列（8/9代酷睿）", "3ec2": "300 系列", "3e30": "300 系列", "3e31": "300 系列", "3e35": "300 系列",
-        "3e10": "300 系列（8/9代酷睿）", "3e1f": "300 系列", "3e32": "300 系列", "3e33": "300 系列",
-        "9b00": "400 系列（10代）", "9b41": "400 系列",
-        "4600": "600 系列（12代）", "4601": "600 系列", "4610": "600 系列",
-        "7900": "700 系列（13代）", "7a00": "700 系列", "7d00": "700 系列",
-        "a700": "800 系列（14代）", "a780": "800 系列",
-    }
-    if hid in table:
-        return "Intel " + table[hid]
-    # 范围兜底：覆盖同代未逐一列举的细分型号（如 Z390 的 3e30/3e35 等 Host bridge）
-    try:
-        h = int(hid, 16)
-    except ValueError:
+            m = re.search(r"\[1022:([0-9a-fA-F]{4})\]", line)
+            if not m:
+                m = re.search(r"Device ([0-9a-fA-F]{4})", line)
+            if m and not amd_hid:
+                amd_hid = m.group(1).lower()
+    if intel_hid:
+        hid = intel_hid
+        table = {
+            "190f": "100/200 系列（6/7代酷睿）", "1910": "100 系列", "1900": "100 系列（如 H110/B150）",
+            "590f": "200 系列（7代）", "5910": "200 系列",
+            "3e0f": "300 系列（8/9代酷睿）", "3ec2": "300 系列", "3e30": "300 系列", "3e31": "300 系列", "3e35": "300 系列",
+            "3e10": "300 系列（8/9代酷睿）", "3e1f": "300 系列", "3e32": "300 系列", "3e33": "300 系列",
+            "9b00": "400 系列（10代）", "9b41": "400 系列",
+            "4600": "600 系列（12代）", "4601": "600 系列", "4610": "600 系列",
+            "7900": "700 系列（13代）", "7a00": "700 系列", "7d00": "700 系列",
+            "a700": "800 系列（14代）", "a780": "800 系列",
+        }
+        if hid in table:
+            return "Intel " + table[hid]
+        # 范围兜底：覆盖同代未逐一列举的细分型号（如 Z390 的 3e30/3e35 等 Host bridge）
+        try:
+            h = int(hid, 16)
+        except ValueError:
+            return "Intel 未知芯片组（Host bridge 0x%s）" % hid
+        if 0x1900 <= h <= 0x191f or 0x5900 <= h <= 0x591f:
+            return "Intel 100/200 系列（6/7代酷睿）"
+        if 0x3e00 <= h <= 0x3e3f or 0x3ec0 <= h <= 0x3ecf:
+            return "Intel 300 系列（8/9代酷睿）"
+        if 0x9b00 <= h <= 0x9bff:
+            return "Intel 400 系列（10代）"
+        if 0x4c00 <= h <= 0x4cff or 0x9a00 <= h <= 0x9aff:
+            return "Intel 500 系列（11代）"
+        if 0x4600 <= h <= 0x46ff:
+            return "Intel 600 系列（12代）"
+        if 0x7900 <= h <= 0x79ff or 0x7a00 <= h <= 0x7aff or 0x7d00 <= h <= 0x7dff:
+            return "Intel 700 系列（13代）"
+        if 0xa700 <= h <= 0xa7ff or 0xa780 <= h <= 0xa78f:
+            return "Intel 800 系列（14代）"
+        # 15 代及更新的未知号（Arrow Lake 等 0xa800+/0xb000+）广谱兜底，避免再掉「未知」
+        if 0xa000 <= h <= 0xafff or 0xb000 <= h <= 0xbfff:
+            return "Intel 较新系列芯片组（14/15代及以后）"
         return "Intel 未知芯片组（Host bridge 0x%s）" % hid
-    if 0x1900 <= h <= 0x191f or 0x5900 <= h <= 0x591f:
-        return "Intel 100/200 系列（6/7代酷睿）"
-    if 0x3e00 <= h <= 0x3e3f or 0x3ec0 <= h <= 0x3ecf:
-        return "Intel 300 系列（8/9代酷睿）"
-    if 0x9b00 <= h <= 0x9bff:
-        return "Intel 400 系列（10代）"
-    if 0x4600 <= h <= 0x46ff:
-        return "Intel 600 系列（12代）"
-    if 0x7900 <= h <= 0x79ff or 0x7a00 <= h <= 0x7aff or 0x7d00 <= h <= 0x7dff:
-        return "Intel 700 系列（13代）"
-    if 0xa700 <= h <= 0xa7ff or 0xa780 <= h <= 0xa78f:
-        return "Intel 800 系列（14代）"
-    return "Intel 未知芯片组（Host bridge 0x%s）" % hid
+    if amd_hid:
+        return _amd_chipset_label()
+    return ""
+
+
+def _amd_chipset_label():
+    """AMD 平台：读 /proc/cpuinfo 的 Ryzen 型号名推断代数（稳定、不易错）。"""
+    cpu = ""
+    try:
+        with open("/proc/cpuinfo") as f:
+            for line in f:
+                if line.startswith("model name"):
+                    cpu = line.split(":", 1)[1].strip()
+                    if "Ryzen" in cpu:
+                        break
+    except Exception:
+        cpu = ""
+    m = re.search(r"Ryzen\s+\d*\s*(\d{4})", cpu)
+    if m:
+        d = m.group(1)[0]  # 型号首数字：1→1代, 3→3000, 5→5000, 7→7000, 9→9000 ...
+        return {
+            "1": "AMD Ryzen 1000 系列平台（Zen）",
+            "2": "AMD Ryzen 2000 系列平台（Zen+）",
+            "3": "AMD Ryzen 3000 系列平台（Zen 2）",
+            "4": "AMD Ryzen 4000 APU 平台（Zen 2）",
+            "5": "AMD Ryzen 5000 系列平台（Zen 3）",
+            "7": "AMD Ryzen 7000 系列平台（Zen 4）",
+            "8": "AMD Ryzen 8000 APU 平台（Zen 4）",
+            "9": "AMD Ryzen 9000 系列平台（Zen 5）",
+        }.get(d, "AMD 平台（具体芯片组未知）")
+    return "AMD 平台（具体芯片组未知）"
 
 
 @_ttl_cache(60)
