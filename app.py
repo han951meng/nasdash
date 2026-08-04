@@ -2117,12 +2117,16 @@ def _mem_brand_cn(manu):
 
 
 def get_chipset():
-    """用 lspci 的 Host bridge 设备 ID 推断 Intel 芯片组系列（飞牛未带 pciids 数据库时用 Device ID 匹配）"""
-    out = sudo_cmd(["lspci"], 5)
+    """用 lspci 的 Host bridge 设备 ID 推断 Intel 芯片组系列。
+    必须用 lspci -nn：plain lspci 在系统带 pciids 数据库时会打印设备中文/英文全名而不再带
+    "Device XXXX"，导致正则抓不到 ID、识别成「未知」。-nn 强制输出 [vendor:device] 原始号。"""
+    out = sudo_cmd(["lspci", "-nn"], 5)
     hid = ""
     for line in out.splitlines():
         if "Host bridge" in line:
-            m = re.search(r"Device ([0-9a-fA-F]{4})", line)
+            m = re.search(r"\[8086:([0-9a-fA-F]{4})\]", line)
+            if not m:
+                m = re.search(r"Device ([0-9a-fA-F]{4})", line)  # 兜底：个别环境 -nn 未输出 [vendor:device]
             if m:
                 hid = m.group(1).lower()
                 break
@@ -2132,12 +2136,32 @@ def get_chipset():
         "190f": "100/200 系列（6/7代酷睿）", "1910": "100 系列", "1900": "100 系列（如 H110/B150）",
         "590f": "200 系列（7代）", "5910": "200 系列",
         "3e0f": "300 系列（8/9代酷睿）", "3ec2": "300 系列", "3e30": "300 系列", "3e31": "300 系列", "3e35": "300 系列",
+        "3e10": "300 系列（8/9代酷睿）", "3e1f": "300 系列", "3e32": "300 系列", "3e33": "300 系列",
         "9b00": "400 系列（10代）", "9b41": "400 系列",
         "4600": "600 系列（12代）", "4601": "600 系列", "4610": "600 系列",
         "7900": "700 系列（13代）", "7a00": "700 系列", "7d00": "700 系列",
         "a700": "800 系列（14代）", "a780": "800 系列",
     }
-    return "Intel " + table.get(hid, f"未知芯片组（Host bridge 0x{hid}）")
+    if hid in table:
+        return "Intel " + table[hid]
+    # 范围兜底：覆盖同代未逐一列举的细分型号（如 Z390 的 3e30/3e35 等 Host bridge）
+    try:
+        h = int(hid, 16)
+    except ValueError:
+        return "Intel 未知芯片组（Host bridge 0x%s）" % hid
+    if 0x1900 <= h <= 0x191f or 0x5900 <= h <= 0x591f:
+        return "Intel 100/200 系列（6/7代酷睿）"
+    if 0x3e00 <= h <= 0x3e3f or 0x3ec0 <= h <= 0x3ecf:
+        return "Intel 300 系列（8/9代酷睿）"
+    if 0x9b00 <= h <= 0x9bff:
+        return "Intel 400 系列（10代）"
+    if 0x4600 <= h <= 0x46ff:
+        return "Intel 600 系列（12代）"
+    if 0x7900 <= h <= 0x79ff or 0x7a00 <= h <= 0x7aff or 0x7d00 <= h <= 0x7dff:
+        return "Intel 700 系列（13代）"
+    if 0xa700 <= h <= 0xa7ff or 0xa780 <= h <= 0xa78f:
+        return "Intel 800 系列（14代）"
+    return "Intel 未知芯片组（Host bridge 0x%s）" % hid
 
 
 @_ttl_cache(60)
@@ -2625,13 +2649,43 @@ def get_system():
     d["cpu_temp"] = cpu_temp
     # 兼容旧字段
     d["temps"] = {t["name"]: t["value"] for t in d["sensors"]["temps"]}
-    # 显卡
-    lspci = run_cmd(["lspci"], 5)
+    # 显卡：lspci -nn 同时拿到厂商/设备号与名字，稳定区分核显/独显
+    lspci = run_cmd(["lspci", "-nn"], 5)
     gpus = []
+    has_igpu = False
     for line in lspci.splitlines():
-        if re.search(r"VGA compatible controller|3D controller|Display controller", line, re.I):
-            m = re.search(r"controller:\s*(.+)", line, re.I)
-            gpus.append(m.group(1).strip() if m else line.strip())
+        if not re.search(r"VGA compatible controller|3D controller|Display controller", line, re.I):
+            continue
+        # 形如：… VGA compatible controller [0300]: Intel Corporation UHD Graphics 630 [8086:3e90] (rev 02)
+        # 抓「控制器类型」与「[厂商:设备号]」之间的设备名
+        m = re.search(r"controller\s*\[[0-9a-f]{4}\]:\s*(.+?)\s*\[([0-9a-f]{4}):([0-9a-f]{4})\]", line)
+        if m:
+            name = m.group(1).strip()
+            vendor = m.group(2).lower()
+            dev = m.group(3).lower()
+            # pciids 无名字时 lspci 只打印 "Device"，用厂商+设备号兜底
+            if name == "Device" or name.endswith(" Corporation Device"):
+                name = {"8086": "Intel 核显", "10de": "NVIDIA 显卡",
+                         "1002": "AMD 显卡"}.get(vendor, "显卡") + " (设备 %s)" % dev
+        else:
+            vendor = ""; name = line.strip()
+        if vendor == "8086" or "intel" in name.lower():
+            label = "核显"; has_igpu = True
+        elif vendor == "1002" and re.search(r"radeon|graphics|apu|vega|renoir|cezanne|phoenix|raphael", name, re.I):
+            label = "核显"; has_igpu = True
+        else:
+            label = "独显"
+        gpus.append("%s：%s" % (label, name))
+    # 兜底：插了独显后主板 BIOS 常自动禁用核显，lspci 扫不到。
+    # 区分「CPU 本就没核显」和「CPU 带核显但被 BIOS 禁用」：前者直说无核显，后者提示未启用，避免误导。
+    if not has_igpu:
+        cm = d.get("cpu_model", "") or ""
+        m = re.search(r"i[3579]-(\d{4,5})([A-Z]*)", cm)
+        amd_g = re.search(r"Ryzen \d+ \d{3,4}G\b", cm, re.I)
+        if (m and "F" not in m.group(2)) or amd_g:
+            gpus.append("核显：未启用（BIOS 可能已禁用）")
+        else:
+            gpus.append("无核显")
     d["gpus"] = gpus
     # 网卡（只显示物理网卡和 bond，过滤 docker/虚拟网桥）
     link_out = run_cmd(["ip", "-o", "link", "show"], 5)
