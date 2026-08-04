@@ -19,4 +19,4 @@ service_port          = 9800
 checkport             = false
 disable_authorization_path = true
 changelog             = 1.9.4: 硬件配置检测修复（芯片组识别未知/显卡智能区分核显独显） 1.9.3: 风扇温控修复（关闭温度源生效/隐藏按钮挪位/0%仍转折叠提示）及目标标签空白、手册即时显示优化 1.9.1: 修复 M.2 固态盘误判使硬盘休眠后风扇仍不停止；导航栏改为常驻可独立滚动，滚动条闲置时自动隐藏
-checksum              = 29e0de9c18b861deb0c0fae2506cd99e
+checksum              = dd1384ba6d3d297d880e60a98d854089
