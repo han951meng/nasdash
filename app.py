@@ -2722,6 +2722,9 @@ def get_system():
             if not _m:
                 continue
             _f["mode"] = _m.get("mode", _f.get("mode"))
+            # pwm_mode 只有 get_fan_status() 会读 sysfs，首屏必须合并进来，
+            # 否则前端 `${f.pwm_mode?...}` 判空 → PWM/DC 下拉框与「无反馈线+PWM」告警首屏不渲染。
+            _f["pwm_mode"] = _m.get("pwm_mode")
             _f["rule_source"] = _m.get("rule_source")
             _f["rule"] = _m.get("rule")
             _f["computed_pwm"] = _m.get("computed_pwm")
