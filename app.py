@@ -4800,12 +4800,12 @@ def api_fan_labels_get():
 @app.route("/api/fan/labels", methods=["POST"])
 @require_admin()
 def api_fan_labels_post():
-    """保存风扇标注（整体覆盖）。body: {"hwmon::idx": {"name":"...","voltage":"12V"}, ...}"""
+    """保存风扇标注（合并模式：仅覆盖传入的通道，保留其余，防止单条保存清空全部）。"""
     try:
         data = request.get_json(force=True) or {}
     except Exception:
         return jsonify({"ok": False, "error": "bad json"}), 400
-    clean = {}
+    incoming = {}
     for k, v in data.items():
         if not isinstance(k, str) or "::" not in k:
             continue
@@ -4823,7 +4823,11 @@ def api_fan_labels_post():
         volt = v.get("voltage", "")
         if volt not in _FAN_VOLT_ALLOWED:
             volt = "未知"
-        entry = {"name": name, "voltage": volt}
+        entry = {}
+        if name:
+            entry["name"] = name
+        if volt != "未知":
+            entry["voltage"] = volt
         if v.get("hidden"):
             entry["hidden"] = True   # 隐藏无风扇的幽灵通道（可恢复）
         if v.get("no_tach"):
@@ -4831,9 +4835,20 @@ def api_fan_labels_post():
             # 风扇本身在转，只是主板永远读不到 rpm。标了之后转速栏不再显示刺眼的 0，
             # 也不会被误判成「停转/空通道」。
             entry["no_tach"] = True
-        clean[k] = entry
-    _replicate_aliases(clean)   # 别名同步：同名标注通道改名/隐藏联动（huhaibo820 #1）
-    if _save_fan_labels(clean):
+        # 空标注（name 空且无 hidden/no_tach）→ 视为取消该通道标注，删除键
+        if not entry:
+            incoming[k] = None
+        else:
+            incoming[k] = entry
+    # 合并现有标注，而非整体覆盖：防御前端只传单条导致全量清空
+    existing = _load_fan_labels()
+    for k, v in incoming.items():
+        if v is None:
+            existing.pop(k, None)
+        else:
+            existing[k] = v
+    _replicate_aliases(existing)   # 别名同步：同名标注通道改名/隐藏联动（huhaibo820 #1）
+    if _save_fan_labels(existing):
         return jsonify({"ok": True})
     return jsonify({"ok": False, "error": "save failed"}), 500
 
