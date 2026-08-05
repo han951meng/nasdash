@@ -5,7 +5,7 @@
 单文件 Flask 应用：阵列卡状态 / 硬盘 SMART / 系统资源 / 存储卷
 部署目录: /opt/fnos-dash/
 """
-import subprocess, json, re, os, time, socket, platform, shutil, sys, glob, functools, urllib.request, urllib.error
+import subprocess, json, re, os, time, socket, platform, shutil, sys, glob, functools, errno, urllib.request, urllib.error
 from flask import Flask, jsonify, render_template, render_template_string, request, make_response, Response, stream_with_context
 from functools import wraps
 
@@ -1375,6 +1375,44 @@ def _fan_set_enable(hwmon, idx, val):
 def _fan_release_auto(hwmon, idx):
     """把风扇交还主板/内核自动控速（pwm_enable=2）。FCS 若存在会重新接管。"""
     return _fan_set_enable(hwmon, idx, 2)
+
+# ---- 风扇接口调速信号类型：PWM(4pin 脉宽) / DC(3pin 直流电压) ----
+# sysfs 语义（hwmon 标准）：pwmN_mode  0=DC(电压调速)  1=PWM(脉宽调速)
+# 实测(NCT6797/微星 B360M MORTAR)：文件对所有通道都存在且 0644 可写，但只有部分通道
+# 真正支持切到 DC——不支持的通道写 0 会被内核直接拒绝(OSError EIO/EINVAL)，值保持 1。
+# 因此「是否支持 DC」无法在不改动硬件状态的前提下探测（驱动对写 1 一律接受、写 0 才校验），
+# 只在用户显式切换时尝试写入，失败则返回明确原因，不做启动期试探。
+def _fan_read_pwm_mode(hwmon, idx):
+    """读取该风扇接口的调速信号类型。返回 'pwm' / 'dc' / None(该通道无此文件)。"""
+    try:
+        with open(f"{hwmon}/pwm{idx}_mode") as f:
+            v = f.read().strip()
+        return "pwm" if v == "1" else "dc" if v == "0" else None
+    except Exception:
+        return None
+
+def _fan_set_pwm_mode(hwmon, idx, mode):
+    """切换调速信号类型。mode: 'pwm' | 'dc'。返回 (ok, err_msg)。
+    注意：DC 模式下占空比是按电压比例输出，低占空比更容易导致风扇停转或无法启动。"""
+    val = "1" if mode == "pwm" else "0"
+    path = f"{hwmon}/pwm{idx}_mode"
+    if not os.path.exists(path):
+        return False, "该接口不支持切换调速方式（主板未提供此寄存器）"
+    try:
+        with open(path, "w") as f:
+            f.write(val)
+    except OSError as e:
+        # EIO/EINVAL = 主板该接口硬件上只支持一种信号类型，无法切换
+        if e.errno in (errno.EIO, errno.EINVAL):
+            return False, "该接口硬件只支持 %s 模式，无法切换（主板限制，非软件问题）" % (
+                "PWM" if mode == "dc" else "DC")
+        return False, "写入失败：%s" % e
+    except Exception as e:
+        return False, "写入失败：%s" % e
+    # 回读确认（部分驱动写入不报错但也不生效）
+    if _fan_read_pwm_mode(hwmon, idx) != mode:
+        return False, "该接口硬件不支持 %s 模式（写入未生效）" % mode.upper()
+    return True, None
 
 def _fan_disk_temp_decision(states, cfg):
     """硬盘温控滞回状态机。返回 (action, pwm)：
@@ -3665,6 +3703,50 @@ def api_fan_set():
     return jsonify({"ok": True, "mode": "manual", "pwm": pct, "raw": raw, "aliased": len(_keys) > 1})
 
 
+@app.route("/api/fan/pwm_mode", methods=["POST"])
+@require_admin()
+def api_fan_pwm_mode():
+    """切换风扇接口的调速信号类型：PWM(4pin 脉宽) ↔ DC(3pin 直流电压)。
+
+    背景：3pin 风扇插在被设成 PWM 的接口上会一直全速——因为它没有 PWM 线，只认电压。
+    多数主板 BIOS 里能给每个接口单独选 PWM/DC，Linux 下对应 pwmN_mode 寄存器。
+    但**能不能改由主板硬件决定**：部分接口只焊了 PWM 电路，写 DC 会被内核直接拒绝，
+    这种情况只能进 BIOS 或换 4pin 风扇，属主板限制而非软件问题。
+    """
+    try:
+        data = request.get_json(force=True) or {}
+    except Exception:
+        return jsonify({"ok": False, "error": "bad json"}), 400
+    hwmon = data.get("hwmon")
+    idx = data.get("idx")
+    mode = (data.get("pwm_mode") or "").strip().lower()
+    if not isinstance(hwmon, str) or not hwmon.startswith("/sys/class/hwmon/hwmon"):
+        return jsonify({"ok": False, "error": "invalid hwmon"}), 400
+    try:
+        idx = int(idx)
+        if idx < 1 or idx > 10:
+            raise ValueError()
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "invalid idx"}), 400
+    if mode not in ("pwm", "dc"):
+        return jsonify({"ok": False, "error": "invalid pwm_mode"}), 400
+    # 与 /api/fan/set 一致：hwmon 编号可能跨重启漂移，按实时枚举校正
+    _enum = _enumerate_fans()
+    if (hwmon, idx) not in _enum:
+        _idx2hw = {i: h for (h, i) in _enum}
+        if idx in _idx2hw:
+            hwmon = _idx2hw[idx]
+    cur = _fan_read_pwm_mode(hwmon, idx)
+    if cur is None:
+        return jsonify({"ok": False, "error": "该接口不支持切换调速方式（主板未提供此寄存器）"}), 400
+    if cur == mode:
+        return jsonify({"ok": True, "pwm_mode": mode, "changed": False})
+    ok, err = _fan_set_pwm_mode(hwmon, idx, mode)
+    if not ok:
+        return jsonify({"ok": False, "error": err, "pwm_mode": cur}), 400
+    return jsonify({"ok": True, "pwm_mode": mode, "changed": True})
+
+
 def _fan_alias_map():
     """别名组：以『用户自定义同名标注』连接多个不同 hwmon::idx 通道（同一物理风扇被识别成两张卡）。
     返回 {key:"hwmon::idx": [member keys...]}。仅当用户为多个通道设了相同非空 name 时才成组，
@@ -3858,6 +3940,9 @@ def get_fan_status():
             "idx": idx, "hwmon": hwmon,
             "rpm": rpm, "pwm": pwm_pct,
             "pwm_enable": _pe,   # 原始寄存器值：0=关闭 1=软件控(手动) 2=交还主板/内核自动
+            # 调速信号类型：'pwm'=4pin 脉宽调速 / 'dc'=3pin 直流电压调速 / None=该通道无此寄存器。
+            # DC 模式下 nasdash 写的占空比按电压比例输出，低档更易停转，前端会给出提示。
+            "pwm_mode": _fan_read_pwm_mode(hwmon, idx),
             "mode": mode,
             "rule": rule_out,
             "rule_source": rule_source,
@@ -4455,6 +4540,7 @@ def build_diagnostics():
             "key": "%s::%d" % (f.get("hwmon"), f.get("idx")),
             "name": f.get("label") or f.get("name"),
             "pwm_enable": f.get("pwm_enable"),     # 原始寄存器：0/1/2
+            "pwm_mode": f.get("pwm_mode"),         # 'pwm'(4pin脉宽) / 'dc'(3pin电压) / None
             "pwm_pct": f.get("pwm"),
             "rpm": f.get("rpm"),
             "mode": f.get("mode"),
@@ -4505,13 +4591,18 @@ def render_diagnostics_text(diag):
     L.append("内核: %s" % diag.get("kernel"))
     L.append("传感器芯片: %s" % ", ".join(diag.get("sensor_chips") or []) or "无")
     L.append("")
-    L.append("--- 风扇通道（key = hwmon::idx；pwm_enable: 0=关闭 1=软件控 2=交还自动）---")
+    L.append("--- 风扇通道（key = hwmon::idx；pwm_enable: 0=关闭 1=软件控 2=交还自动；"
+             "signal: PWM=4pin脉宽 DC=3pin电压）---")
     for f in diag.get("fans") or []:
         rule = ("命中[%s]" % f.get("rule_source")) if f.get("rule_hit") else "无规则"
-        L.append("  %s | %s | pwm_enable=%s | pwm=%s%% | rpm=%s | mode=%s | %s | 目标=%s | 隐藏=%s"
-                 % (f.get("key"), f.get("name"), f.get("pwm_enable"),
+        _sig = (f.get("pwm_mode") or "n/a").upper()
+        L.append("  %s | %s | pwm_enable=%s | signal=%s | pwm=%s%% | rpm=%s | mode=%s | %s | 目标=%s | 隐藏=%s"
+                 % (f.get("key"), f.get("name"), f.get("pwm_enable"), _sig,
                     f.get("pwm_pct"), f.get("rpm"), f.get("mode"), rule,
                     f.get("target_pct"), f.get("hidden")))
+    _dc = [f.get("key") for f in (diag.get("fans") or []) if f.get("pwm_mode") == "dc"]
+    if _dc:
+        L.append("ℹ 以下接口为 DC(电压)调速，占空比按电压比例输出、低档更易停转: %s" % ", ".join(_dc))
     if diag.get("suspected_duplicate_rpm"):
         L.append("⚠ 疑似同物理风扇（相同转速多通道，疑似「一张卡变两张」）: %s"
                  % json.dumps(diag.get("suspected_duplicate_rpm"), ensure_ascii=False))
