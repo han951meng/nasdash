@@ -2705,6 +2705,8 @@ def get_system():
             "hwmon": _hw,
             "idx": _fi,
             "has_tach": _rpm > 0,
+            # 用户标注：该口接的是 2/3 针无转速反馈线风扇，读不到转速属正常（非空口/非故障）
+            "no_tach": bool(_lab.get("no_tach")),
             "hidden": bool(_lab.get("hidden")),
         })
     # 合并风扇控速元数据（温控规则来源 / 逻辑模式 / 计算目标 / 目标占空比），
@@ -3951,6 +3953,9 @@ def get_fan_status():
             "controllable": True,
             # has_tach=False：该通道读不到转速（分线器副扇/未接转速线/主板未布线该通道）
             "has_tach": rpm > 0,
+            # no_tach=True：用户已标注「此口风扇无转速反馈线（2/3针）」，读不到转速属正常。
+            # 与 pwm_mode=='pwm' 同时成立时，前端提示占空比很可能不起作用（无信号线→恒满速）。
+            "no_tach": bool(_lbl.get("no_tach")),
             # 用户可把「无风扇的幽灵通道」隐藏（持久化到 fan_labels.json）
             "hidden": bool(_lbl.get("hidden")),
             # 手动/曲线共存模型：曲线(rule)与手动覆盖相互独立，互不销毁（论坛 #3 反馈）。
@@ -4312,6 +4317,11 @@ def api_fan_labels_post():
         entry = {"name": name, "voltage": volt}
         if v.get("hidden"):
             entry["hidden"] = True   # 隐藏无风扇的幽灵通道（可恢复）
+        if v.get("no_tach"):
+            # 用户标注「这把风扇没有转速反馈线」（2 针风扇 / 分线器副扇 / 转速线未接）：
+            # 风扇本身在转，只是主板永远读不到 rpm。标了之后转速栏不再显示刺眼的 0，
+            # 也不会被误判成「停转/空通道」。
+            entry["no_tach"] = True
         clean[k] = entry
     _replicate_aliases(clean)   # 别名同步：同名标注通道改名/隐藏联动（huhaibo820 #1）
     if _save_fan_labels(clean):
@@ -4548,6 +4558,7 @@ def build_diagnostics():
             "rule_source": f.get("rule_source"),
             "computed_pwm": f.get("computed_pwm"),
             "target_pct": f.get("target_pct"),
+            "no_tach": f.get("no_tach"),
             "hidden": f.get("hidden"),
         })
     # 疑似同物理风扇（相同非空转速出现在多个通道）→ 提示「一张卡变两张」问题（huhaibo820 #1）
@@ -4596,13 +4607,20 @@ def render_diagnostics_text(diag):
     for f in diag.get("fans") or []:
         rule = ("命中[%s]" % f.get("rule_source")) if f.get("rule_hit") else "无规则"
         _sig = (f.get("pwm_mode") or "n/a").upper()
+        _rpm_s = "无反馈线" if f.get("no_tach") else f.get("rpm")
         L.append("  %s | %s | pwm_enable=%s | signal=%s | pwm=%s%% | rpm=%s | mode=%s | %s | 目标=%s | 隐藏=%s"
                  % (f.get("key"), f.get("name"), f.get("pwm_enable"), _sig,
-                    f.get("pwm_pct"), f.get("rpm"), f.get("mode"), rule,
+                    f.get("pwm_pct"), _rpm_s, f.get("mode"), rule,
                     f.get("target_pct"), f.get("hidden")))
     _dc = [f.get("key") for f in (diag.get("fans") or []) if f.get("pwm_mode") == "dc"]
     if _dc:
         L.append("ℹ 以下接口为 DC(电压)调速，占空比按电压比例输出、低档更易停转: %s" % ", ".join(_dc))
+    # 无信号线风扇插在 PWM 口 → 收不到调速指令、恒满速。这是「怎么调都不降速」最常见的物理原因。
+    _nt_pwm = [f.get("key") for f in (diag.get("fans") or [])
+               if f.get("no_tach") and f.get("pwm_mode") == "pwm"]
+    if _nt_pwm:
+        L.append("⚠ 以下接口标注为『无转速反馈线(2/3针)』但当前是 PWM 调速：风扇收不到 PWM 信号线指令，"
+                 "占空比很可能不起作用（恒满速）。改 DC 模式 / 换 4 针风扇可解: %s" % ", ".join(_nt_pwm))
     if diag.get("suspected_duplicate_rpm"):
         L.append("⚠ 疑似同物理风扇（相同转速多通道，疑似「一张卡变两张」）: %s"
                  % json.dumps(diag.get("suspected_duplicate_rpm"), ensure_ascii=False))

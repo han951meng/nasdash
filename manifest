@@ -19,4 +19,4 @@ service_port          = 9800
 checkport             = false
 disable_authorization_path = true
 changelog             = 1.9.5: 风扇接口 PWM/DC 调速方式识别与切换：面板显示每个风扇口是 4 针 PWM 还是 3 针 DC 调速，支持直接切换（能否切换取决于主板硬件，切不动会明确提示原因） 1.9.4: 硬件配置检测修复（芯片组识别未知/显卡智能区分核显独显） 1.9.3: 风扇温控修复（关闭温度源生效/隐藏按钮挪位/0%仍转折叠提示）及目标标签空白、手册即时显示优化
-checksum              = 9f31b6617e223d7bd52b478f1a528539
+checksum              = 1170b1cbc1437b287d8017e73f5859c8
