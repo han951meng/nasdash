@@ -76,7 +76,7 @@ def _migrate_legacy_configs():
         return
     # 旧配置可能来源（按陈旧程度排序；跳过与当前目标相同的目录，避免无意义的自复制）
     legacy_sources = [APP_DIR, LEGACY_APPATA]
-    for name in ("board_override.txt", "fan_labels.json", "fan_disk_temp.json", "fan_sys_temp.json"):
+    for name in ("fan_labels.json", "fan_disk_temp.json", "fan_sys_temp.json"):
         dst = os.path.join(cfg, name)
         if os.path.exists(dst):
             continue
@@ -92,8 +92,6 @@ def _migrate_legacy_configs():
                 break
 
 _migrate_legacy_configs()
-
-BOARD_OVERRIDE_FILE = os.path.join(_config_dir(), "board_override.txt")
 
 # 版本号单一来源：fnOS 标准安装时 manifest 不在 APP_DIR（APP_DIR 只有 app.tgz 内容），
 # 而是在 /var/apps/<appid>/manifest。两个位置都查，最后才回退硬编码值（曾因只查 APP_DIR 导致所有标准安装都显示 v1.6.2）。
@@ -2291,24 +2289,12 @@ def get_board():
         "bios_version": bios_version,
         "bios_date": bios_date,
         "chipset": "",
-        "override": False,
         "note": "",
     }
 
-    # DMI 未写入厂商信息：先看手动标注文件，否则用 lspci 推断芯片组
+    # DMI 未写入厂商信息：提示用户用芯片组推断（已取消手动标注功能）
     if not b["manufacturer"] or not b["product"]:
-        override = ""
-        try:
-            with open(BOARD_OVERRIDE_FILE, "r", encoding="utf-8") as f:
-                override = f.read().strip()
-        except Exception:
-            override = ""
-        if override:
-            b["product"] = override
-            b["override"] = True
-            b["note"] = "手动标注（BIOS 未写入主板信息）"
-        else:
-            b["note"] = "BIOS 未写入主板厂商/型号（DMI 为空），以下为芯片组推断"
+        b["note"] = "BIOS 未写入主板厂商/型号（DMI 为空），以下为芯片组推断"
     # 芯片组：始终用 lspci 推断（大牌主板也能显示，更准确）
     b["chipset"] = get_chipset()
     return b
@@ -2514,6 +2500,61 @@ def get_memory_modules():
     }
 
 
+# 常见主板传感器温度测点中文名（保留原始名在 raw 字段，方便高级用户核对数据手册）
+_TEMP_NAME_ZH = {
+    # Nuvoton NCT67xx 常见测点
+    "SYSTIN": "主板温度",
+    "CPUTIN": "CPU 温度（主板探头）",
+    "AUXTIN0": "扩展温度探头 0",
+    "AUXTIN1": "扩展温度探头 1",
+    "AUXTIN2": "扩展温度探头 2",
+    "AUXTIN3": "扩展温度探头 3",
+    "AUXTIN4": "扩展温度探头 4",
+    "AUXTIN5": "扩展温度探头 5",
+    "PECI Agent 0": "CPU PECI 代理 0",
+    "PECI Agent 1": "CPU PECI 代理 1",
+    # PCH / 芯片组相关（部分主板传感器芯片会额外暴露）
+    "PCH_CHIP_TEMP": "PCH 芯片组温度",
+    "PCH_CHIP_CPU_MAX_TEMP": "PCH 芯片组最高温度",
+    "PCH_CPU_TEMP": "PCH CPU 温度",
+    "PCH_MCH_TEMP": "PCH 内存控制器温度",
+    # 内存 / 代理
+    "Agent0 Dimm0": "内存 DIMM0 温度",
+    "Agent0 Dimm1": "内存 DIMM1 温度",
+    "Agent1 Dimm0": "内存 DIMM0 温度（通道 1）",
+    "Agent1 Dimm1": "内存 DIMM1 温度（通道 1）",
+    # 通用 / 其他
+    "Composite": "复合温度",
+    "THRM": "热敏电阻",
+    "NB": "北桥温度",
+    "Sensor 0": "传感器 0",
+    "Sensor 1": "传感器 1",
+    "Sensor 2": "传感器 2",
+    "SMBUSMASTER 0": "SMBus 主控 0",
+    "SMBUSMASTER 1": "SMBus 主控 1",
+    "TSI0_TEMP": "TSI 温度 0",
+    "TSI1_TEMP": "TSI 温度 1",
+    "Tctl": "CPU 温度控制",
+    "Tdie": "CPU 晶粒温度",
+}
+
+
+def _temp_name_zh(raw_name, chip_prefix=None):
+    """把传感器原始英文名翻译成中文；Core N / Package id N / TccdN 单独处理。"""
+    if raw_name in _TEMP_NAME_ZH:
+        return _TEMP_NAME_ZH[raw_name]
+    m = re.match(r"Core\s+(\d+)", raw_name)
+    if m:
+        return f"CPU 核心 {m.group(1)}"
+    m = re.match(r"Tccd(\d+)", raw_name)
+    if m:
+        return f"CPU CCD{m.group(1)} 温度"
+    m = re.match(r"Package id\s+(\d+)", raw_name)
+    if m:
+        return "CPU 封装温度" if m.group(1) == "0" else f"CPU 封装温度 {m.group(1)}"
+    return raw_name
+
+
 def get_system():
     d = {}
     d["hostname"] = socket.gethostname()
@@ -2634,7 +2675,7 @@ def get_system():
                             if mx is not None and (mx < 0 or mx > 150): mx = None
                             if cr is not None and (cr < 0 or cr > 150): cr = None
                             if cs == "coretemp":
-                                nm = ename
+                                nm = _temp_name_zh(ename, cs)
                                 if "Package" in ename:
                                     cpu_temp = round(fv, 1)
                             elif cs == "acpitz":
@@ -2644,8 +2685,8 @@ def get_system():
                             elif cs.startswith("it"):
                                 nm = "主板(CPU附近)" if "temp1" in ename else "主板(系统)" if "temp2" in ename else "主板"
                             else:
-                                nm = ename
-                            d["sensors"]["temps"].append({"name": nm, "value": round(fv, 1), "max": mx, "crit": cr})
+                                nm = _temp_name_zh(ename, cs)
+                            d["sensors"]["temps"].append({"name": nm, "raw": ename, "value": round(fv, 1), "max": mx, "crit": cr})
                             break
                         elif fn.startswith("fan"):
                             # 风扇卡片不再从 sensors -j 逐条生成：华硕双芯片主板（nct6798 / asus-ec）
@@ -2737,15 +2778,375 @@ def get_system():
     d["cpu_temp"] = cpu_temp
     # 兼容旧字段
     d["temps"] = {t["name"]: t["value"] for t in d["sensors"]["temps"]}
-    # 显卡：lspci -nn 同时拿到厂商/设备号与名字，稳定区分核显/独显
+    # 显卡：lspci 基础信息 + nvidia-smi / sysfs 补充显存/时钟/温度
+    def _to_int(s):
+        try:
+            return int(str(s).split()[0])
+        except Exception:
+            return None
+    def _to_float1(s):
+        """转浮点并保留 1 位小数（用于功耗等带小数的读数），失败返回 None。"""
+        try:
+            return round(float(str(s).split()[0]), 1)
+        except Exception:
+            return None
+    # AMD 显卡设备 ID → (显存位宽, 显存类型) 查表。
+    # amdgpu 驱动无标准 sysfs 暴露位宽（只有 mem_info_vram_* 容量，位宽仅出现在带宽公式注释里），
+    # 用 lspci 设备号查表是实用解法。覆盖常见 RX 5000/6000 系列（RDNA1/RDNA2 桌面独显）；
+    # 未在表内的仍显示「—」，并提示型号未收录。
+    # 数据来源：各卡官方规格（设备 ID 取自 lspci -nn，与 macOS「系统信息」设备 ID 一致）。
+    _AMD_GPU_SPECS = {
+        # Navi 23 (RDNA2)
+        "73ff": (128, "GDDR6"),  # RX 6600 / 6600 XT
+        "73ef": (128, "GDDR6"),  # RX 6650 XT
+        "73e3": (128, "GDDR6"),  # Pro W6600
+        # Navi 24 (RDNA2)
+        "743f": (64, "GDDR6"),   # RX 6400
+        "7440": (64, "GDDR6"),   # RX 6500 XT
+        # Navi 22 (RDNA2)
+        "73df": (192, "GDDR6"),  # RX 6700 XT（非 XT 10GB 版为 160-bit，此处按最常见 XT）
+        # Navi 21 (RDNA2)
+        "73bf": (256, "GDDR6"),  # RX 6800 / 6800 XT / 6900 XT
+        "73af": (256, "GDDR6"),  # RX 6900 XT (XTXH)
+        "73a5": (256, "GDDR6"),  # RX 6950 XT
+        "73a3": (256, "GDDR6"),  # Pro W6800
+        # Navi 10 (RDNA1)
+        "731f": (256, "GDDR6"),  # RX 5700 / 5700 XT
+        "7312": (256, "GDDR6"),  # Pro W5700
+        "7310": (256, "GDDR6"),  # RX 5700 (Lite)
+        # Navi 14 (RDNA1)
+        "7340": (128, "GDDR6"),  # RX 5500 XT / 5300
+        "7341": (128, "GDDR6"),  # Pro W5500
+    }
+
+    def _amd_bus_width(dev):
+        """AMD 独显：按 lspci 设备 ID 查显存位宽与类型。返回 (bit_width, mem_type)，查不到为 (None,None)。"""
+        if not dev:
+            return (None, None)
+        dev = str(dev).lower()
+        if dev.startswith("0x"):
+            dev = dev[2:]
+        spec = _AMD_GPU_SPECS.get(dev)
+        return spec if spec else (None, None)
+
+    def _short_pci(bus_id):
+        if not bus_id:
+            return ""
+        return ":".join(bus_id.split(":")[1:])  # 00000000:01:00.0 -> 01:00.0
+    def _collect_nvidia():
+        """NVIDIA 专用：一次性拿到型号/显存/核心频率/显存频率/温度，位宽与显存类型从 -q 补。无驱动返回 []。"""
+        out = []
+        smi = run_cmd(["which", "nvidia-smi"], 2).strip()
+        if not smi:
+            return out
+        q = run_cmd([smi, "--query-gpu=index,pci.bus_id,name,memory.total,"
+                     "clocks.current.graphics,clocks.current.memory,temperature.gpu,"
+                     "power.draw,power.limit,driver_version", "--format=csv,noheader,nounits"], 8)
+        if not q.strip():
+            return out
+        for line in q.splitlines():
+            parts = [p.strip() for p in line.split(",")]
+            if len(parts) < 8:
+                continue
+            idx, bus, name, mem, gclk, mclk, temp = parts[:7]
+            pdraw = parts[7] if len(parts) > 7 else None
+            plimit = parts[8] if len(parts) > 8 else None
+            drv = parts[9] if len(parts) > 9 else None
+            info = {"pci": bus, "name": name, "driver": "nvidia", "driver_ver": drv,
+                    "memory_total": _to_int(mem), "core_clock": _to_int(gclk),
+                    "mem_clock": _to_int(mclk), "temp": _to_int(temp),
+                    "power_draw": _to_float1(pdraw), "power_cap": _to_float1(plimit)}
+            # 位宽 / 显存类型：-q 补充（部分驱动字段缺失则留空，不报错）
+            try:
+                qd = run_cmd([smi, "-q", "-i", idx], 8)
+                bw = re.search(r"Bus Width\s*:\s*(\d+)\s*bit", qd, re.I)
+                if bw:
+                    info["bus_width"] = int(bw.group(1))
+                mt = re.search(r"Memory Type\s*:\s*(\S+)", qd)
+                if mt:
+                    info["mem_type"] = mt.group(1)
+            except Exception:
+                pass
+            out.append(info)
+        return out
+    def _gpu_temp_from_sysfs(pci):
+        """按 PCI 地址在 /sys/class/drm/cardN/device/hwmon 读 GPU 温度（独显/AMD）。"""
+        try:
+            base = _short_pci(pci)
+            for name in os.listdir("/sys/class/drm"):
+                if not re.match(r"^card\d+$", name):
+                    continue
+                devdir = os.path.join("/sys/class/drm", name, "device")
+                uevent = os.path.join(devdir, "uevent")
+                if not os.path.exists(uevent):
+                    continue
+                data = open(uevent).read()
+                mm = re.search(r"PCI_SLOT_NAME=(\S+)", data)
+                if not mm:
+                    continue
+                dev = mm.group(1)
+                if base and (base == _short_pci(dev) or dev.endswith(base) or base.endswith(_short_pci(dev))):
+                    hdir = os.path.join(devdir, "hwmon")
+                    if os.path.isdir(hdir):
+                        for hw in sorted(os.listdir(hdir)):
+                            for tf in ("temp1_input", "temp2_input", "temp_input"):
+                                p = os.path.join(hdir, hw, tf)
+                                if os.path.exists(p):
+                                    try:
+                                        return int(open(p).read().strip()) // 1000
+                                    except Exception:
+                                        pass
+        except Exception:
+            return None
+        return None
+
+    def _amd_read_clocks(pci):
+        """AMD 独显：读核心频率(SCLK)/显存频率(MCLK)。优先 pp_dpm_sclk/mclk 当前档(*)，回退 hwmon freq1/freq2_input(Hz)。
+        返回 (core_clock_MHz, mem_clock_MHz)，读不到为 None。amdgpu 无标准接口暴露显存位宽，位宽由调用方保持 None。"""
+        core = mem = None
+        try:
+            base = _short_pci(pci)
+            target = None
+            for name in os.listdir("/sys/class/drm"):
+                if not re.match(r"^card\d+$", name):
+                    continue
+                devdir = os.path.join("/sys/class/drm", name, "device")
+                uevent = os.path.join(devdir, "uevent")
+                if not os.path.exists(uevent):
+                    continue
+                mm = re.search(r"PCI_SLOT_NAME=(\S+)", open(uevent).read())
+                if not mm:
+                    continue
+                dev = mm.group(1)
+                if base and (base == _short_pci(dev) or dev.endswith(base) or base.endswith(_short_pci(dev))):
+                    target = devdir
+                    break
+            if not target:
+                return (None, None)
+            # SCLK / MCLK 当前档（带 * 标记）
+            sclk_f = os.path.join(target, "pp_dpm_sclk")
+            if os.path.exists(sclk_f):
+                for line in open(sclk_f).read().splitlines():
+                    if "*" in line:
+                        sm = re.search(r":\s*([\d.]+)\s*Mhz", line, re.I)
+                        if sm:
+                            core = int(round(float(sm.group(1))))
+                            break
+            mclk_f = os.path.join(target, "pp_dpm_mclk")
+            if os.path.exists(mclk_f):
+                for line in open(mclk_f).read().splitlines():
+                    if "*" in line:
+                        mm2 = re.search(r":\s*([\d.]+)\s*Mhz", line, re.I)
+                        if mm2:
+                            mem = int(round(float(mm2.group(1))))
+                            break
+            # 回退：hwmon freq1_input(GPU)/freq2_input(显存)，单位 Hz（值 >1e6 视为 Hz 再换算，避免个别内核直接给 MHz）
+            if core is None or mem is None:
+                hdir = os.path.join(target, "hwmon")
+                if os.path.isdir(hdir):
+                    for hw in sorted(os.listdir(hdir)):
+                        if core is None:
+                            f1 = os.path.join(hdir, hw, "freq1_input")
+                            if os.path.exists(f1):
+                                try:
+                                    v = int(open(f1).read().strip())
+                                    core = int(v / 1000000) if v > 1000000 else v
+                                except Exception:
+                                    pass
+                        if mem is None:
+                            f2 = os.path.join(hdir, hw, "freq2_input")
+                            if os.path.exists(f2):
+                                try:
+                                    v = int(open(f2).read().strip())
+                                    mem = int(v / 1000000) if v > 1000000 else v
+                                except Exception:
+                                    pass
+        except Exception:
+            pass
+        return (core, mem)
+
+    def _amd_read_power(pci):
+        """AMD/Intel 独显功耗：读 amdgpu hwmon 的 power1_input(微瓦) 与 power1_cap(微瓦上限)。
+        返回 (power_draw_W, power_cap_W)，读不到为 (None,None)。核显与 CPU 共用电源域，不单独统计。"""
+        draw = cap = None
+        try:
+            base = _short_pci(pci)
+            target = None
+            for name in os.listdir("/sys/class/drm"):
+                if not re.match(r"^card\d+$", name):
+                    continue
+                devdir = os.path.join("/sys/class/drm", name, "device")
+                uevent = os.path.join(devdir, "uevent")
+                if not os.path.exists(uevent):
+                    continue
+                mm = re.search(r"PCI_SLOT_NAME=(\S+)", open(uevent).read())
+                if not mm:
+                    continue
+                dev = mm.group(1)
+                if base and (base == _short_pci(dev) or dev.endswith(base) or base.endswith(_short_pci(dev))):
+                    target = devdir
+                    break
+            if not target:
+                return (None, None)
+            hdir = os.path.join(target, "hwmon")
+            if os.path.isdir(hdir):
+                for hw in sorted(os.listdir(hdir)):
+                    if draw is None:
+                        p1 = os.path.join(hdir, hw, "power1_input")
+                        if os.path.exists(p1):
+                            try:
+                                v = int(open(p1).read().strip())
+                                draw = round(v / 1000000.0, 1)  # 微瓦 → 瓦
+                            except Exception:
+                                pass
+                    if cap is None:
+                        p1c = os.path.join(hdir, hw, "power1_cap")
+                        if os.path.exists(p1c):
+                            try:
+                                v = int(open(p1c).read().strip())
+                                cap = round(v / 1000000.0, 1)
+                            except Exception:
+                                pass
+        except Exception:
+            pass
+        return (draw, cap)
+
+    def _igpu_core_freq():
+        """Intel/AMD 核显核心频率（MHz），读 /sys/class/drm/card*/device/drm/card*/gt_cur_freq_mhz。无则 None。"""
+        try:
+            for name in sorted(os.listdir("/sys/class/drm")):
+                if not re.match(r"^card\d+$", name):
+                    continue
+                devdir = os.path.join("/sys/class/drm", name, "device")
+                cand = os.path.join(devdir, "drm", name, "gt_cur_freq_mhz")
+                cand2 = os.path.join(devdir, "gt_cur_freq_mhz")
+                p = cand if os.path.exists(cand) else (cand2 if os.path.exists(cand2) else None)
+            if p:
+                return _to_int(open(p).read().strip())
+        except Exception:
+            return None
+        return None
+
+    def _pci_dev_from_sysfs(pci):
+        """UEVENT 加固：lspci 在装了 pciids 数据库时可能只打印设备全名、不打印 [vendor:device]，
+        导致上面正则抓不到设备号（dev 变空），AMD 位宽查表随之失效。
+        改从内核 /sys/bus/pci/devices/*:<pci>/uevent 直接读 PCI_ID，格式恒为 'vendor:device'，
+        不受 pciids 影响，最稳。返回设备号(小写)或 None。"""
+        if not pci:
+            return None
+        try:
+            import glob
+            for uevent in glob.glob("/sys/bus/pci/devices/*:%s/uevent" % pci):
+                for line in open(uevent):
+                    if line.startswith("PCI_ID="):
+                        parts = line.strip().split("=", 1)[1].split(":", 1)
+                        if len(parts) == 2 and parts[1]:
+                            return parts[1].lower()
+        except Exception:
+            return None
+        return None
+
+    def _lshw_video_map():
+        """第三重兜底：lspci -nn 正则 + uevent PCI_ID 都拿不到设备号时，
+        用 lshw -numeric（强制打印 [vendor:dev]，不受 pciids 库影响）按 PCI 地址补设备号与名称。
+        仅在前面两路都失败才调用，避免 lshw 的耗时扫描进入常规轮询路径。结果按短 PCI 地址缓存。"""
+        cache = getattr(_lshw_video_map, "_cache", {})
+        if cache:
+            return cache
+        try:
+            out = sudo_cmd(["lshw", "-C", "video", "-numeric"], 10)
+            blocks, cur = [], None
+            for line in out.splitlines():
+                s = line.strip()
+                if s.startswith("*-"):
+                    cur = {}
+                    blocks.append(cur)
+                    continue
+                if cur is None:
+                    continue
+                if s.startswith("bus info:"):
+                    m = re.search(r"pci@(?:[0-9a-f]{4}:)?([0-9a-f]{2}:[0-9a-f]{2}\.\d)", s, re.I)
+                    if m:
+                        cur["pci"] = m.group(1)
+                elif s.startswith("product:"):
+                    m = re.search(r"\[([0-9a-f]{4}):([0-9a-f]{4})\]", s, re.I)
+                    if m:
+                        cur["vendor"] = m.group(1).lower()
+                        cur["dev"] = m.group(2).lower()
+                    nm = s.split(":", 1)[1].strip()
+                    nm = re.sub(r"\s*\[[0-9a-f]{4}:[0-9a-f]{4}\]\s*$", "", nm, flags=re.I)
+                    cur["name"] = nm
+            for b in blocks:
+                if b.get("pci") and "dev" in b:
+                    cache[b["pci"]] = (b.get("vendor", ""), b["dev"], b.get("name", ""))
+            _lshw_video_map._cache = cache
+        except Exception:
+            pass
+        return cache
+
+    def _parse_pcie(out):
+        """从 lspci -vvv 输出解析 PCIe 协商速率/通道。返回 dict 或 None。"""
+        if not out:
+            return None
+        def _gen(gts):
+            try:
+                g = float(gts)
+            except Exception:
+                return None
+            return {2.5: "1.0", 5.0: "2.0", 8.0: "3.0", 16.0: "4.0",
+                    32.0: "5.0", 64.0: "6.0"}.get(g)
+        cap = re.search(r"LnkCap:[^\n]*?Speed\s*([\d.]+)\s*GT/s[^\n]*?Width\s*(x\d+)", out)
+        sta = re.search(r"LnkSta:[^\n]*?Speed\s*([\d.]+)\s*GT/s[^\n]*?Width\s*(x\d+)", out)
+        if not cap and not sta:
+            return None
+        return {"gen_cap": _gen(cap.group(1)) if cap else None,
+                "width_cap": cap.group(2) if cap else None,
+                "gen_sta": _gen(sta.group(1)) if sta else None,
+                "width_sta": sta.group(2) if sta else None}
+
+    def _clean_gpu_name(raw):
+        """把 lspci/nvidia-smi 给的长设备名精简成「主市场名 + 架构代号」。
+        例：'Intel Corporation CoffeeLake-S GT1 [UHD Graphics 610]'
+            -> ('UHD Graphics 610', 'CoffeeLake-S GT1')
+        'NVIDIA GeForce RTX 3080' -> ('GeForce RTX 3080', '')
+        'Advanced Micro Devices, Inc. [AMD/ATI] Navi 23 [Radeon RX 6600 XT]'
+            -> ('Radeon RX 6600 XT', 'Navi 23')
+        中文兜底名（如 '未启用（BIOS 可能已禁用）'）原样返回。"""
+        if not raw or not str(raw).strip():
+            return raw, ""
+        n = str(raw).strip()
+        # 1) 去掉厂商前缀（含 APU 的 [AMD/ATI] 标记）
+        n = re.sub(r'^(Intel Corporation|Intel|NVIDIA Corporation|NVIDIA|'
+                   r'Advanced Micro Devices,?\s*Inc\.?\s*(\[AMD/ATI\])?|AMD/ATI|AMD)\s*',
+                   '', n, flags=re.I)
+        n = n.strip()
+        # 2) 取方括号里的市场名（跳过 [AMD/ATI] 这种非市场名标记）
+        mkt = None
+        for mm in re.finditer(r'\[([^\]]+)\]', n):
+            cand = mm.group(1).strip()
+            if cand.lower() in ('amd/ati',):
+                continue
+            mkt = cand
+            break
+        # 3) 剩余部分当作架构/技术代号
+        arch = re.sub(r'\[[^\]]+\]', '', n).strip()
+        arch = re.sub(r'\s{2,}', ' ', arch).strip()
+        if mkt and mkt.lower() not in ('device',):
+            return mkt, arch
+        return (n or str(raw)), ''
+
     lspci = run_cmd(["lspci", "-nn"], 5)
     gpus = []
     has_igpu = False
     for line in lspci.splitlines():
         if not re.search(r"VGA compatible controller|3D controller|Display controller", line, re.I):
             continue
+        # PCI 地址（行首 xx:xx.x）
+        pci = ""
+        pm = re.match(r"^([0-9a-f]{2}:[0-9a-f]{2}\.\d)", line)
+        if pm:
+            pci = pm.group(1)
         # 形如：… VGA compatible controller [0300]: Intel Corporation UHD Graphics 630 [8086:3e90] (rev 02)
-        # 抓「控制器类型」与「[厂商:设备号]」之间的设备名
         m = re.search(r"controller\s*\[[0-9a-f]{4}\]:\s*(.+?)\s*\[([0-9a-f]{4}):([0-9a-f]{4})\]", line)
         if m:
             name = m.group(1).strip()
@@ -2756,14 +3157,104 @@ def get_system():
                 name = {"8086": "Intel 核显", "10de": "NVIDIA 显卡",
                          "1002": "AMD 显卡"}.get(vendor, "显卡") + " (设备 %s)" % dev
         else:
-            vendor = ""; name = line.strip()
+            vendor = ""; name = line.strip(); dev = _pci_dev_from_sysfs(pci)
+            # 第三重兜底：lspci 正则 + uevent 都拿不到设备号时，用 lshw -numeric 补
+            if not dev:
+                lw = _lshw_video_map().get(pci)
+                if lw:
+                    vendor, dev, lw_name = lw
+                    if lw_name and not lw_name.lower().startswith("device") and lw_name != name:
+                        name = lw_name
         if vendor == "8086" or "intel" in name.lower():
             label = "核显"; has_igpu = True
         elif vendor == "1002" and re.search(r"radeon|graphics|apu|vega|renoir|cezanne|phoenix|raphael", name, re.I):
             label = "核显"; has_igpu = True
         else:
             label = "独显"
-        gpus.append("%s：%s" % (label, name))
+        # 驱动（Kernel driver in use）+ PCIe 协商通道（lspci -vvv 一次拿全）
+        driver = ""
+        pcie = None
+        if pci:
+            k = run_cmd(["lspci", "-vvv", "-s", pci], 3)
+            km = re.search(r"Kernel driver in use:\s*(\S+)", k)
+            if km:
+                driver = km.group(1)
+            pcie = _parse_pcie(k)
+        gpus.append({"type": label, "name": name, "vendor": vendor, "dev": dev,
+                     "pci": pci, "driver": driver, "pcie": pcie, "vram": None,
+                     "memory_total": None, "mem_type": None, "core_clock": None,
+                     "mem_clock": None, "bus_width": None, "temp": None,
+                     "power_draw": None, "power_cap": None})
+    # NVIDIA：用 nvidia-smi 按 PCI 地址匹配补充
+    for info in _collect_nvidia():
+        match = None
+        for g in gpus:
+            if g["vendor"] == "10de" and g["pci"] and (
+                info["pci"].endswith(g["pci"]) or g["pci"].endswith(_short_pci(info["pci"]))):
+                match = g; break
+        if not match:
+            match = {"type": "独显", "name": info.get("name", "NVIDIA 显卡"),
+                     "vendor": "10de", "dev": "", "pci": _short_pci(info.get("pci", "")),
+                     "driver": "", "pcie": None, "vram": None, "memory_total": None,
+                     "mem_type": None, "core_clock": None, "mem_clock": None,
+                     "bus_width": None, "temp": None, "power_draw": None, "power_cap": None}
+            gpus.append(match)
+        for k in ("name", "memory_total", "mem_type", "core_clock",
+                  "mem_clock", "bus_width", "temp", "driver", "driver_ver",
+                  "power_draw", "power_cap"):
+            if info.get(k) is not None:
+                match[k] = info[k]
+    # 非 NVIDIA 显卡：显存/温度补充
+    cpu_temp = d.get("cpu_temp")
+    for g in gpus:
+        if g["vendor"] == "10de":
+            continue
+        # 驱动版本：开源 amdgpu/i915 随内核发布、无独立版本号。
+        # 优先 modinfo 的 version/vermagic（标准 Linux 有），飞牛精简系统无 modinfo，回退内核版本。
+        if g["driver"]:
+            mv = run_cmd(["modinfo", g["driver"]], 3)
+            mver = re.search(r"^(version|vermagic):\s*(\S+)", mv, re.M)
+            if mver:
+                g["driver_ver"] = mver.group(2)
+            else:
+                kv = run_cmd(["uname", "-r"], 2).strip()
+                g["driver_ver"] = kv.split()[0] if kv else None
+        if g["type"] == "核显":
+            g["vram"] = "共享系统内存"
+            # 核显核心频率（真实可读，非独显才有）
+            g["core_clock"] = _igpu_core_freq()
+            # 核显与 CPU 同封装，温度取 CPU 温度
+            if cpu_temp is not None:
+                g["temp"] = cpu_temp
+        else:
+            # 独显（AMD 等）：lspci 显存区间作为显存容量兜底
+            if g["pci"] and g["memory_total"] is None:
+                v = run_cmd(["lspci", "-v", "-s", g["pci"]], 3)
+                vm = re.search(r"prefetchable.*?\[size=([^\]]+)\]", v, re.I)
+                if vm:
+                    g["vram"] = vm.group(1).strip()
+            # 温度：sysfs hwmon 按 PCI 匹配
+            if g["temp"] is None and g["pci"]:
+                t = _gpu_temp_from_sysfs(g["pci"])
+                if t is not None:
+                    g["temp"] = t
+            # AMD 独显：补核心频率 / 显存频率（amdgpu sysfs）；显存位宽/类型用设备 ID 查表
+            if g["vendor"] == "1002" and g["pci"]:
+                cc, mc = _amd_read_clocks(g["pci"])
+                if cc is not None:
+                    g["core_clock"] = cc
+                if mc is not None:
+                    g["mem_clock"] = mc
+                bw, mt = _amd_bus_width(g["dev"])
+                if bw is not None:
+                    g["bus_width"] = bw
+                if mt is not None and g["mem_type"] is None:
+                    g["mem_type"] = mt
+                pd, pc = _amd_read_power(g["pci"])
+                if pd is not None:
+                    g["power_draw"] = pd
+                if pc is not None:
+                    g["power_cap"] = pc
     # 兜底：插了独显后主板 BIOS 常自动禁用核显，lspci 扫不到。
     # 区分「CPU 本就没核显」和「CPU 带核显但被 BIOS 禁用」：前者直说无核显，后者提示未启用，避免误导。
     if not has_igpu:
@@ -2771,9 +3262,24 @@ def get_system():
         m = re.search(r"i[3579]-(\d{4,5})([A-Z]*)", cm)
         amd_g = re.search(r"Ryzen \d+ \d{3,4}G\b", cm, re.I)
         if (m and "F" not in m.group(2)) or amd_g:
-            gpus.append("核显：未启用（BIOS 可能已禁用）")
+            gpus.append({"type": "核显", "name": "未启用（BIOS 可能已禁用）",
+                          "vendor": "", "dev": "", "pci": "", "driver": "", "pcie": None, "vram": "",
+                          "memory_total": None, "mem_type": None, "core_clock": None,
+                          "mem_clock": None, "bus_width": None, "temp": None,
+                          "power_draw": None, "power_cap": None})
         else:
-            gpus.append("无核显")
+            gpus.append({"type": "无核显", "name": "",
+                          "vendor": "", "dev": "", "pci": "", "driver": "", "pcie": None, "vram": "",
+                          "memory_total": None, "mem_type": None, "core_clock": None,
+                          "mem_clock": None, "bus_width": None, "temp": None,
+                          "power_draw": None, "power_cap": None})
+    # 统一精简显卡显示名：主名去厂商前缀+取方括号市场名，架构代号降为副标题
+    for _g in gpus:
+        if _g.get("name"):
+            _sn, _sa = _clean_gpu_name(_g["name"])
+            _g["name_full"] = _g["name"]
+            _g["name"] = _sn
+            _g["name_arch"] = _sa
     d["gpus"] = gpus
     # 网卡（只显示物理网卡和 bond，过滤 docker/虚拟网桥）
     link_out = run_cmd(["ip", "-o", "link", "show"], 5)
@@ -4339,32 +4845,6 @@ def api_version():
         _VERSION_CHECK["checked_at"] = 0  # 使缓存失效，触发重查
     return jsonify(_check_latest_version())
 
-@app.route("/api/board/set", methods=["POST"])
-@require_admin()
-def api_board_set():
-    """保存/清除主板型号手动标注（白牌板 DMI 为空时由用户填写）"""
-    try:
-        data = request.get_json(force=True) or {}
-    except Exception:
-        return jsonify({"ok": False, "error": "bad json"}), 400
-    model = (data.get("model") or "").strip()
-    if model:
-        # 安全：限制长度、过滤换行与路径字符
-        if len(model) > 60 or re.search(r"[\r\n/\\]", model):
-            return jsonify({"ok": False, "error": "invalid model"}), 400
-        try:
-            with open(BOARD_OVERRIDE_FILE, "w", encoding="utf-8") as f:
-                f.write(model)
-        except Exception as e:
-            return jsonify({"ok": False, "error": str(e)}), 500
-    else:
-        # 清空标注
-        try:
-            if os.path.exists(BOARD_OVERRIDE_FILE):
-                os.remove(BOARD_OVERRIDE_FILE)
-        except Exception as e:
-            return jsonify({"ok": False, "error": str(e)}), 500
-    return jsonify({"ok": True, "model": model or ""})
 
 
 # ===================== 控制与自动化：告警 + 健康报告 =====================
@@ -4734,7 +5214,7 @@ def _render_report_html(rep):
         ["负载 (1/5/15)", " / ".join(fmt(x) for x in (sys_.get("load") or []))],
         ["内存", f"{fmt(mem.get('used'))} / {fmt(mem.get('total'))}（{fmt(mem.get('percent'))}%）"],
         ["交换分区", f"{fmt(swap.get('used'))} / {fmt(swap.get('total'))}"],
-        ["显卡", fmt("、".join(gpus) if gpus else "—")],
+        ["显卡", fmt("、".join((g.get("name") or g.get("type") or "") for g in gpus) if gpus else "—")],
     ]
     board_rows = [
         ["制造商", fmt(board.get("manufacturer"))],

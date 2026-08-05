@@ -88,6 +88,25 @@
   .status-item .k{font-size:11px;color:var(--muted)}
   .status-item .v{font-size:13px;font-weight:600}
   .detect-cards{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .mem-slots{display:flex;gap:10px;flex-wrap:wrap;margin-top:6px}
+  .mem-slot{flex:1;min-width:96px;border-radius:10px;padding:10px;border:1px solid var(--border);background:var(--bg)}
+  .mem-slot.filled{border-color:var(--blue);background:#eff4ff}
+  .mem-slot .ms-ch{font-size:11px;color:var(--muted);margin-bottom:4px}
+  .mem-slot .ms-size{font-size:14px;font-weight:600;color:var(--text)}
+  .mem-slot .ms-info{font-size:11px;color:var(--muted);margin-top:3px}
+  .temp-wall{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px;margin-top:6px}
+  .temp-chip{border-radius:10px;padding:10px 12px;border:1px solid var(--border);background:var(--bg);display:flex;flex-direction:column;gap:4px}
+  .temp-chip .tc-name{font-size:12px;color:var(--muted);word-break:break-all}
+  .temp-chip .tc-val{font-size:16px;font-weight:600}
+  .gpu-sep{height:1px;background:var(--border);margin:8px 0}
+  /* 显卡卡片收纳折叠 */
+  .gpu-detail{margin-top:6px;border-top:1px dashed var(--border);padding-top:6px}
+  .gpu-detail summary{cursor:pointer;font-size:13px;color:var(--blue);font-weight:500;list-style:none;user-select:none;display:flex;align-items:center;gap:5px}
+  .gpu-detail summary::-webkit-details-marker{display:none}
+  .gpu-detail summary::before{content:"▸";display:inline-block;transition:transform .15s ease;font-size:11px}
+  .gpu-detail[open] summary::before{transform:rotate(90deg)}
+  .gpu-detail .detail-body{padding-top:4px}
+  .gpu-detail .detail-body .kv:first-child{border-top:none}
   .disk-mini{display:flex;justify-content:space-between;padding:5px 0;font-size:13px;border-bottom:1px solid #f3f4f6;gap:10px}
   .disk-mini:last-child{border-bottom:none}
   .disk-group-title{font-size:12px;font-weight:600;color:#6b7280;margin:10px 0 4px;padding-left:2px}
@@ -131,8 +150,6 @@
   .btn-mini:hover{background:var(--bg)}
   .btn-mini.b-ok{background:var(--green);color:#fff;border-color:var(--green)}
   .btn-mini.b-bad{background:var(--red);color:#fff;border-color:var(--red)}
-  .edit-pencil{float:right;cursor:pointer;color:var(--blue);font-size:13px;font-weight:400}
-  .edit-pencil:hover{opacity:.7}
   .inp{padding:6px 8px;font-size:13px;border:1px solid var(--border);border-radius:6px;background:#fff;color:var(--text)}
   /* 风扇控制独立页面 */
   .fan-page{display:flex;flex-direction:column;gap:16px}
@@ -625,6 +642,24 @@ function renderDisks(disks){
 }
 
 function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function gpuRow(k, v, note){
+  // v: 已格式化的字符串或 null；note: 该字段不适用于本显卡时的说明（iGPU 无独显参数）
+  if(v!=null && v!==''){
+    return `<div class="kv"><span class="k">${esc(k)}</span><span class="v">${v}</span></div>`;
+  }
+  if(note){
+    return `<div class="kv"><span class="k">${esc(k)}</span><span class="v" style="color:var(--muted);font-size:12px">${esc(note)}</span></div>`;
+  }
+  return `<div class="kv"><span class="k">${esc(k)}</span><span class="v">—</span></div>`;
+}
+function pcieLocText(pci){
+  // 把 01:00.0 这类机器地址翻成中文明文
+  if(!pci) return '';
+  let m = pci.match(/^([0-9a-f]{2}):([0-9a-f]{2})\.(\d)$/i);
+  if(!m) return '主板 PCIe 扩展槽';
+  let bus = parseInt(m[1],16), dev = parseInt(m[2],16), fn = parseInt(m[3],10);
+  return `主板 PCIe 扩展槽（总线 ${bus} · 设备 ${dev}${fn?(' · 功能 '+fn):''}）`;
+}
 function fmtSpeed(bps){
   if(bps==null || isNaN(bps)) return '-';
   if(bps < 1024) return bps.toFixed(0) + ' B/s';
@@ -1694,24 +1729,6 @@ function drawCurve(prefix){
   }
 }
 
-function showBoardEdit(){ let b=document.getElementById('boardEditBox'); if(b) b.style.display='block'; }
-function hideBoardEdit(){ let b=document.getElementById('boardEditBox'); if(b) b.style.display='none'; }
-async function saveBoardModel(){
-  let inp=document.getElementById('boardModelInput'); if(!inp) return;
-  let model=inp.value.trim();
-  try{
-    let r=await fetch('/api/board/set',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:model})});
-    let j=await r.json();
-    if(j.ok){ hideBoardEdit(); loadData(); } else { alert('保存失败：'+(j.error||'')); }
-  }catch(e){ alert('请求失败'); }
-}
-async function clearBoardModel(){
-  try{
-    let r=await fetch('/api/board/set',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:''})});
-    let j=await r.json();
-    if(j.ok){ hideBoardEdit(); loadData(); } else { alert('清除失败：'+(j.error||'')); }
-  }catch(e){ alert('请求失败'); }
-}
 
 function renderStorage(st){
   let raids = (st.raid_arrays||[]).map(a=>{
@@ -1782,6 +1799,21 @@ function renderDetect(D){
   }).join('') : '<tr><td colspan=7>无 / 未安装 i2c-tools 或 dmidecode</td></tr>';
   let mm = s.memory_modules;
   let memSummary = mm ? (`插槽 ${mm.installed}/${mm.slots}` + (mm.brand_summary && mm.brand_summary!=='未知' ? ` · ${mm.brand_summary}` : '') + (mm.empty>0 ? ` · ${mm.empty} 空槽` : '')) : '';
+  let chA = memMods.some(m=>/ChannelA/i.test(m.locator)&&m.installed);
+  let chB = memMods.some(m=>/ChannelB/i.test(m.locator)&&m.installed);
+  let chanTxt = (chA&&chB)?'双通道':(chA||chB)?'单通道':'—';
+  let memSlotHtml = memMods.map(m=>{
+    let ch = /ChannelA/i.test(m.locator)?'A':/ChannelB/i.test(m.locator)?'B':'';
+    if(m.installed){
+      return `<div class="mem-slot filled">
+        <div class="ms-ch">通道 ${ch}</div>
+        <div class="ms-size">${m.size||'-'}</div>
+        <div class="ms-info">${m.brand||m.manufacturer||'内存'}${m.speed?' · '+m.speed:''}</div>
+        ${m.dram_manufacturer?`<div class="ms-info" style="opacity:.7">颗粒 ${m.dram_manufacturer}</div>`:''}
+      </div>`;
+    }
+    return `<div class="mem-slot empty"><div class="ms-ch">通道 ${ch}</div><div class="ms-size" style="color:var(--muted)">空槽</div></div>`;
+  }).join('');
   let memCard = `
   <div class="card" style="grid-column:1/-1">
     <h3>内存</h3>
@@ -1789,19 +1821,15 @@ function renderDetect(D){
     <div class="kv"><span class="k">已用</span><span class="v">${(s.memory&&s.memory.used)||'-'}</span></div>
     <div class="kv"><span class="k">占用率</span><span class="v" style="color:${s.memory&&s.memory.percent>70?'var(--orange)':'var(--green)'}">${(s.memory&&s.memory.percent)||0}%</span></div>
     <div class="kv"><span class="k">内存插槽</span><span class="v">${memSummary||'-'}</span></div>
-    <div style="margin-top:8px;font-size:12px;color:var(--muted)">插槽含空槽；品牌取自 SPD 直读</div>
-    <div style="overflow-x:auto"><table class="table" style="font-size:12px"><thead><tr><th>插槽</th><th>状态</th><th>模组厂</th><th>颗粒厂</th><th>型号</th><th>容量</th><th>频率</th></tr></thead><tbody>${memModRows}</tbody></table></div>
+    <div class="mem-slots">${memSlotHtml}</div>
+    <div style="margin-top:8px;font-size:12px;color:var(--muted)">通道 ${chanTxt} · 品牌取自 SPD 直读；灰色为空槽</div>
   </div>`;
   let bm = (s.board && s.board.manufacturer) || "";
-  let boardOverride = s.board && s.board.override;
   let boardHasDMI = bm && bm.toLowerCase() !== "default string" && bm.toLowerCase() !== "to be filled by o.e.m.";
-  let boardEdit = `
-    <span class="edit-pencil" title="标注/修改主板型号" onclick="showBoardEdit()">✎</span>`;
   let boardCard = `
   <div class="card">
-    <h3>主板 ${boardEdit}</h3>
-    ${boardHasDMI || boardOverride ? `
-    ${boardOverride ? '<div style="margin-bottom:6px"><span class="badge b-info">手动标注</span></div>' : ''}
+    <h3>主板</h3>
+    ${boardHasDMI ? `
     <div class="kv"><span class="k">品牌</span><span class="v">${(s.board&&s.board.manufacturer)||'-'}</span></div>
     <div class="kv"><span class="k">型号</span><span class="v">${(s.board&&s.board.product)||'-'}</span></div>
     <div class="kv"><span class="k">版本</span><span class="v">${(s.board&&s.board.version)||'-'}</span></div>
@@ -1811,14 +1839,6 @@ function renderDetect(D){
     <div class="kv"><span class="k">芯片组</span><span class="v">${(s.board&&s.board.chipset)||'未知'}</span></div>
     <div class="kv"><span class="k">说明</span><span class="v" style="font-size:12px;color:var(--orange)">${(s.board&&s.board.note)||'BIOS 未写入主板信息'}</span></div>
     `}
-    <div id="boardEditBox" style="display:none;margin-top:10px">
-      <input id="boardModelInput" class="inp" placeholder="如 豆希 WB360" value="${(s.board&&s.board.product)||''}" style="width:100%;margin-bottom:6px">
-      <div style="display:flex;gap:8px">
-        <button class="btn-mini b-ok" onclick="saveBoardModel()">保存</button>
-        <button class="btn-mini" onclick="hideBoardEdit()">取消</button>
-        ${boardOverride ? '<button class="btn-mini b-bad" onclick="clearBoardModel()">清除标注</button>' : ''}
-      </div>
-    </div>
   </div>`;
   let sysInfoCard = `
   <div class="card">
@@ -1827,18 +1847,84 @@ function renderDetect(D){
     <div class="kv"><span class="k">系统</span><span class="v">${s.os||'-'}</span></div>
     <div class="kv"><span class="k">内核</span><span class="v">${s.kernel||'-'}</span></div>
     <div class="kv"><span class="k">运行时间</span><span class="v">${s.uptime||'-'}</span></div>
+    <div class="kv"><span class="k">交换分区</span><span class="v">${(s.swap&&s.swap.used)?(s.swap.used+' / '+s.swap.total):'-'}</span></div>
   </div>`;
   let netCard = `
-  <div class="card">
+  <div class="card" style="grid-column:1/-1">
     <h3>网络</h3>
-    ${(s.nics||[]).map(n=>{
-      let sc=n.state==='up'?'var(--green)':'var(--red)';
+    ${(s.nics||[]).filter(n=>{
+      let nm=(n.name||'').toLowerCase();
+      return !/ovs|veth|docker|virbr|^lo$|br-/.test(nm);
+    }).map(n=>{
+      let st=(n.state||'').toUpperCase();
+      let sc=st==='UP'?'var(--green)':'var(--red)';
       let sp=n.speed?n.speed+' Mbps':'N/A';
       let rx=(n.rx_rate!=null)?fmtSpeed(n.rx_rate):'—';
       let tx=(n.tx_rate!=null)?fmtSpeed(n.tx_rate):'—';
-      return `<div class="kv"><span class="k">${n.name}</span><span class="v">${n.ip||'无IP'} · ${sp} · <span style="color:${sc}">${n.state}</span></span></div>
+      return `<div class="kv"><span class="k">${n.name}</span><span class="v">${n.ip||'无IP'} · ${sp} · <span style="color:${sc}">${st}</span></span></div>
               <div class="kv" style="padding-left:10px"><span class="k" style="color:var(--muted);font-size:12px">实时流量</span><span class="v" style="font-size:12px">↓ ${rx} / ↑ ${tx}</span></div>`;
     }).join('')||'<div class="loading">未检测到</div>'}
+  </div>`;
+  let gpuCard = `
+  <div class="card">
+    <h3>显卡</h3>
+    ${(s.gpus&&s.gpus.length)?s.gpus.map(g=>{
+      let isIgpu = (g.type==='核显');
+      let rows=`<div class="kv"><span class="k">${esc(g.type||'显卡')}</span><span class="v"${g.name_full?` title="完整设备名：${esc(g.name_full)}"`:''}>${esc(g.name||'')}${g.name_arch?`<small>${esc(g.name_arch)}</small>`:''}</span></div>`;
+      // —— 常驻：GPU 温度 ——
+      let tcol = g.temp!=null?tempColor(g.temp,95):'var(--muted)';
+      rows+=gpuRow('GPU 温度', g.temp!=null?('<span style="color:'+tcol+'">'+g.temp+'°C</span>'):null, null);
+      // —— 常驻：显存容量 ——
+      let vramTxt = null;
+      if(g.memory_total!=null){ let gb=g.memory_total/1024; vramTxt=(gb>=1?(gb.toFixed(gb%1?1:0)+' GB'):g.memory_total+' MB')+(g.mem_type?(' '+g.mem_type):''); }
+      else if(g.vram){ vramTxt=g.vram; }
+      rows+=gpuRow('显存容量', vramTxt, isIgpu?'核显与 CPU 共用内存，无独立显存':null);
+      // —— 折叠「更多参数」：硬件规格(频率/位宽) → PCIe → 驱动 → 功耗 ——
+      let det='';
+      det+=gpuRow('核心频率', g.core_clock!=null?g.core_clock+' MHz':null, isIgpu&&g.core_clock==null?'核显频率信息暂不可用':null);
+      det+=gpuRow('显存频率', g.mem_clock!=null?g.mem_clock+' MHz':null, isIgpu?'核显与 CPU 共用内存，无独立显存频率':null);
+      det+=gpuRow('显存位宽', g.bus_width!=null?g.bus_width+' 位':null, isIgpu?'核显与 CPU 共用内存总线，无独立显存位宽':(g.vendor==='1002'&&g.bus_width==null?'该 AMD 显卡型号暂未在识别表中，无法读取位宽':null));
+      if(g.pci){
+        let pcieLines=[`<span>${esc(g.pci)}</span>`, `<span style="color:var(--muted);font-size:12px">${esc(pcieLocText(g.pci))}</span>`];
+        if(g.pcie && g.pcie.gen_sta){
+          let ch=`PCIe ${g.pcie.gen_sta} ${g.pcie.width_sta}`;
+          if(g.pcie.width_cap && g.pcie.width_cap!==g.pcie.width_sta){
+            ch+=` <span style="color:var(--orange)">（协商 ${g.pcie.width_sta}，上限 ${g.pcie.width_cap} · 未跑满）</span>`;
+          } else if(g.pcie.width_cap){ ch+=`（协商 ${g.pcie.width_sta}，上限 ${g.pcie.width_cap}）`; }
+          pcieLines.push(`<span>${ch}</span>`);
+        } else if(isIgpu){
+          pcieLines.push(`<span style="color:var(--muted);font-size:12px">集成于 CPU，不占用独立 PCIe 插槽</span>`);
+        }
+        det+=`<div class="kv" style="align-items:flex-start"><span class="k" style="padding-top:2px">PCIe</span><span class="v" style="text-align:right;display:flex;flex-direction:column;gap:3px">${pcieLines.join('')}</span></div>`;
+      }
+      if(g.driver){
+        let dv = g.driver_ver ? ` <span style="color:var(--muted);font-size:12px">${esc(g.driver_ver)}</span>` : '';
+        det+=`<div class="kv"><span class="k">驱动</span><span class="v">${esc(g.driver)}${dv}</span></div>`;
+      }
+      if(g.power_draw!=null || g.power_cap!=null){
+        let ptext = g.power_draw!=null ? (g.power_draw+' W') : '';
+        if(g.power_cap!=null) ptext += (ptext?' / ':'') + '上限 '+g.power_cap+' W';
+        let pcol='var(--muted)';
+        if(g.power_draw!=null && g.power_cap!=null && g.power_cap>0){
+          let r=g.power_draw/g.power_cap;
+          if(r>=0.95) pcol='var(--red)'; else if(r>=0.85) pcol='var(--orange)';
+        }
+        det+=`<div class="kv"><span class="k">功耗</span><span class="v" style="color:${pcol}">${esc(ptext)}</span></div>`;
+      } else if(isIgpu){
+        det+=gpuRow('功耗', null, '核显与 CPU 共用电源，未单独统计');
+      } else {
+        det+=gpuRow('功耗', null, null);
+      }
+      rows+=`<details class="gpu-detail"><summary>更多参数</summary><div class="detail-body">${det}</div></details>`;
+      return rows;
+    }).join('<div class="gpu-sep"></div>'):'<div class="loading">未检测到核显 / 独显，或 BIOS 已禁用</div>'}
+  </div>`;
+  let tempEntries = (s.sensors && s.sensors.temps || []).filter(t=>typeof t.value==='number'&&t.value>0&&t.value<100);
+  let tempWallCard = `
+  <div class="card" style="grid-column:1/-1">
+    <h3>温度墙</h3>
+    ${tempEntries.length?`<div class="temp-wall">${tempEntries.map(t=>{let raw=t.raw||'';let tip=raw?raw+'（原始测点名）':'';return `<div class="temp-chip" style="border-color:${tempColor(t.value,85)}" title="${esc(tip)}"><span class="tc-name">${esc(t.name)}</span><span class="tc-val" style="color:${tempColor(t.value,85)}">${t.value}°C</span></div>`;}).join('')}</div>`:'<div class="loading">未检测到温度测点</div>'}
+    <div style="margin-top:8px;font-size:12px;color:var(--muted)">主板传感器测点全览（已过滤无效 0°C / 负温）；鼠标悬停可查看原始英文名。颜色：绿正常 · 橙偏高 · 红危险</div>
   </div>`;
   let sysConfig = `
   <div class="detect-cards">
@@ -1846,14 +1932,16 @@ function renderDetect(D){
       <h3>处理器</h3>
       <div class="kv"><span class="k">型号</span><span class="v">${s.cpu_model||'-'}</span></div>
       <div class="kv"><span class="k">核心/线程</span><span class="v">${s.cpu_cores||0}核 / ${s.cpu_threads||0}线程</span></div>
+      <div class="kv"><span class="k">频率</span><span class="v">${s.cpu_freq!=null?Math.round(parseFloat(s.cpu_freq))+' MHz':'N/A'}</span></div>
       <div class="kv"><span class="k">CPU 温度</span><span class="v" style="color:${tempColor(s.cpu_temp,100)}">${s.cpu_temp!=null?s.cpu_temp+'°C':'N/A'}</span></div>
       <div class="kv"><span class="k">负载占用</span><span class="v">${cpuPct}%</span></div>
-      ${(s.gpus&&s.gpus.length)?s.gpus.map(g=>`<div class="kv"><span class="k">显卡</span><span class="v">${g}</span></div>`).join(''):''}
     </div>
+    ${gpuCard}
     ${boardCard}
-    ${memCard}
-    ${netCard}
     ${sysInfoCard}
+    ${memCard}
+    ${tempWallCard}
+    ${netCard}
   </div>`;
   // 阵列卡 & 磁盘
   let raidCard;
