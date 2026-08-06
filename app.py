@@ -3281,28 +3281,42 @@ def get_system():
             _g["name"] = _sn
             _g["name_arch"] = _sa
     d["gpus"] = gpus
-    # 网卡（只显示物理网卡和 bond，过滤 docker/虚拟网桥）
+    # 网卡（只显示物理网卡 / bond / 桥接端口，过滤 docker/虚拟网桥/容器/虚拟机等噪音接口）
     link_out = run_cmd(["ip", "-o", "link", "show"], 5)
     addr_out = run_cmd(["ip", "-o", "addr", "show"], 5)
+    # 先直接从 addr 输出解析「接口名 -> IP」映射：
+    # - ip -o link 对 veth/peer 接口会显示 name@ifN 后缀，而 ip -o addr 用原始名（也可能带 @ifN），
+    #   直接按行解析 addr 可绕开「按名回查整行」的匹配失败问题；
+    # - 不同版本/系统的 `ip -o addr show` 格式并不一致：有的接口名后带冒号，有的不带；
+    #   有的 inet 在接口名同行，有的 inet 在续行。用状态机维护当前接口名最稳；
+    # - 同一接口可能同时有 inet6/inet，这里优先取 IPv4。
+    ip_map = {}
+    cur_iface = None
+    for aline in addr_out.splitlines():
+        header = re.match(r"^\d+:\s+(\S+)", aline)
+        if header:
+            # 去掉末尾可能存在的冒号和 @ifN 后缀，与 link 解析出的 name 对齐
+            cur_iface = header.group(1).split("@")[0].rstrip(":")
+        im = re.search(r"\binet\s+(\S+)", aline)
+        if im and cur_iface and cur_iface not in ip_map:
+            ip_map[cur_iface] = im.group(1).split("/")[0]
+    # 纯虚拟/容器/虚拟机接口不计入物理网卡列表，避免「无IP」噪音干扰查看
+    SKIP_NIC_PREFIX = ("lo", "docker", "br-", "veth", "ovs-system", "__tmp",
+                       "flannel", "cni", "tailscale", "ts", "wg", "safeline", "vnet", "virbr")
     nics = []
     for line in link_out.splitlines():
         m = re.match(r"\d+:\s+(\S+?):\s+<([^>]*)>.*?state\s+(\w+).*?link/(\S+)\s+(\S+)", line)
         if not m:
             continue
-        name = m.group(1)
-        if name == "lo" or name.startswith(("docker", "br-", "veth")):
+        name = m.group(1).split("@")[0]
+        if name == "lo" or name.startswith(SKIP_NIC_PREFIX):
             continue
         state = m.group(3)
         mac = m.group(5)
         speed = read_file(f"/sys/class/net/{name}/speed").strip()
         if not speed.isdigit():
             speed = ""
-        ip = ""
-        for aline in addr_out.splitlines():
-            if re.search(rf"\b{re.escape(name)}\b", aline):
-                im = re.search(r"\binet\s+(\S+)", aline)
-                if im and not ip:
-                    ip = im.group(1).split("/")[0]
+        ip = ip_map.get(name, "")
         nics.append({"name": name, "state": state, "mac": mac, "speed": speed, "ip": ip})
     # 附加实时网速（来自采集 daemon 的 _metrics_cur，每 2s 刷新一次）
     try:
