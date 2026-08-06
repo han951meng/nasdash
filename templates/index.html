@@ -1854,7 +1854,9 @@ function renderDetect(D){
     <h3>网络</h3>
     ${(s.nics||[]).filter(n=>{
       let nm=(n.name||'').toLowerCase();
-      return !/ovs|veth|docker|virbr|^lo$|br-/.test(nm);
+      // 注意：只过滤 OVS 的「内部接口 ovs-system」，绝不能过滤 *-ovs 桥——
+      // fnOS 的真实 IP 就配在 eno1-ovs 这类 OVS 桥上，误过滤会导致整页显示「无IP」
+      return !/^(lo|ovs-system|docker|virbr|br-)|veth/.test(nm);
     }).map(n=>{
       let st=(n.state||'').toUpperCase();
       let sc=st==='UP'?'var(--green)':'var(--red)';
