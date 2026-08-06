@@ -3329,6 +3329,32 @@ def get_system():
                 nic["tx_rate"] = rt.get("tx_rate", 0.0)
     except Exception:
         pass
+    # 飞牛默认使用 OVS 桥接：真实 IP 配在 eno1-ovs 上，eno1 物理口本身无 IP。
+    # 如果把两者都展示出来，就会出现「eno1 无 IP」和「eno1-ovs UNKNOWN/N/A」两行残缺信息。
+    # 这里把物理口与其对应的 OVS 桥合并成一条：名字用物理口，速度和状态从物理口拿，
+    # IP 和实时流量从 OVS 桥拿，最终页面上只显示一条完整记录。
+    ovs_bridges = {}
+    for nic in nics:
+        name = nic.get("name", "")
+        if name.endswith("-ovs"):
+            ovs_bridges[name[:-4]] = nic
+    merged_nics = []
+    for nic in nics:
+        name = nic.get("name", "")
+        if name.endswith("-ovs"):
+            continue
+        if name in ovs_bridges:
+            ovs = ovs_bridges[name]
+            nic["ip"] = ovs.get("ip") or nic.get("ip")
+            nic["rx_rate"] = ovs.get("rx_rate", nic.get("rx_rate", 0.0))
+            nic["tx_rate"] = ovs.get("tx_rate", nic.get("tx_rate", 0.0))
+        merged_nics.append(nic)
+    # 若存在没有对应物理口的 OVS 桥（极少见），保留它但去掉 -ovs 后缀以便统一显示
+    for base, ovs in ovs_bridges.items():
+        if not any(n.get("name") == base for n in merged_nics):
+            ovs["name"] = base
+            merged_nics.append(ovs)
+    nics = merged_nics
     d["nics"] = nics
     # 主板 / 内存品牌型号（dmidecode），失败不影响其它采集
     try:
