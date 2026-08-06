@@ -1411,6 +1411,26 @@ async function applyFanPreset(val){
   highlightPreset(val);
 }
 let fanTimer=null;
+// 轻量实时流量刷新：每 2s 只拉 /api/metrics（后端 daemon 现成数据，不重跑硬件采集），
+// 只更新每个网卡「实时流量」那一行，不重渲整个系统面板（系统面板默认 30s 才拉一次，太慢）。
+let netRateTimer=null;
+async function fetchNetRates(){
+  try{
+    let r=await fetch('/api/metrics?_='+Date.now());
+    let d=await r.json();
+    let rates={};
+    (d.net||[]).forEach(n=>{ rates[n.name]=n; });
+    document.querySelectorAll('[data-nic]').forEach(el=>{
+      let name=el.getAttribute('data-nic');
+      let m=rates[name];
+      if(!m) return;
+      let rx=(m.rx_rate!=null)?fmtSpeed(m.rx_rate):'—';
+      let tx=(m.tx_rate!=null)?fmtSpeed(m.tx_rate):'—';
+      el.textContent='↓ '+rx+' / ↑ '+tx;
+    });
+  }catch(e){}
+}
+function startNetRateTimer(){ if(!netRateTimer){ fetchNetRates(); netRateTimer=setInterval(fetchNetRates, 2000); } }
 function clearPresetHighlight(){
   document.querySelectorAll('.preset-btn[data-preset]').forEach(b=>b.classList.remove('active'));
 }
@@ -1864,7 +1884,7 @@ function renderDetect(D){
       let rx=(n.rx_rate!=null)?fmtSpeed(n.rx_rate):'—';
       let tx=(n.tx_rate!=null)?fmtSpeed(n.tx_rate):'—';
       return `<div class="kv"><span class="k">${n.name}</span><span class="v">${n.ip||'无IP'} · ${sp} · <span style="color:${sc}">${st}</span></span></div>
-              <div class="kv" style="padding-left:10px"><span class="k" style="color:var(--muted);font-size:12px">实时流量</span><span class="v" style="font-size:12px">↓ ${rx} / ↑ ${tx}</span></div>`;
+              <div class="kv" style="padding-left:10px"><span class="k" style="color:var(--muted);font-size:12px">实时流量</span><span class="v" style="font-size:12px" data-nic="${n.name}">↓ ${rx} / ↑ ${tx}</span></div>`;
     }).join('')||'<div class="loading">未检测到</div>'}
   </div>`;
   let gpuCard = `
@@ -2402,6 +2422,7 @@ try{
 }catch(e){}
 
 loadData();  // 首屏仍全量拉取一次，打底填充所有板块 DATA
+startNetRateTimer();  // 启动轻量实时流量刷新（每 2s 只拉 /api/metrics，不动重采集）
 
 // ---------- 检测新版本 ----------
 let updateDismissed = false;

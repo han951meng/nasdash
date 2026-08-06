@@ -4149,9 +4149,24 @@ def api_docker():
 
 @app.route("/api/metrics")
 def api_metrics():
-    """轻量实时指标：网络吞吐 + 磁盘 I/O。供前端高频(2s)轮询，不触发重型 /api/all(阵列卡/SMART等)。"""
+    """轻量实时指标：网络吞吐 + 磁盘 I/O。供前端高频(2s)轮询，不触发重型 /api/all(阵列卡/SMART等)。
+    网络速率会把 OVS 桥（如 eno1-ovs）归并到物理口名（eno1），与 /api/system 的合并显示名对齐，
+    这样前端按 data-nic 直接覆盖即可。"""
     try:
         rt = get_realtime_metrics()
+        net = rt.get("net", [])
+        merged = {}
+        for e in net:
+            name = e.get("name", "")
+            if name.endswith("-ovs"):
+                base = name[:-4]
+                merged[base] = {"name": base,
+                                "rx_rate": e.get("rx_rate", 0.0),
+                                "tx_rate": e.get("tx_rate", 0.0)}
+            elif name not in merged:
+                merged[name] = {"name": name,
+                                "rx_rate": e.get("rx_rate", 0.0),
+                                "tx_rate": e.get("tx_rate", 0.0)}
         diskio = rt["disk"]
         try:
             disk_map = {d["dev"]: d for d in get_disks()}
@@ -4163,9 +4178,10 @@ def api_metrics():
             d["size"] = info.get("size", "")
             d["brand"] = info.get("brand", "")
             d["type"] = info.get("type", "")
-        return jsonify({"net": rt["net"], "diskio": diskio})
+        return jsonify({"net": list(merged.values()), "diskio": diskio,
+                        "time": time.strftime("%Y-%m-%d %H:%M:%S")})
     except Exception as e:
-        return jsonify({"error": str(e)})
+        return jsonify({"error": str(e), "net": [], "diskio": []})
 
 @app.route("/api/history")
 def api_history():
