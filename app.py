@@ -913,10 +913,22 @@ def _fan_read_sys_temp(source):
             def _is_prio(t):
                 return any(p in t[1].lower() for p in _prio)
             if source == "mb":
-                mb = [t for t in temps if "coretemp" not in t[0].lower()]
+                # 主板温度 = Nuvoton/ITE 芯片上的 SYSTIN 测点（对应「主板温度」）。
+                # 优先精确取 SYSTIN；找不到时回落：排除 AUXTIN0~N 等常未接线、读虚高/乱值的扩展探头，
+                # 取其余非 CPU 芯片传感器的最高者（更贴近真实主板温度）。
+                systin = [t for t in temps if t[1].strip().upper() == "SYSTIN"]
+                if systin:
+                    return systin[0][2]
+                mb = [t for t in temps
+                      if "coretemp" not in t[0].lower()
+                      and not t[1].strip().upper().startswith("AUXTIN")]
                 if mb:
                     return max(t[2] for t in mb)
-                return max(t[2] for t in temps)  # 回落
+                # 再回落：非 CPU 芯片全部最高
+                mb2 = [t for t in temps if "coretemp" not in t[0].lower()]
+                if mb2:
+                    return max(t[2] for t in mb2)
+                return max(t[2] for t in temps)
             else:
                 # CPU：优先 CPU 封装/Tdie/Tctl 标签，再回落 coretemp 全部通道，最后回落全部传感器
                 prio = [t for t in temps if _is_prio(t)]
@@ -2048,9 +2060,8 @@ def get_disks():
                            "tran": p[3] if len(p) > 3 else ""}
     # 真实转速：smartctl -i 的 Rotation Rate（覆盖 ATA/SAS 机械盘；SSD 标“固态(SSD)”）
     rpm_map = _smart_rpm_by_serial()
-    for name in devnames:
+    def _collect_one_disk(name, info, rpm_map):
         dev = f"/dev/{name}"
-        info = linfo.get(name, {})
         size_b = info.get("size_b", "0")
         try:
             gb = int(size_b) / 1e9
@@ -2115,7 +2126,20 @@ def get_disks():
             elif "rpm" in disk["rpm"].lower():
                 disk["rota"] = "1"
         disk["health_ok"] = disk["health"].upper() in ("OK", "PASSED")
-        disks.append(disk)
+        return disk
+
+    # 并行采集：每块盘的 smartctl 相互独立，多线程同时跑，首屏 /api/all 不再被逐盘串行拖慢。
+    if devnames:
+        try:
+            from concurrent.futures import ThreadPoolExecutor
+            _w = min(8, len(devnames))
+            with ThreadPoolExecutor(max_workers=_w) as _ex:
+                disks = list(_ex.map(
+                    lambda n: _collect_one_disk(n, linfo.get(n, {}), rpm_map), devnames))
+        except Exception:
+            disks = [_collect_one_disk(n, linfo.get(n, {}), rpm_map) for n in devnames]
+    else:
+        disks = []
     return disks
 
 # ===================== 采集：系统资源 =====================
@@ -3281,6 +3305,38 @@ def get_system():
             _g["name"] = _sn
             _g["name_arch"] = _sa
     d["gpus"] = gpus
+
+    def _nic_hw_info(name):
+        # 补充单张网卡的硬件信息：MTU / 双工 / 驱动 / 总线 / 厂商型号。
+        # 全部失败也不影响其它采集（OVS 桥等虚拟口拿不到就留空）。
+        info = {"mtu": "", "duplex": "", "driver": "", "bus_info": "", "model": ""}
+        mtu = read_file(f"/sys/class/net/{name}/mtu").strip()
+        if mtu.isdigit():
+            info["mtu"] = mtu
+        dup = read_file(f"/sys/class/net/{name}/duplex").strip()
+        if dup:
+            info["duplex"] = dup
+        try:
+            out = run_cmd(["ethtool", "-i", name], 3)
+            for line in out.splitlines():
+                if line.startswith("driver:"):
+                    info["driver"] = line.split(":", 1)[1].strip()
+                elif line.startswith("bus-info:"):
+                    info["bus_info"] = line.split(":", 1)[1].strip()
+        except Exception:
+            pass
+        # 总线是 PCI 地址时，用 lspci -nn 反查厂商型号（飞牛的「网卡硬件信息」）
+        if info["bus_info"] and re.match(r"^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.", info["bus_info"], re.I):
+            try:
+                out = run_cmd(["lspci", "-nn", "-s", info["bus_info"]], 3)
+                # 行末可能带「 (rev 10)」等后缀，故不锚定行尾；只抓「]: 」到「[厂商:设备]」之间的描述
+                mh = re.search(r"\]:\s*(.+?)\s*\[[0-9a-f]{4}:[0-9a-f]{4}\]", out, re.S)
+                if mh:
+                    info["model"] = mh.group(1).strip()
+            except Exception:
+                pass
+        return info
+
     # 网卡（只显示物理网卡 / bond / 桥接端口，过滤 docker/虚拟网桥/容器/虚拟机等噪音接口）
     link_out = run_cmd(["ip", "-o", "link", "show"], 5)
     addr_out = run_cmd(["ip", "-o", "addr", "show"], 5)
@@ -3290,16 +3346,23 @@ def get_system():
     # - 不同版本/系统的 `ip -o addr show` 格式并不一致：有的接口名后带冒号，有的不带；
     #   有的 inet 在接口名同行，有的 inet 在续行。用状态机维护当前接口名最稳；
     # - 同一接口可能同时有 inet6/inet，这里优先取 IPv4。
-    ip_map = {}
+    ip4_map = {}
+    ip6_map = {}
     cur_iface = None
     for aline in addr_out.splitlines():
         header = re.match(r"^\d+:\s+(\S+)", aline)
         if header:
             # 去掉末尾可能存在的冒号和 @ifN 后缀，与 link 解析出的 name 对齐
             cur_iface = header.group(1).split("@")[0].rstrip(":")
-        im = re.search(r"\binet\s+(\S+)", aline)
-        if im and cur_iface and cur_iface not in ip_map:
-            ip_map[cur_iface] = im.group(1).split("/")[0]
+        if not cur_iface:
+            continue
+        im4 = re.search(r"\binet\s+(\S+)", aline)
+        if im4 and cur_iface not in ip4_map:
+            ip4_map[cur_iface] = im4.group(1).split("/")[0]
+        im6 = re.search(r"\binet6\s+(\S+)", aline)
+        if im6:
+            # 同一接口可能有多条 inet6（含 fe80 链路本地），用列表收集，优先全局地址
+            ip6_map.setdefault(cur_iface, []).append(im6.group(1).split("/")[0])
     # 纯虚拟/容器/虚拟机接口不计入物理网卡列表，避免「无IP」噪音干扰查看
     SKIP_NIC_PREFIX = ("lo", "docker", "br-", "veth", "ovs-system", "__tmp",
                        "flannel", "cni", "tailscale", "ts", "wg", "safeline", "vnet", "virbr")
@@ -3316,8 +3379,9 @@ def get_system():
         speed = read_file(f"/sys/class/net/{name}/speed").strip()
         if not speed.isdigit():
             speed = ""
-        ip = ip_map.get(name, "")
-        nics.append({"name": name, "state": state, "mac": mac, "speed": speed, "ip": ip})
+        ip = ip4_map.get(name, "")
+        nics.append({"name": name, "state": state, "mac": mac, "speed": speed,
+                      "ip": ip, "ipv6": ""})
     # 附加实时网速（来自采集 daemon 的 _metrics_cur，每 2s 刷新一次）
     try:
         with _METRICS_LOCK:
@@ -3329,31 +3393,54 @@ def get_system():
                 nic["tx_rate"] = rt.get("tx_rate", 0.0)
     except Exception:
         pass
-    # 飞牛默认使用 OVS 桥接：真实 IP 配在 eno1-ovs 上，eno1 物理口本身无 IP。
-    # 如果把两者都展示出来，就会出现「eno1 无 IP」和「eno1-ovs UNKNOWN/N/A」两行残缺信息。
-    # 这里把物理口与其对应的 OVS 桥合并成一条：名字用物理口，速度和状态从物理口拿，
-    # IP 和实时流量从 OVS 桥拿，最终页面上只显示一条完整记录。
-    ovs_bridges = {}
+    # 补充每张网卡的硬件信息（MTU / 双工 / 驱动 / 总线 / 厂商型号）与 IPv6
     for nic in nics:
-        name = nic.get("name", "")
-        if name.endswith("-ovs"):
-            ovs_bridges[name[:-4]] = nic
-    merged_nics = []
+        nic.update(_nic_hw_info(nic["name"]))
+        v6 = ip6_map.get(nic["name"], [])
+        # 优先全局地址，没有全局地址再退而求其次显示链路本地
+        nic["ipv6"] = next((a for a in v6 if not a.lower().startswith("fe80:")), (v6[0] if v6 else ""))
+    # 去重：同一物理网卡与其 OVS 桥/虚拟端口常共享 MAC 地址，会被识别成两条记录
+    # （如 fnOS 的 eno1 与 eno1-ovs 共享 MAC；接 USB 网卡时也可能出现「物理口 + 桥」两条）。
+    # 按 MAC 归并最稳健——物理口名（不含 -ovs 后缀）作展示名，IP/速率/状态/实时流量各取所长，
+    # 最终页面只显示一条完整记录。纯虚拟接口（无 MAC 或唯一 MAC）保持独立。
+    by_mac = {}
+    _no_mac = []
     for nic in nics:
-        name = nic.get("name", "")
-        if name.endswith("-ovs"):
+        mac = (nic.get("mac") or "").lower().strip()
+        if not mac:
+            _no_mac.append(nic)
             continue
-        if name in ovs_bridges:
-            ovs = ovs_bridges[name]
-            nic["ip"] = ovs.get("ip") or nic.get("ip")
-            nic["rx_rate"] = ovs.get("rx_rate", nic.get("rx_rate", 0.0))
-            nic["tx_rate"] = ovs.get("tx_rate", nic.get("tx_rate", 0.0))
-        merged_nics.append(nic)
-    # 若存在没有对应物理口的 OVS 桥（极少见），保留它但去掉 -ovs 后缀以便统一显示
-    for base, ovs in ovs_bridges.items():
-        if not any(n.get("name") == base for n in merged_nics):
-            ovs["name"] = base
-            merged_nics.append(ovs)
+        by_mac.setdefault(mac, []).append(nic)
+    merged_nics = []
+    for mac, grp in by_mac.items():
+        if len(grp) == 1:
+            merged_nics.append(grp[0])
+            continue
+        # 多条 → 合并：优先用物理口名（不含 -ovs）
+        phys = [n for n in grp if not n["name"].endswith("-ovs")] or grp
+        m = dict(phys[0])
+        for n in grp:
+            if not m.get("ip") and n.get("ip"):
+                m["ip"] = n["ip"]
+            if not m.get("speed") and n.get("speed"):
+                m["speed"] = n["speed"]
+            if n.get("state", "").upper() == "UP" and m.get("state", "").upper() != "UP":
+                m["state"] = n["state"]
+            if n.get("rx_rate") is not None:
+                m["rx_rate"] = n.get("rx_rate", 0.0)
+            if n.get("tx_rate") is not None:
+                m["tx_rate"] = n.get("tx_rate", 0.0)
+            for k in ("ipv6", "mtu", "duplex", "driver", "bus_info", "model"):
+                if not m.get(k) and n.get(k):
+                    m[k] = n[k]
+        # 显示名优先用 OVS 桥（与 fnOS 一致：真实 IP 配在桥上），硬件字段仍取自物理口
+        ovs = [n for n in grp if n["name"].endswith("-ovs")]
+        if ovs:
+            m["name"] = ovs[0]["name"]
+        # 实时流量轮询按「物理口名」匹配 /api/metrics（指标以物理口 eno1 上报，而非 eno1-ovs）
+        m["phy_name"] = phys[0]["name"].replace("-ovs", "") if phys[0]["name"].endswith("-ovs") else phys[0]["name"]
+        merged_nics.append(m)
+    merged_nics.extend(_no_mac)
     nics = merged_nics
     d["nics"] = nics
     # 主板 / 内存品牌型号（dmidecode），失败不影响其它采集
@@ -4046,24 +4133,43 @@ def get_realtime_metrics():
 @app.route("/api/all")
 def api_all():
     t0 = time.time()
+    from concurrent.futures import ThreadPoolExecutor
     try:
-        try:
-            board = get_board()
-        except Exception:
-            board = {"manufacturer": "", "product": "", "version": ""}
-        try:
-            memory_modules = get_memory_modules()
-        except Exception:
-            memory_modules = {"modules": [], "total_gb": 0, "slots": 0, "brand_summary": ""}
-        result = {
-            "raid": get_raid_card(),
-            "disks": get_disks(),
-            "system": {**get_system(), "board": board, "memory_modules": memory_modules},
-            "storage": get_storage(),
-            "docker": get_docker(),
-            "time": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "elapsed": round(time.time() - t0, 2),
-        }
+        def _safe(fn, default):
+            try:
+                return fn()
+            except Exception:
+                return default
+        # 各板块采集相互独立，并行跑，首屏不再被串行累加拖慢
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            f_sys = ex.submit(get_system)
+            f_board = ex.submit(get_board)
+            f_mem = ex.submit(get_memory_modules)
+            f_raid = ex.submit(get_raid_card)
+            f_disks = ex.submit(get_disks)
+            f_storage = ex.submit(get_storage)
+            f_docker = ex.submit(get_docker)
+            try:
+                board = f_board.result()
+            except Exception:
+                board = {"manufacturer": "", "product": "", "version": ""}
+            try:
+                memory_modules = f_mem.result()
+            except Exception:
+                memory_modules = {"modules": [], "total_gb": 0, "slots": 0, "brand_summary": ""}
+            try:
+                system = f_sys.result()
+            except Exception:
+                system = {}
+            result = {
+                "raid": _safe(f_raid.result, []),
+                "disks": _safe(f_disks.result, []),
+                "system": {**system, "board": board, "memory_modules": memory_modules},
+                "storage": _safe(f_storage.result, {}),
+                "docker": _safe(f_docker.result, {}),
+                "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "elapsed": round(time.time() - t0, 2),
+            }
         try:
             rt = get_realtime_metrics()
             result["net"] = rt["net"]

@@ -179,6 +179,12 @@
   .fan-label-save{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap}
   .fan-volt-select{padding:4px 6px;font-size:12px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text)}
   .fan-volt-select:focus{outline:none;border-color:var(--blue)}
+  .fan-pwmmode-badge{display:inline-block;padding:4px 8px;font-size:12px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text)}
+  .nic-tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
+  .nic-tab{padding:6px 14px;border:1px solid var(--border);background:var(--bg);color:var(--text);border-radius:6px;cursor:pointer;font-size:13px;line-height:1.4}
+  .nic-tab.active{background:var(--blue);color:#fff;border-color:var(--blue)}
+  .nic-ifname{font-weight:600;font-size:14px;margin-bottom:8px;color:var(--text)}
+  .nic-detail .kv:first-of-type{border-top:none;padding-top:0}
   .fan-label-state{font-size:12px;color:var(--green)}
   .volt-badge{display:inline-block;font-size:11px;font-weight:600;padding:1px 7px;border-radius:10px;background:var(--bg);color:var(--muted);border:1px solid var(--border);margin-left:4px}
   .fan-rpm{font-size:26px;font-weight:700;color:var(--blue);line-height:1.1}
@@ -666,6 +672,15 @@ function fmtSpeed(bps){
   if(bps < 1048576) return (bps/1024).toFixed(1) + ' KB/s';
   return (bps/1048576).toFixed(2) + ' MB/s';
 }
+// 网卡标签页切换（网口1/2/3/4），与顶端大标签页共用「active」配色
+function switchNic(idx){
+  document.querySelectorAll('.nic-tab').forEach(x=>x.classList.remove('active'));
+  let tb=document.querySelector('.nic-tab[data-nic-idx="'+idx+'"]');
+  if(tb) tb.classList.add('active');
+  document.querySelectorAll('.nic-detail').forEach(d=>d.style.display='none');
+  let el=document.getElementById('nic-detail-'+idx);
+  if(el) el.style.display='block';
+}
 
 function renderSystem(s){
   let memPct = s.memory.percent;
@@ -816,10 +831,7 @@ function renderFanControl(){
             <option value="5V" ${f.voltage==='5V'?'selected':''}>5V</option>
             <option value="未知" ${(!f.voltage||f.voltage==='未知')?'selected':''}>未知</option>
           </select>
-          ${f.pwm_mode?`<select class="fan-volt-select" id="${id}-pwmmode" title="接口调速方式。PWM=4针脉宽调速；DC=3针直流电压调速。3针风扇插在 PWM 口上常会一直全速，切成 DC 才能调速。能不能切由主板硬件决定，切不动会有提示。" onchange="setFanPwmMode('${f.hwmon}', ${f.idx}, this.value)">
-            <option value="pwm" ${f.pwm_mode==='pwm'?'selected':''}>PWM 调速</option>
-            <option value="dc" ${f.pwm_mode==='dc'?'selected':''}>DC 调速</option>
-          </select>`:''}
+          ${f.pwm_mode?`<span class="fan-pwmmode-badge" title="当前接口调速信号类型，由主板 BIOS 决定：PWM=4针脉宽调速，DC=3针直流电压调速。nasdash 只读取并显示当前模式，不修改（改不动是主板硬件限制，需在 BIOS 里切）。">调速方式：${f.pwm_mode==='pwm'?'PWM 调速':'DC 调速'}</span>`:''}
           <label class="fan-notach-lbl" title="勾上表示这口接的是 2 针或 3 针风扇（没有转速反馈线）。勾选后转速栏不再显示刺眼的 0，改显『无反馈线』，也不会再被当成故障风扇报警。"><input type="checkbox" id="${id}-notach" ${f.no_tach?'checked':''}>无反馈线</label>
           <button class="btn-mini" onclick="saveFanLabel('${f.hwmon}', ${f.idx})">保存标注</button>
           <button class="btn-mini" onclick="toggleFanHidden('${f.hwmon}', ${f.idx}, ${f.hidden?'false':'true'})" title="隐藏无风扇/无转速的空通道，可随时恢复">${f.hidden?'取消隐藏':'隐藏'}</button>
@@ -960,29 +972,6 @@ function fanPillInfo(f){
   if(am==='curve' && !f.has_curve) return {txt:'曲线温控（待设曲线）', cls:'b-muted'};
   var src = fanSrcLabel(f.rule_source);
   return {txt:(am==='curve'?'曲线温控':'线性温控') + (src?('·'+src):''), cls:'b-info'};
-}
-// 切换接口调速方式：PWM(4针脉宽) ↔ DC(3针电压)。
-// 能不能切完全由主板硬件决定：部分接口只做了 PWM 电路，内核会直接拒绝写入，
-// 这时把下拉框回退到真实值并把原因显示出来，避免用户以为是软件没生效。
-async function setFanPwmMode(hwmon, idx, mode){
-  markFanTouch();
-  var id=fanUid(hwmon, idx);
-  var st=document.getElementById(id+'-label-state');
-  var sel=document.getElementById(id+'-pwmmode');
-  if(st) st.textContent='切换中…';
-  try{
-    var r=await fetch('/api/fan/pwm_mode',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({hwmon:hwmon, idx:idx, pwm_mode:mode})});
-    var j=await r.json();
-    if(j && j.ok){
-      if(st) st.textContent = (mode==='dc' ? '已切到 DC 调速 ✓' : '已切到 PWM 调速 ✓');
-      loadData();
-    }else{
-      // 切换失败：下拉框回到硬件真实状态，并把「为什么切不了」讲清楚
-      if(sel && j && j.pwm_mode) sel.value=j.pwm_mode;
-      if(st) st.textContent=(j && j.error) ? j.error : '切换失败';
-    }
-  }catch(e){ if(st) st.textContent='请求失败'; }
 }
 async function setFanMode(hwmon, idx, mode){
   // mode: 'linear' / 'curve' / 'manual'
@@ -1869,24 +1858,44 @@ function renderDetect(D){
     <div class="kv"><span class="k">运行时间</span><span class="v">${s.uptime||'-'}</span></div>
     <div class="kv"><span class="k">交换分区</span><span class="v">${(s.swap&&s.swap.used)?(s.swap.used+' / '+s.swap.total):'-'}</span></div>
   </div>`;
-  let netCard = `
-  <div class="card" style="grid-column:1/-1">
-    <h3>网络</h3>
-    ${(s.nics||[]).filter(n=>{
-      let nm=(n.name||'').toLowerCase();
-      // 注意：只过滤 OVS 的「内部接口 ovs-system」，绝不能过滤 *-ovs 桥——
-      // fnOS 的真实 IP 就配在 eno1-ovs 这类 OVS 桥上，误过滤会导致整页显示「无IP」
-      return !/^(lo|ovs-system|docker|virbr|br-)|veth/.test(nm);
-    }).map(n=>{
+  let _nics = (s.nics||[]).filter(n=>{
+    let nm=(n.name||'').toLowerCase();
+    // 注意：只过滤 OVS 的「内部接口 ovs-system」，绝不能过滤 *-ovs 桥——
+    // fnOS 的真实 IP 就配在 eno1-ovs 这类 OVS 桥上，误过滤会导致整页显示「无IP」
+    return !/^(lo|ovs-system|docker|virbr|br-)|veth/.test(nm);
+  });
+  let netCard = '';
+  if(!_nics.length){
+    netCard = `<div class="card" style="grid-column:1/-1"><h3>网络</h3><div class="loading">未检测到网卡</div></div>`;
+  } else {
+    let tabs = _nics.map((n,i)=>`<button class="nic-tab ${i===0?'active':''}" data-nic-idx="${i}" onclick="switchNic(${i})">网口${i+1}</button>`).join('');
+    let details = _nics.map((n,i)=>{
       let st=(n.state||'').toUpperCase();
       let sc=st==='UP'?'var(--green)':'var(--red)';
       let sp=n.speed?n.speed+' Mbps':'N/A';
+      let duplex=n.duplex?n.duplex+'双工':'';
+      let cfg=[sp, duplex, n.mtu?('MTU '+n.mtu):''].filter(Boolean).join(' · ');
+      let hw=[n.model, n.driver?('驱动 '+n.driver):'', n.bus_info?('总线 '+n.bus_info):''].filter(Boolean).join(' · ');
+      let ipv6=n.ipv6||'无';
       let rx=(n.rx_rate!=null)?fmtSpeed(n.rx_rate):'—';
       let tx=(n.tx_rate!=null)?fmtSpeed(n.tx_rate):'—';
-      return `<div class="kv"><span class="k">${n.name}</span><span class="v">${n.ip||'无IP'} · ${sp} · <span style="color:${sc}">${st}</span></span></div>
-              <div class="kv" style="padding-left:10px"><span class="k" style="color:var(--muted);font-size:12px">实时流量</span><span class="v" style="font-size:12px" data-nic="${n.name}">↓ ${rx} / ↑ ${tx}</span></div>`;
-    }).join('')||'<div class="loading">未检测到</div>'}
-  </div>`;
+      return `<div class="nic-detail" id="nic-detail-${i}" style="${i===0?'':'display:none'}">
+        <div class="nic-ifname">${esc(n.name)}</div>
+        <div class="kv"><span class="k">IPv4 地址</span><span class="v">${esc(n.ip||'无 IP')}</span></div>
+        <div class="kv"><span class="k">IPv6 地址</span><span class="v">${esc(ipv6)}</span></div>
+        <div class="kv"><span class="k">MAC 地址</span><span class="v">${esc(n.mac||'-')}</span></div>
+        <div class="kv"><span class="k">网络配置</span><span class="v">${esc(cfg)}</span></div>
+        ${hw?`<div class="kv"><span class="k">硬件信息</span><span class="v">${esc(hw)}</span></div>`:''}
+        <div class="kv"><span class="k">状态</span><span class="v" style="color:${sc}">${esc(st)}</span></div>
+        <div class="kv"><span class="k">实时流量</span><span class="v" style="font-size:12px" data-nic="${esc(n.phy_name||n.name)}">↓ ${rx} / ↑ ${tx}</span></div>
+      </div>`;
+    }).join('');
+    netCard = `<div class="card" style="grid-column:1/-1">
+      <h3>网络</h3>
+      <div class="nic-tabs">${tabs}</div>
+      ${details}
+    </div>`;
+  }
   let gpuCard = `
   <div class="card">
     <h3>显卡</h3>
