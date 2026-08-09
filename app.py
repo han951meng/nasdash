@@ -1765,7 +1765,7 @@ def disk_brand_and_feature(model):
     feature = "双磁臂(双执行器)" if model_u in dual_models else ""
     return brand, feature
 
-@_ttl_cache(30)
+@_ttl_cache(600)
 def _smart_rpm_by_serial():
     """扫描所有 /dev/sdX，建立 {序列号(大写): 转速文本} 映射。
     storcli 不提供真实转速，必须用 smartctl -i 取 Rotation Rate（7200 rpm / 固态）。
@@ -1777,7 +1777,7 @@ def _smart_rpm_by_serial():
         return rpm_map
     for d in sorted(devs):
         try:
-            out = sudo_cmd(["smartctl", "-i", "/dev/" + d], 8)
+            out = sudo_cmd(["smartctl", "-n", "standby", "-i", "/dev/" + d], 8)
         except Exception:
             continue
         sn_m = re.search(r"Serial\s*(?:number|Number)\s*:\s*(\S+)", out)
@@ -2033,7 +2033,7 @@ def parse_nvme_smart(text):
     d["data_units_written"] = (m.group(1) + (m.group(2) or "")).strip() if m else None
     return d
 
-@_ttl_cache(12)
+@_ttl_cache(300)
 def get_disks():
     """采集所有块设备 + SMART（SD/SAS 用 ls /dev/sd*，NVMe 用 ls /dev/nvme*；再用正则过滤掉分区/控制器，
     支持多位盘名 sdaa/sdab 与多控制器 nvme10n1 等；smartctl 拿详情，不依赖 lsblk 字段对齐）"""

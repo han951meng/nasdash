@@ -71,6 +71,10 @@
   .spinner{display:inline-block;width:14px;height:14px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin .6s linear infinite}
   @keyframes spin{to{transform:rotate(360deg)}}
   .loading{text-align:center;padding:40px;color:var(--muted)}
+  .skeleton{background:linear-gradient(90deg,rgba(128,128,128,.12) 25%,rgba(128,128,128,.22) 37%,rgba(128,128,128,.12) 63%);background-size:400% 100%;animation:sk 1.4s ease infinite;border-radius:6px}
+  @keyframes sk{0%{background-position:100% 0}100%{background-position:0 0}}
+  .sk-card{border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:14px;background:var(--card)}
+  .sk-line{height:13px;margin:12px 0;border-radius:6px}
   pre{background:#1e293b;color:#e2e8f0;padding:14px;border-radius:8px;font-size:12px;overflow-x:auto;max-height:400px;white-space:pre-wrap}
   .section-title{font-size:15px;font-weight:600;margin:18px 0 10px;color:var(--text)}
   .pill{display:inline-block;padding:1px 8px;border-radius:6px;font-size:11px;margin-left:6px}
@@ -405,16 +409,16 @@
       <div style="flex:1">⚠️ <span id="alertText"></span><ul class="ab-list" id="alertList"></ul></div>
       <button class="ab-close" onclick="dismissAlerts()">✕</button>
     </div>
-    <div id="detect" class="panel active"><div class="loading">加载中…</div></div>
-    <div id="raid" class="panel"><div class="loading">加载中…</div></div>
-    <div id="disks" class="panel"><div class="loading">加载中…</div></div>
-    <div id="system" class="panel"><div class="loading">加载中…</div></div>
-    <div id="sys-hist" class="panel"><div class="loading">加载中…</div></div>
-    <div id="fan" class="panel"><div class="loading">加载中…</div></div>
-    <div id="storage" class="panel"><div class="loading">加载中…</div></div>
-    <div id="docker" class="panel"><div class="loading">加载中…</div></div>
-    <div id="automation" class="panel"><div class="loading">加载中…</div></div>
-    <div id="manual" class="panel"><div class="loading">加载中…</div></div>
+    <div id="detect" class="panel active"><div class="sk-card"><div class="skeleton sk-line" style="width:42%"></div><div class="skeleton sk-line" style="width:88%"></div><div class="skeleton sk-line" style="width:64%"></div></div></div>
+    <div id="raid" class="panel"><div class="sk-card"><div class="skeleton sk-line" style="width:36%"></div><div class="skeleton sk-line" style="width:82%"></div><div class="skeleton sk-line" style="width:58%"></div></div></div>
+    <div id="disks" class="panel"><div class="sk-card"><div class="skeleton sk-line" style="width:46%"></div><div class="skeleton sk-line" style="width:90%"></div><div class="skeleton sk-line" style="width:70%"></div></div></div>
+    <div id="system" class="panel"><div class="sk-card"><div class="skeleton sk-line" style="width:40%"></div><div class="skeleton sk-line" style="width:86%"></div><div class="skeleton sk-line" style="width:62%"></div></div></div>
+    <div id="sys-hist" class="panel"><div class="sk-card"><div class="skeleton sk-line" style="width:50%"></div><div class="skeleton sk-line" style="width:84%"></div><div class="skeleton sk-line" style="width:66%"></div></div></div>
+    <div id="fan" class="panel"><div class="sk-card"><div class="skeleton sk-line" style="width:38%"></div><div class="skeleton sk-line" style="width:80%"></div><div class="skeleton sk-line" style="width:56%"></div></div></div>
+    <div id="storage" class="panel"><div class="sk-card"><div class="skeleton sk-line" style="width:44%"></div><div class="skeleton sk-line" style="width:88%"></div><div class="skeleton sk-line" style="width:68%"></div></div></div>
+    <div id="docker" class="panel"><div class="sk-card"><div class="skeleton sk-line" style="width:34%"></div><div class="skeleton sk-line" style="width:78%"></div><div class="skeleton sk-line" style="width:54%"></div></div></div>
+    <div id="automation" class="panel"><div class="sk-card"><div class="skeleton sk-line" style="width:48%"></div><div class="skeleton sk-line" style="width:86%"></div><div class="skeleton sk-line" style="width:60%"></div></div></div>
+    <div id="manual" class="panel"><div class="sk-card"><div class="skeleton sk-line" style="width:40%"></div><div class="skeleton sk-line" style="width:82%"></div><div class="skeleton sk-line" style="width:58%"></div></div></div>
   </main>
 </div>
 <div class="nav-overlay" id="navOverlay" onclick="closeSidebar()"></div>
@@ -460,6 +464,58 @@ function switchTab(id, btn){
 function currentTab(){ var p=document.querySelector('.panel.active'); return p?p.id:'detect'; }
 // 按板块拉取 → 合并进全局 DATA → 只重渲该板块，避免每次都全量 /api/all
 var PANEL_ENDPOINT={system:'/api/system', fan:'/api/system', raid:'/api/raid', disks:'/api/disks', storage:'/api/storage', docker:'/api/docker'};
+// ===================== 增量更新（避免整块 innerHTML 重建导致闪烁/滚动归位/交互态丢失）=====================
+// 原理：若新旧 DOM 结构一致，只 patch 变化的文本节点与属性；结构变了（如盘位增减、容器增减）才整块重建。
+function _sigChildren(node){
+  const r=[];
+  for(const c of node.childNodes){
+    if(c.nodeType===1) r.push(c);                                   // 元素节点
+    else if(c.nodeType===3 && c.nodeValue.trim()!=='') r.push(c);   // 非空文本节点
+    // 注释 / 纯空白文本节点：不参与结构配对
+  }
+  return r;
+}
+function _morphAttrs(oldEl, newEl){
+  const newMap={};
+  for(const a of newEl.attributes) newMap[a.name]=a.value;
+  for(const a of Array.from(oldEl.attributes)){           // 删除旧有、新无的属性
+    if(!(a.name in newMap)) oldEl.removeAttribute(a.name);
+  }
+  for(const a of newEl.attributes){                        // 新增 / 更新
+    if(oldEl.getAttribute(a.name)!==a.value) oldEl.setAttribute(a.name, a.value);
+  }
+}
+// 返回 true = 结构不一致，调用方需整块重建
+function _morph(oldNode, newNode){
+  if(oldNode.nodeType!==newNode.nodeType) return true;
+  if(oldNode.nodeType===3){ // 文本：仅值变化时改写
+    if(oldNode.nodeValue!==newNode.nodeValue) oldNode.nodeValue=newNode.nodeValue;
+    return false;
+  }
+  if(oldNode.nodeType!==1) return true; // 其它节点类型视为结构不一致
+  if(oldNode.tagName!==newNode.tagName) return true;
+  _morphAttrs(oldNode, newNode);
+  const oc=_sigChildren(oldNode), nc=_sigChildren(newNode);
+  let i=0;
+  while(i<nc.length){
+    if(i>=oc.length) return true;          // 新结构多出节点
+    if(_morph(oc[i], nc[i])) return true;
+    i++;
+  }
+  return oc.length!==nc.length;            // 旧结构多出节点
+}
+function smartUpdate(el, html){
+  if(!el) return;
+  const tpl=document.createElement('div');
+  tpl.innerHTML=html;
+  const oc=_sigChildren(el), nc=_sigChildren(tpl);
+  if(!oc.length || oc.length!==nc.length){ el.innerHTML=html; return; } // 首次或结构变化 → 全量
+  for(let i=0;i<oc.length;i++){
+    if(_morph(oc[i], nc[i])){ el.innerHTML=html; return; }              // 结构不一致 → 全量
+  }
+  // 结构一致：仅变化的文本/属性已被 patch，无需重建
+}
+
 async function refreshPanel(id){
   if(!DATA){ return; }  // 首屏尚未 loadData 完成时不介入
   var spin=document.getElementById('spin'); if(spin) spin.style.display='inline-block';
@@ -488,11 +544,11 @@ async function refreshPanel(id){
 // 只重渲指定板块（不碰其他面板 DOM）
 function renderPanel(id){
   if(!DATA || DATA.error) return;
-  if(id==='raid'){ document.getElementById('raid').innerHTML=renderRaid(DATA.raid, DATA.disks); }
-  else if(id==='disks'){ document.getElementById('disks').innerHTML=renderDisks(DATA.disks); }
-  else if(id==='system'){ document.getElementById('system').innerHTML=renderSystem(DATA.system); }
-  else if(id==='storage'){ document.getElementById('storage').innerHTML=renderStorage(DATA.storage); }
-  else if(id==='docker'){ document.getElementById('docker').innerHTML=renderDocker(DATA.docker); }
+  if(id==='raid'){ smartUpdate(document.getElementById('raid'), renderRaid(DATA.raid, DATA.disks)); }
+  else if(id==='disks'){ smartUpdate(document.getElementById('disks'), renderDisks(DATA.disks)); }
+  else if(id==='system'){ smartUpdate(document.getElementById('system'), renderSystem(DATA.system)); }
+  else if(id==='storage'){ smartUpdate(document.getElementById('storage'), renderStorage(DATA.storage)); }
+  else if(id==='docker'){ smartUpdate(document.getElementById('docker'), renderDocker(DATA.docker)); }
   else if(id==='fan'){
     // 正在拖动滑块/编辑占空比、或打开了曲线编辑器/硬盘休眠联动面板时，跳过整页重建，
     // 避免打断操作（转速数值由 fetchFanStatus 每2秒刷新；曲线/休眠面板的编辑态不被冲掉）
@@ -2302,16 +2358,16 @@ function showAlerts(alerts){
 }
 function dismissAlerts(){ alertsDismissed=true; var b=document.getElementById('alertBanner'); if(b) b.classList.remove('show'); }
 
-function renderAll(){
+function renderAll(isCache){
   if(!DATA) return;
   if(DATA.error){
     document.querySelectorAll('.panel').forEach(p=>p.innerHTML='<div class="card"><div class="loading" style="color:var(--red)">加载失败: '+DATA.error+'</div></div>');
     return;
   }
   document.getElementById('detect').innerHTML = renderDetect(DATA);
-  document.getElementById('raid').innerHTML = renderRaid(DATA.raid, DATA.disks);
-  document.getElementById('disks').innerHTML = renderDisks(DATA.disks);
-  document.getElementById('system').innerHTML = renderSystem(DATA.system);
+  smartUpdate(document.getElementById('raid'), renderRaid(DATA.raid, DATA.disks));
+  smartUpdate(document.getElementById('disks'), renderDisks(DATA.disks));
+  smartUpdate(document.getElementById('system'), renderSystem(DATA.system));
   let _fa=document.activeElement;
   let _fanBusy = _fa && (_fa.classList.contains('fan-slider') || _fa.classList.contains('fan-custom-input'));
   if(!_fanBusy){
@@ -2319,9 +2375,9 @@ function renderAll(){
     bindFanSliders();
     loadFcsStatus();
   }
-  document.getElementById('storage').innerHTML = renderStorage(DATA.storage);
-  document.getElementById('docker').innerHTML = renderDocker(DATA.docker);
-  document.getElementById('lastUpdate').textContent = '更新于 '+DATA.time+' ('+DATA.elapsed+'s)';
+  smartUpdate(document.getElementById('storage'), renderStorage(DATA.storage));
+  smartUpdate(document.getElementById('docker'), renderDocker(DATA.docker));
+  document.getElementById('lastUpdate').textContent = (isCache?'（缓存）':'更新于 ')+DATA.time+(isCache?'':(' ('+DATA.elapsed+'s)'));
   showAlerts(DATA.alerts);
 }
 
@@ -2401,16 +2457,36 @@ async function loadHistory(){
   }catch(e){}
 }
 
+const CACHE_KEY = 'nasdash_all_cache_v1';
 async function loadData(){
+  // 1) 先用浏览器本地缓存「秒开」界面：硬刷新也能立刻看到上一次的内容，后台静默刷新最新数据
+  let usedCache = false;
+  try{
+    const raw = localStorage.getItem(CACHE_KEY);
+    if(raw){
+      const obj = JSON.parse(raw);
+      if(obj && obj.data){
+        DATA = obj.data;
+        renderAll(true);
+        usedCache = true;
+      }
+    }
+  }catch(e){ DATA = null; }
+  // 2) 后台静默拉取最新全量数据，到了再无缝覆盖
   document.getElementById('spin').style.display='inline-block';
   try{
     let r = await fetch('/api/all?_='+Date.now());
     DATA = await r.json();
-    renderAll();
+    renderAll(false);
+    try{ localStorage.setItem(CACHE_KEY, JSON.stringify({data:DATA, savedAt:new Date().toISOString()})); }catch(e){}
     initHistory();
     loadHistory();
   }catch(e){
-    document.getElementById('lastUpdate').textContent = '加载失败: '+e;
+    // 有缓存就保持缓存内容并提示后台刷新失败；无缓存才显示加载失败
+    if(!usedCache){
+      document.querySelectorAll('.panel').forEach(p=>p.innerHTML='<div class="card"><div class="loading" style="color:var(--red)">加载失败: '+esc(String(e))+'</div></div>');
+    }
+    document.getElementById('lastUpdate').textContent = (usedCache?'后台刷新失败，当前显示缓存 · ':'加载失败: ')+e;
   }
   document.getElementById('spin').style.display='none';
 }
