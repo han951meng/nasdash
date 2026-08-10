@@ -2006,7 +2006,7 @@ function renderDetect(D){
       return rows;
     }).join('<div class="gpu-sep"></div>'):'<div class="loading">未检测到核显 / 独显，或 BIOS 已禁用</div>'}
   </div>`;
-  let tempEntries = (s.sensors && s.sensors.temps || []).filter(t=>typeof t.value==='number'&&t.value>0&&t.value<100);
+  let tempEntries = (s.sensors && s.sensors.temps || []).filter(t=>typeof t.value==='number'&&t.value>0&&t.value<150);
   let tempWallCard = `
   <div class="card" style="grid-column:1/-1">
     <h3>温度墙</h3>
