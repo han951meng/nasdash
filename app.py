@@ -5,8 +5,12 @@
 单文件 Flask 应用：阵列卡状态 / 硬盘 SMART / 系统资源 / 存储卷
 部署目录: /opt/fnos-dash/
 """
-import subprocess, json, re, os, time, socket, platform, shutil, sys, glob, functools, errno, urllib.request, urllib.error
-from flask import Flask, jsonify, render_template, render_template_string, request, make_response, Response, stream_with_context
+import subprocess, json, re, os, time, socket, signal, platform, shutil, sys, glob, functools, errno, urllib.request, urllib.error, base64
+from flask import Flask, jsonify, render_template, render_template_string, request, make_response, Response, stream_with_context, send_from_directory
+try:
+    from markupsafe import Markup
+except Exception:
+    Markup = str
 from functools import wraps
 
 app = Flask(__name__)
@@ -112,8 +116,38 @@ def _app_version():
     return "v1.6.2"
 APP_VERSION = _app_version()
 
+def _load_icon_data(name):
+    """把 ui/images/ 下的 PNG 图标读成 base64 data URL，内嵌到页面里避免网关静态资源 302 问题。
+    返回 Markup 对象，避免 Jinja2 autoescape 在 JS/HTML 里把 data URL 转义成可见文本。"""
+    try:
+        path = os.path.join(os.path.dirname(__file__), "ui", "images", name)
+        with open(path, "rb") as f:
+            return Markup("data:image/png;base64," + base64.b64encode(f.read()).decode("ascii"))
+    except Exception:
+        return Markup("")
+# 左侧导航与面板大图标：统一采用用户提供的彩色插画图标，base64 内嵌避免网关静态资源 302 问题。
+ICON_DETECT_DATA = _load_icon_data("icon-detect.png")
+ICON_SYSTEM_DATA = _load_icon_data("icon-system.png")
+ICON_HISTORY_DATA = _load_icon_data("icon-history.png")
+ICON_RAID_DATA = _load_icon_data("icon-raid.png")
+ICON_HDD_DATA = _load_icon_data("icon-hdd.png")
+ICON_STORAGE_DATA = _load_icon_data("icon-storage.png")
+ICON_FAN_DATA = _load_icon_data("icon-fan.png")
+ICON_DOCKER_DATA = _load_icon_data("icon-docker.png")
+ICON_AUTOMATION_DATA = _load_icon_data("icon-automation.png")
+ICON_MANUAL_DATA = _load_icon_data("icon-manual.png")
+ICON_ABOUT_DATA = _load_icon_data("icon-about.png")
+
 def _fnos_version():
-    """尽力读取 fnOS 系统版本（底层 Debian，标准 os-release 不含 fnOS 版本号）。"""
+    """读取 fnOS 系统版本。优先从 /usr/trim/etc/version 读取；取不到再回退 os-release。"""
+    try:
+        if os.path.exists("/usr/trim/etc/version"):
+            with open("/usr/trim/etc/version", encoding="utf-8", errors="ignore") as f:
+                ver = f.read().strip()
+            if ver:
+                return "fnOS " + ver
+    except Exception:
+        pass
     for path in ("/usr/os-release", "/etc/fnos-release", "/etc/os-release"):
         try:
             with open(path) as f:
@@ -195,6 +229,7 @@ def _find_storcli():
 
 STORCLI = _find_storcli()
 SMARTCTL = "/usr/sbin/smartctl"
+BADBLOCKS = "/usr/sbin/badblocks"
 SENSORS = "/usr/bin/sensors"
 DMIDECODE = "/usr/sbin/dmidecode"
 
@@ -228,7 +263,7 @@ def _safe_token(s, maxlen=128):
         return None
     return s
 
-def _run_raw(args, timeout=30, as_root=False):
+def _run_raw(args, timeout=30, as_root=False, quiet=False):
     try:
         args = [str(a) for a in args]
         # 裸命令名按 PATH 解析（还原 shell=True 旧行为：fnOS 默认 PATH 不含 /usr/sbin，
@@ -240,20 +275,20 @@ def _run_raw(args, timeout=30, as_root=False):
         if as_root and os.geteuid() != 0:
             args = ["sudo", "-n"] + args
         r = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
-        if r.returncode != 0 and r.stderr.strip():
+        if not quiet and r.returncode != 0 and r.stderr.strip():
             log("cmd failed (rc=%d): %s\n%s" % (r.returncode, " ".join(args), r.stderr.strip()))
         return r.stdout
     except Exception as e:
         log("cmd error: %s\n%s" % (" ".join(map(str, args)), e))
         return ""
 
-def run_cmd(args, timeout=30):
+def run_cmd(args, timeout=30, quiet=False):
     """shell=False 执行（推荐）：args 为参数列表，不接受字符串。"""
-    return _run_raw(args, timeout, as_root=False)
+    return _run_raw(args, timeout, as_root=False, quiet=quiet)
 
-def sudo_cmd(args, timeout=30):
+def sudo_cmd(args, timeout=30, quiet=False):
     """shell=False 执行需 root 的命令（自动 passwordless sudo 兜底）。"""
-    return _run_raw(args, timeout, as_root=True)
+    return _run_raw(args, timeout, as_root=True, quiet=quiet)
 
 # ===================== JSON 配置读写（统一）=====================
 def _load_json_file(path, default):
@@ -386,6 +421,28 @@ def _fan_write_raw(hwmon, idx, raw):
     except Exception:
         return False
 
+# 接管总开关关闭时落到的「安全待机占空比」：保持 enable=1 手动模式，不写 2。
+# 原因：NCT6797 上 pwm_enable=2（交还芯片 Thermal Cruise）会把风扇拉到满速狂转；
+# 这块 DIY 主板又无 fnOS 原生 FCS 可接管，故只能由 nasdash 以手动模式落一个安静待机值并停手，
+# 让用户明确看到「接管已释放、风扇已放慢」，而不是冻结在高位看着像还在控。
+_FAN_RELEASE_IDLE_PWM = 30
+
+def _fan_release_to_idle():
+    """接管总开关关闭时：把每个「真实在转」的风扇降到安全待机占空比并停手。
+    跳过无转速反馈的口（如水泵 / 真空口 / 未接风扇，fanN_input 读 0），避免误把水泵降到低速影响散热。
+    不写 pwm_enable=2（NCT6797 上 Thermal Cruise 会狂转），详见上方常量注释。"""
+    for (hwmon, idx) in _enumerate_fans():
+        try:
+            try:
+                with open(f"{hwmon}/fan{idx}_input") as _f:
+                    if int((_f.read().strip() or 0)) <= 0:
+                        continue
+            except Exception:
+                pass
+            _fan_write_raw(hwmon, idx, _FAN_RELEASE_IDLE_PWM)
+        except Exception:
+            pass
+
 def _fan_ext_service_running():
     # 检测系统风扇服务（pwm-fancontrol，fnOS 自带）是否处于 active 状态。
     # fnOS 的风扇服务是 oneshot 服务（跑完写一次 PWM 即退出，非常驻进程），
@@ -403,6 +460,8 @@ _FCS_TAKEN = {"v": False}
 # 用户可在面板「永久禁用」FanControlServer（stop+disable，重启不复活）；持久化到 @appdata。
 # 为 True 时，nasdash 交还自动控温后不再把 FCS 拉起来，尊重用户选择。
 FCS_STATE_FILE = os.path.join(_config_dir(), "fcs_state.json")
+# systemctl start/stop pwm-fancontrol 可能慢至数秒，用锁+后台线程避免阻塞 HTTP 请求。
+_FCS_OP_LOCK = _threading.Lock()
 
 def _fcs_disabled():
     """用户是否已在面板永久禁用 FanControlServer（读持久化标志）。"""
@@ -428,26 +487,63 @@ def _fcs_status():
         "raw": raw,
     }
 
+# FCS 状态查询涉及 systemctl is-active/is-enabled，可能各耗时 1~3 秒。
+# 面板高频刷新（切页/切换开关）时不必每次都重新跑命令，缓存 5 秒可大幅缩短「加载中」时间。
+_FCS_STATUS_CACHE = {"t": 0.0, "v": None}
+_FCS_STATUS_TTL = 5.0
+
+def _fcs_status_cached(clear=False):
+    """带 TTL 缓存的 FCS 状态查询。切换开关等操作后调用 clear=True 立即刷新。"""
+    global _FCS_STATUS_CACHE
+    if clear:
+        _FCS_STATUS_CACHE["t"] = 0.0
+    now = time.time()
+    if now - _FCS_STATUS_CACHE["t"] < _FCS_STATUS_TTL and _FCS_STATUS_CACHE["v"] is not None:
+        return _FCS_STATUS_CACHE["v"]
+    v = _fcs_status()
+    _FCS_STATUS_CACHE["t"] = now
+    _FCS_STATUS_CACHE["v"] = v
+    return v
+
+def _fcs_has_board_config():
+    """判断 FCS 是否真的配置了风扇参数。飞牛部分机型 /boot/board.json 为空或没有 fan 段，
+    此时启动 pwm-fancontrol 只是空跑 RemainAfterExit，并不会接管风扇。"""
+    try:
+        with open("/boot/board.json") as _fh:
+            _d = _json.load(_fh)
+        _fans = _d.get("fan") if isinstance(_d, dict) else None
+        return isinstance(_fans, list) and len(_fans) > 0
+    except Exception:
+        return False
+
 def _fan_stop_ext_service():
-    """临时停止系统风扇服务 FanControlServer（接管窗口内，仅 best-effort）。"""
-    try:
-        sudo_cmd(["systemctl", "stop", "pwm-fancontrol"], 5)
-    except Exception:
-        pass
-    try:
-        sudo_cmd(["pkill", "-f", "pwm-fancontrol"], 2)
-    except Exception:
-        pass
+    """临时停止系统风扇服务 FanControlServer（接管窗口内，仅 best-effort）。
+    后台线程执行，避免 systemctl stop 数秒阻塞 HTTP/主控循环。"""
+    def _do_stop():
+        with _FCS_OP_LOCK:
+            try:
+                sudo_cmd(["systemctl", "stop", "pwm-fancontrol"], 5)
+            except Exception:
+                pass
+            try:
+                sudo_cmd(["pkill", "-f", "pwm-fancontrol"], 2)
+            except Exception:
+                pass
+    _threading.Thread(target=_do_stop, daemon=True).start()
 
 def _fan_start_ext_service():
     """交还自动时重启系统风扇服务 FanControlServer（仅 best-effort）。
-    若用户已在面板「永久禁用」FCS，则不再拉起，尊重用户选择。"""
+    若用户已在面板「永久禁用」FCS，则不再拉起，尊重用户选择。
+    后台线程执行，避免 systemctl start 数秒阻塞 HTTP/主控循环。"""
     if _fcs_disabled():
         return
-    try:
-        sudo_cmd(["systemctl", "start", "pwm-fancontrol"], 5)
-    except Exception:
-        pass
+    def _do_start():
+        with _FCS_OP_LOCK:
+            try:
+                sudo_cmd(["systemctl", "start", "pwm-fancontrol"], 5)
+            except Exception:
+                pass
+    _threading.Thread(target=_do_start, daemon=True).start()
 
 def _fcs_disable():
     """永久禁用 FanControlServer：stop + disable（重启不复活）+ 持久化标志。
@@ -615,17 +711,51 @@ def _select_temp_fans(all_fans, sys_cfg, disk_cfg):
     sys_claimed -= disk_claimed
     return sys_claimed, disk_claimed
 
+# ===================== 风扇接管总开关 =====================
+# 关闭后 nasdash 不再根据温度自动调速。若飞牛自带风扇服务已配置，会交还它接管；
+# 否则保持当前转速、不再写 PWM。
+FAN_CONTROL_CFG = os.path.join(_config_dir(), "fan_control.json")
+_FAN_CTRL_ENABLED = True
+
+def _load_fan_control_enabled():
+    global _FAN_CTRL_ENABLED
+    try:
+        d = _load_json_file(FAN_CONTROL_CFG, None)
+        if isinstance(d, dict) and "enabled" in d:
+            _FAN_CTRL_ENABLED = bool(d["enabled"])
+    except Exception:
+        pass
+    return _FAN_CTRL_ENABLED
+
+_load_fan_control_enabled()
+
 def _restore_fan_modes():
     """nasdash 启动后自动恢复风扇模式，避免重启后 FAN_TARGETS 空导致风扇保持硬件全速：
     - 有持久化配置：按用户上次选择恢复（auto 接管；若 FCS 在控则交还 enable=2；manual 恢复固定值）。
     - 无配置（首次/清配置）：若系统风扇服务 FCS 未在控，默认将所有可控风扇设为 auto 接管，
       消除开机全速；若 FCS 在控则交还、不强行接管（尊重 fnOS 原生控温）。"""
     try:
+        if not _FAN_CTRL_ENABLED:
+            # 接管关闭：优先把控制权交还 fnOS 原生 FanControlServer（FCS）。
+            # FCS 使用 enable=1 + pwm 手动控速；若我们再写 enable=2 会覆盖它，导致风扇被卡在高速。
+            # 若 FCS 真的配置了风扇参数，启动它接管；否则 nasdash 不再写 PWM，
+            # 保持风扇当前手动值（避免部分主板 enable=2 反而把转速拉得更高）。
+            if not _fcs_disabled() and _fcs_installed_state() == "enabled" and _fcs_has_board_config():
+                _fan_start_ext_service()
+            else:
+                # 无 FCS 可接管：落到安全待机占空比，避免开机即高位冻结/狂转。
+                try:
+                    _fan_release_to_idle()
+                except Exception:
+                    pass
+            return
         enum = _enumerate_fans()
         idx2hw = {i: h for (h, i) in enum}
         if not idx2hw:
             return
-        fcs = _fan_ext_service_running()
+        # FCS 服务 active(exited) 不代表它真的能控速：/boot/board.json 为空时它只是空跑。
+        # 只有服务在跑且配置了风扇参数时，才视为「系统在控」，nasdash 不抢。
+        fcs = _fan_ext_service_running() and _fcs_has_board_config()
         modes = _load_fan_modes()
         if not modes:
             # 首次/无配置：FCS 未控则默认接管 auto；FCS 在控则交还、不抢
@@ -682,7 +812,10 @@ def _fan_ensure_all_claimed():
     解决硬重启时序（hwmon 晚于 nasdash 自启注册、启动期枚举不全）与 fan_mode.json 不完整
     导致的「部分风扇失控、开机狂转」。已显式设为 manual 的风扇在 FAN_TARGETS 中会被跳过，不被覆盖。"""
     try:
-        if _fan_ext_service_running():
+        if not _FAN_CTRL_ENABLED:
+            return
+        # 同上：FCS 没真配置时不视为「系统在控」，nasdash 该接管就接管，否则风扇会全速。
+        if _fan_ext_service_running() and _fcs_has_board_config():
             return
         enum = _enumerate_fans()
         with FAN_LOCK:
@@ -696,6 +829,20 @@ def fan_smooth_loop():
     # daemon 线程：每 ~0.6s 把风扇当前 pwm 朝目标平滑过渡（常驻线程 tick + 缓变）
     while True:
         try:
+            if not _FAN_CTRL_ENABLED:
+                # 接管关闭：优先把控制权交还 fnOS 原生 FanControlServer（FCS）。
+                # FCS 使用 enable=1 + pwm 手动控速；若我们再写 enable=2 会覆盖 FCS，
+                # 使风扇被卡在最后的高位。因此 FCS 真的配置了风扇参数时只启动/保持它，
+                # 不再写 enable=2；否则 nasdash 直接停手，保持风扇当前手动值，
+                # 避免某些主板 enable=2 后转速反而被拉得更高。
+                if not _fcs_disabled() and _fcs_installed_state() == "enabled" and _fcs_has_board_config():
+                    if _FCS_TAKEN["v"]:
+                        try: _fan_start_ext_service(); _FCS_TAKEN["v"] = False
+                        except Exception: pass
+                    if not _fan_ext_service_running():
+                        _fan_start_ext_service()
+                time.sleep(0.6)
+                continue
             # 自愈：每轮确保本机枚举到的每个可控风扇都被接管为 auto（除非用户显式设为 manual）。
             # 解决硬重启时序（hwmon 晚于 nasdash 自启注册、启动期枚举不全）与 fan_mode.json 不完整
             # 导致的「部分风扇失控、开机狂转」。FCS 在控时不抢（交还原生控温）。
@@ -2033,6 +2180,248 @@ def parse_nvme_smart(text):
     d["data_units_written"] = (m.group(1) + (m.group(2) or "")).strip() if m else None
     return d
 
+# ===================== 硬盘自检（A/B 双档）=====================
+# A 档：smartctl -t long（只读， firmware 面扫，安全，可后台运行）。
+# B 档：badblocks -wsv（读写覆盖，破坏性，仅允许独立盘：未挂载、非 RAID/LVM 成员）。
+DISK_TEST_LOCK = _threading.Lock()
+DISK_TEST_JOBS = {}
+
+
+def _is_standalone_disk(dev):
+    """判断 dev 是否为「独立盘」：整块磁盘、未挂载、未被 RAID/LVM 等持有。"""
+    if not _safe_token(dev):
+        return False, "非法设备名"
+    # 注意：必须加 -d（只看该设备本身），否则会递归列出其子设备（分区/RAID/LVM）的类型，
+    # 导致即便顶层是 disk 也被误判为「非整块磁盘」。
+    typ = run_cmd(["lsblk", "-ndno", "TYPE", "/dev/%s" % dev], 3).strip()
+    if typ != "disk":
+        return False, "%s 不是整块磁盘（类型：%s）" % (dev, typ or "未知")
+    try:
+        tree = json.loads(run_cmd(["lsblk", "-J", "-o", "NAME,MOUNTPOINT,TYPE", "/dev/%s" % dev], 3) or "{}")
+    except Exception:
+        tree = {}
+    mounted = False
+    def _has_mount(node):
+        if node.get("mountpoint"):
+            return True
+        for c in node.get("children", []):
+            if _has_mount(c):
+                return True
+        return False
+    for node in tree.get("blockdevices", []):
+        if _has_mount(node):
+            mounted = True
+            break
+    if mounted:
+        return False, "%s 或其分区已被挂载，无法执行破坏性测试" % dev
+    holders = []
+    try:
+        holders = os.listdir("/sys/block/%s/holders/" % dev)
+    except Exception:
+        pass
+    if holders:
+        return False, "%s 正被其他块设备持有（%s），可能是 RAID/LVM 成员" % (dev, ", ".join(holders))
+    return True, ""
+
+
+def _set_disk_test_done(dev, message, error=None):
+    with DISK_TEST_LOCK:
+        job = DISK_TEST_JOBS.get(dev)
+        if not job:
+            return
+        job["state"] = "aborted" if error == "用户中止" else ("error" if error else "done")
+        job["message"] = message
+        job["error"] = error
+        job["elapsed"] = int(time.time() - job["started_at"])
+
+
+def _abort_smart_long(dev):
+    sudo_cmd([SMARTCTL, "-X", "/dev/%s" % dev], 10)
+    _set_disk_test_done(dev, "SMART 长自检已中止", error="用户中止")
+
+
+def _start_smart_long(dev):
+    out = sudo_cmd([SMARTCTL, "-t", "long", "/dev/%s" % dev], 30)
+    if "invalid" in out.lower() or ("error" in out.lower() and "abort" not in out.lower()):
+        if "in progress" not in out.lower():
+            raise RuntimeError(out.strip().splitlines()[-1] if out.strip() else "smartctl 启动自检失败")
+    with DISK_TEST_LOCK:
+        DISK_TEST_JOBS[dev] = {
+            "type": "long",
+            "state": "running",
+            "started_at": time.time(),
+            "message": "SMART 长自检已启动，正在轮询进度",
+            "progress": 0,
+            "elapsed": 0,
+            "eta_total": None,
+            "eta_remain": None,
+            "result": None,
+            "error": None,
+        }
+    _threading.Thread(target=_smart_long_worker, args=(dev,), daemon=True).start()
+
+
+def _smart_long_worker(dev):
+    dev_path = "/dev/%s" % dev
+    last_poll = 0
+    while True:
+        with DISK_TEST_LOCK:
+            job = DISK_TEST_JOBS.get(dev)
+        if not job or job.get("state") != "running":
+            break
+        now = time.time()
+        if now - last_poll < 20:
+            time.sleep(2)
+            continue
+        last_poll = now
+        try:
+            cap = sudo_cmd([SMARTCTL, "-c", dev_path], 15)
+            m = re.search(r"Self-test routine in progress.*? (\d+)% remaining", cap, re.I | re.S)
+            if m:
+                rem = int(m.group(1))
+                prog = max(0, min(100, 100 - rem))
+                with DISK_TEST_LOCK:
+                    j = DISK_TEST_JOBS.get(dev)
+                    if j and j["state"] == "running":
+                        j["progress"] = prog
+                        j["message"] = "SMART 长自检进行中，剩余 %d%%" % rem
+                        j["elapsed"] = int(now - j["started_at"])
+                        if prog > 0.5:
+                            _eta = (now - j["started_at"]) / (prog / 100.0)
+                            j["eta_total"] = int(_eta)
+                            j["eta_remain"] = max(0, int(_eta - (now - j["started_at"])))
+                continue
+            log_out = sudo_cmd([SMARTCTL, "-l", "selftest", dev_path], 15)
+            lines = [l for l in log_out.splitlines() if re.match(r"^\s*\d+", l.strip())]
+            if lines:
+                parts = lines[0].split()
+                status = " ".join(parts[2:-2]) if len(parts) >= 4 else ""
+                if "completed without error" in status.lower():
+                    _set_disk_test_done(dev, "SMART 长自检完成，无错误")
+                elif "aborted" in status.lower() or "interrupted" in status.lower():
+                    _set_disk_test_done(dev, "SMART 长自检已中止", error="用户中止")
+                else:
+                    _set_disk_test_done(dev, "SMART 长自检结束：%s" % status, error=status if "error" in status.lower() else None)
+            else:
+                _set_disk_test_done(dev, "SMART 长自检完成")
+        except Exception as e:
+            _set_disk_test_done(dev, "SMART 长自检异常：%s" % e, error=str(e))
+            break
+        time.sleep(5)
+
+
+def _estimate_badblocks_eta(dev):
+    """根据容量和 SSD/HDD 给 badblocks -wsv（4 pass 覆写）一个保守参考总用时（秒）。"""
+    try:
+        size_bytes = int(subprocess.check_output(["blockdev", "--getsize64", "/dev/%s" % dev], text=True, stderr=subprocess.DEVNULL).strip())
+    except Exception:
+        return None
+    try:
+        with open("/sys/block/%s/queue/rotational" % dev) as f:
+            is_hdd = f.read().strip() == "1"
+    except Exception:
+        is_hdd = True
+    # 保守写速：HDD 约 50MB/s，SSD 约 120MB/s；4 pass 总数据量 = 容量 * 4
+    speed = 50 * 1024 * 1024 if is_hdd else 120 * 1024 * 1024
+    if size_bytes <= 0 or speed <= 0:
+        return None
+    return int(size_bytes * 4 / speed)
+
+
+def _start_badblocks(dev):
+    ok, reason = _is_standalone_disk(dev)
+    if not ok:
+        raise RuntimeError(reason)
+    dev_path = "/dev/%s" % dev
+    cmd = [BADBLOCKS, "-wsv", dev_path]
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+    except Exception as e:
+        raise RuntimeError("启动 badblocks 失败：%s" % e)
+    with DISK_TEST_LOCK:
+        DISK_TEST_JOBS[dev] = {
+            "type": "badblocks",
+            "state": "running",
+            "started_at": time.time(),
+            "message": "坏块慢扫已启动（破坏性，会覆盖全盘数据）",
+            "progress": 0,
+            "elapsed": 0,
+            "eta_total": None,
+            "eta_remain": None,
+            "eta_total_hint": _estimate_badblocks_eta(dev),  # 基于容量的参考总用时，0% 阶段先给用户一个大概
+            "result": None,
+            "error": None,
+            "pid": proc.pid,
+        }
+    _threading.Thread(target=_badblocks_worker, args=(dev, proc), daemon=True).start()
+
+
+def _badblocks_worker(dev, proc):
+    try:
+        buf = ""
+        pass_completed = 0
+        total_passes = 4  # badblocks -w 固定 4 个 pattern pass（0xaa/0x55/0xff/0x00）
+        while True:
+            chunk = proc.stdout.read(512)
+            if not chunk:
+                break
+            buf += chunk
+            tail = buf[-8192:]
+            m = re.search(r"([\d.]+)% done", tail)
+            cur = float(m.group(1)) if m else None
+            pc = buf.count("Pass completed")
+            if pc > pass_completed:
+                pass_completed = pc
+            if cur is not None:
+                # 把 4 个 pass 各自的 0~100% 折算成整体进度，避免 ETA 被低估 4 倍、进度条回弹
+                overall = (pass_completed + cur / 100.0) / total_passes * 100.0
+                overall = max(0.0, min(100.0, overall))
+                now = time.time()
+                with DISK_TEST_LOCK:
+                    j = DISK_TEST_JOBS.get(dev)
+                    if j and j["state"] == "running":
+                        j["progress"] = round(overall, 1)
+                        j["elapsed"] = int(now - j["started_at"])
+                        if overall > 0:
+                            total_eta = j["elapsed"] / (overall / 100.0)
+                            j["eta_total"] = int(total_eta)
+                            j["eta_remain"] = max(0, int(total_eta - j["elapsed"]))
+            em = re.search(r"\((\d+)/(\d+)/(\d+) errors\)", tail)
+            if em:
+                read_err, write_err, corr = em.groups()
+                with DISK_TEST_LOCK:
+                    j = DISK_TEST_JOBS.get(dev)
+                    if j:
+                        j["result"] = {"read_errors": read_err, "write_errors": write_err, "corrected": corr}
+        rc = proc.wait()
+        with DISK_TEST_LOCK:
+            j = DISK_TEST_JOBS.get(dev)
+        if j and j["state"] == "running":
+            if rc == 0:
+                _set_disk_test_done(dev, "坏块慢扫完成，未发现坏块")
+            else:
+                _set_disk_test_done(dev, "坏块慢扫退出（返回码 %d）" % rc, error="返回码 %d" % rc)
+    except Exception as e:
+        _set_disk_test_done(dev, "坏块慢扫异常：%s" % e, error=str(e))
+
+
+def _abort_badblocks(dev):
+    with DISK_TEST_LOCK:
+        job = DISK_TEST_JOBS.get(dev)
+        pid = job.get("pid") if job else None
+    if pid:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except Exception:
+            pass
+        time.sleep(0.5)
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except Exception:
+            pass
+    _set_disk_test_done(dev, "坏块慢扫已中止", error="用户中止")
+
+
 @_ttl_cache(300)
 def get_disks():
     """采集所有块设备 + SMART（SD/SAS 用 ls /dev/sd*，NVMe 用 ls /dev/nvme*；再用正则过滤掉分区/控制器，
@@ -2069,6 +2458,9 @@ def get_disks():
         except:
             size_str = "?"
         smart_out = sudo_cmd([SMARTCTL, "-n", "standby", "-a", dev], 20)
+        # 偶发超时/总线竞争导致空输出时重试一次；STANDBY 状态不重试，避免唤醒休眠盘。
+        if not smart_out and "STANDBY" not in smart_out.upper():
+            smart_out = sudo_cmd([SMARTCTL, "-n", "standby", "-a", dev], 20)
         disk = {
             "dev": name, "size": size_str, "rota": info.get("rota", "?"),
             "model": "", "serial": "", "tran": info.get("tran", ""), "vendor": "",
@@ -2126,13 +2518,14 @@ def get_disks():
             elif "rpm" in disk["rpm"].lower():
                 disk["rota"] = "1"
         disk["health_ok"] = disk["health"].upper() in ("OK", "PASSED")
+        disk["standalone"], disk["standalone_reason"] = _is_standalone_disk(name)
         return disk
 
     # 并行采集：每块盘的 smartctl 相互独立，多线程同时跑，首屏 /api/all 不再被逐盘串行拖慢。
     if devnames:
         try:
             from concurrent.futures import ThreadPoolExecutor
-            _w = min(8, len(devnames))
+            _w = min(4, len(devnames))
             with ThreadPoolExecutor(max_workers=_w) as _ex:
                 disks = list(_ex.map(
                     lambda n: _collect_one_disk(n, linfo.get(n, {}), rpm_map), devnames))
@@ -2689,8 +3082,11 @@ def get_system():
                             continue
                         prefix = fn.replace("_input", "")
                         if fn.startswith("temp"):
+                            # 跳过未接线的扩展虚拟探头（AUXTIN0~N 在多数主板上无真实温度源，常报 70~100+°C 虚高）
+                            if ename.strip().upper().startswith("AUXTIN"):
+                                continue
                             if fv < -50 or fv > 150:
-                                break
+                                continue
                             mx = fields.get(f"{prefix}_max")
                             cr = fields.get(f"{prefix}_crit")
                             if cs != "coretemp":
@@ -3565,14 +3961,14 @@ def _listening_ports_for_pids(pids):
 def _container_pids(name):
     """用 docker top 取容器内所有进程 PID（host 网络模式端口归属用）"""
     pids = []
-    out = sudo_cmd(["docker", "top", name], 5)
+    out = sudo_cmd(["docker", "top", name], 5, quiet=True)
     for line in out.splitlines()[1:]:  # 跳过表头
         f = line.split()
         if len(f) >= 2 and f[1].isdigit():
             pids.append(int(f[1]))
     return pids
 
-def _detect_ports(meta):
+def _detect_ports(meta, running=False):
     """根据 docker inspect 信息自动探测端口号（兼容 bridge 发布端口 / host 模式真实监听端口）"""
     netmode = (meta.get("netmode") or "bridge")
     ports_map = meta.get("ports") or {}
@@ -3600,12 +3996,15 @@ def _detect_ports(meta):
                     parts.append(s)
     # 2) host 网络模式：端口即主机端口，按进程归属探测真实监听端口
     if netmode.startswith("host"):
-        pids = _container_pids(meta.get("name", ""))
-        if pids:
-            for p in _listening_ports_for_pids(pids):
-                parts.append(f"{p}/tcp")
+        if not running:
+            parts.append("容器停止不检测端口")
         else:
-            parts.append("host 网络")
+            pids = _container_pids(meta.get("name", ""))
+            if pids:
+                for p in _listening_ports_for_pids(pids):
+                    parts.append(f"{p}/tcp")
+            else:
+                parts.append("host 网络")
     # 3) 非 host 且无发布端口：探测容器内部监听端口（提示性）
     if not ports_map and not netmode.startswith("host") and pid:
         for p in _listening_ports_in_netns(pid):
@@ -3699,12 +4098,13 @@ def get_docker():
                         "netmode": (c.get("HostConfig", {}).get("NetworkMode") or "bridge"),
                         "pid": c.get("State", {}).get("Pid", 0),
                         "ports": c.get("NetworkSettings", {}).get("Ports") or {},
+                        "running": c.get("State", {}).get("Running", False),
                         "name": nm,
                     }
                 for c in containers:
                     meta = info.get(c["name"])
                     if meta:
-                        c["ports"] = _detect_ports(meta)
+                        c["ports"] = _detect_ports(meta, meta.get("running", False))
         except Exception:
             # 兜底：用 docker ps 的 Ports 字段
             try:
@@ -3756,10 +4156,29 @@ def get_docker():
         return {"running": 0, "total": 0, "containers": [], "ok": False}
 
 # ===================== 路由 =====================
+@app.route("/ui/images/<path:filename>")
+def ui_images(filename):
+    """暴露 ui/images 下的静态图标，供页面内 <img> 引用。"""
+    return send_from_directory(os.path.join(os.path.dirname(__file__), "ui", "images"), filename)
+
 @app.route("/")
 def index():
     # no-store：防止浏览器/代理缓存 HTML，避免发版或重启后用户仍看到旧页面（曾导致 FCS 卡片永久“加载中”）
-    resp = make_response(render_template("index.html", APP_VERSION=APP_VERSION))
+    resp = make_response(render_template(
+        "index.html",
+        APP_VERSION=APP_VERSION,
+        ICON_DETECT_DATA=ICON_DETECT_DATA,
+        ICON_SYSTEM_DATA=ICON_SYSTEM_DATA,
+        ICON_HISTORY_DATA=ICON_HISTORY_DATA,
+        ICON_RAID_DATA=ICON_RAID_DATA,
+        ICON_HDD_DATA=ICON_HDD_DATA,
+        ICON_STORAGE_DATA=ICON_STORAGE_DATA,
+        ICON_FAN_DATA=ICON_FAN_DATA,
+        ICON_DOCKER_DATA=ICON_DOCKER_DATA,
+        ICON_AUTOMATION_DATA=ICON_AUTOMATION_DATA,
+        ICON_MANUAL_DATA=ICON_MANUAL_DATA,
+        ICON_ABOUT_DATA=ICON_ABOUT_DATA,
+    ))
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     resp.headers["Pragma"] = "no-cache"
     resp.headers["Expires"] = "0"
@@ -3803,34 +4222,43 @@ hr{ border:none; border-top:1px solid var(--border); margin:28px 0; }
 """
 # 应用内嵌版：去掉整页外壳/顶栏/定宽，宽度自适应面板；前端 request.args embed=1 时返回
 _MANUAL_CSS_EMBED = """
-.man-body{ color:#1f2933; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; line-height:1.75; max-width:100%; }
-.man-body h1{ font-size:24px; margin:0 0 8px; }
-.man-body h2{ font-size:19px; margin:28px 0 10px; padding-bottom:6px; border-bottom:2px solid #e2e8f0; }
-.man-body h3{ font-size:16px; margin:20px 0 8px; color:#0f172a; }
-.man-body h4{ font-size:14px; margin:16px 0 6px; }
-.man-body p{ margin:10px 0; }
-.man-body ul,.man-body ol{ margin:10px 0; padding-left:24px; }
+.man-body{ color:var(--text); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; line-height:1.75; max-width:100%; }
+.man-body h1{ font-size:24px; margin:0 0 8px; color:var(--text); }
+.man-body h2{ font-size:19px; margin:28px 0 10px; padding-bottom:6px; border-bottom:2px solid var(--border); color:var(--text); }
+.man-body h3{ font-size:16px; margin:20px 0 8px; color:var(--text); }
+.man-body h4{ font-size:14px; margin:16px 0 6px; color:var(--text); }
+.man-body p{ margin:10px 0; color:var(--text); }
+.man-body ul,.man-body ol{ margin:10px 0; padding-left:24px; color:var(--text); }
 .man-body li{ margin:5px 0; }
-.man-body a{ color:#2563eb; }
-.man-body code{ background:#1e293b; color:#e2e8f0; padding:2px 6px; border-radius:5px; font-size:13px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
-.man-body pre{ background:#1e293b; color:#e2e8f0; padding:14px; border-radius:8px; overflow-x:auto; font-size:13px; }
-.man-body blockquote{ background:#fff7ed; border-left:4px solid #f59e0b; margin:12px 0; padding:10px 16px; border-radius:6px; color:#92400e; }
-.man-body hr{ border:none; border-top:1px solid #e2e8f0; margin:28px 0; }
+.man-body a{ color:var(--primary); }
+.man-body code{ background:var(--fill); color:var(--text); padding:2px 6px; border-radius:5px; font-size:13px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+.man-body pre{ background:var(--fill); color:var(--text); padding:14px; border-radius:8px; overflow-x:auto; font-size:13px; }
+.man-body blockquote{ background:var(--bg); border-left:4px solid var(--warning); margin:12px 0; padding:10px 16px; border-radius:6px; color:var(--text); }
+.man-body hr{ border:none; border-top:1px solid var(--border); margin:28px 0; }
 .man-body .man-table{ border-collapse:collapse; width:100%; margin:12px 0; font-size:14px; display:table; overflow:visible; }
-.man-body .man-table th,.man-body .man-table td{ border:1px solid #e2e8f0; padding:8px 12px; text-align:left; }
-.man-body .man-table th{ background:#fff; font-weight:600; }
-.man-body .man-table tbody tr:nth-child(even){ background:#f8fafc; }
-.man-body .hl-red{ color:#dc2626; font-weight:500; }
+.man-body .man-table th,.man-body .man-table td{ border:1px solid var(--border); padding:8px 12px; text-align:left; }
+.man-body .man-table th{ background:var(--card); font-weight:600; }
+.man-body .man-table tbody tr:nth-child(even){ background:var(--fill); }
+.man-body .hl-red{ color:var(--danger); font-weight:500; }
 """
 
 def _md_inline(text):
-    """行内：转义 HTML + **粗体** + `代码` + ==红色==。
-    红色标记是给「本版本修复了什么」这种高亮用的，避免一改一票否决。"""
+    """行内：转义 HTML + **粗体** + `代码` + ==红色== + <mark>红色</mark>。
+    红色标记给「本版本新增/修复」高亮用：App 内显示红色，GitHub 原生黄底高亮。"""
+    # 先抽离 <mark>...</mark>，避免被下面统一转义吃掉标签（内容内部的 **粗体** 仍会处理）
+    _marks = []
+    def _stash_mark(m):
+        _marks.append(m.group(1))
+        return '\x00M%d\x00' % (len(_marks) - 1)
+    text = re.sub(r'<mark>(.+?)</mark>', _stash_mark, text, flags=re.S)
     text = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
     # 先吃 ==红色== 标记（避免被后面的 ** 误吃），用占位符包起来再做粗体/代码
     text = re.sub(r'==(.+?)==', lambda m: '\x00HL\x00' + m.group(1) + '\x00/HL\x00', text)
     text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
     text = text.replace('\x00HL\x00', '<span class="hl-red">').replace('\x00/HL\x00', '</span>')
+    # 还原 <mark> 为红色 span（内部 **粗体** 已处理）
+    for i, _m in enumerate(_marks):
+        text = text.replace('\x00M%d\x00' % i, '<span class="hl-red">%s</span>' % _m)
     text = re.sub(r'`([^`]+?)`', r'<code>\1</code>', text)
     return text
 
@@ -4169,6 +4597,8 @@ def api_all():
                 "docker": _safe(f_docker.result, {}),
                 "time": time.strftime("%Y-%m-%d %H:%M:%S"),
                 "elapsed": round(time.time() - t0, 2),
+                "nasdash_version": APP_VERSION,
+                "fnos_version": _fnos_version(),
             }
         try:
             rt = get_realtime_metrics()
@@ -4228,12 +4658,98 @@ def api_raid():
 
 @app.route("/api/disks")
 def api_disks():
-    """硬盘 SMART 板块。"""
+    """硬盘 SMART 板块。
+
+    standalone（是否独立盘，决定能否跑破坏性 badblocks）必须实时计算，
+    不能跟着 get_disks 的 300s 缓存走——否则用户刚从阵列移除硬盘，
+    B 档按钮要等 5 分钟缓存过期才变绿。SMART 等重数据仍走缓存。
+    """
     t0 = time.time()
     try:
-        return jsonify({"disks": get_disks(), "time": _panel_time(), "elapsed": round(time.time() - t0, 2)})
+        cached = get_disks()
+        disks = []
+        for d in cached:
+            d2 = dict(d)
+            ok, reason = _is_standalone_disk(d.get("dev"))
+            d2["standalone"], d2["standalone_reason"] = ok, reason
+            disks.append(d2)
+        return jsonify({"disks": disks, "time": _panel_time(), "elapsed": round(time.time() - t0, 2)})
     except Exception as e:
         return jsonify({"error": str(e), "time": _panel_time()})
+
+@app.route("/api/disks/selftest", methods=["GET"])
+def api_disks_selftest_get():
+    """返回当前硬盘自检任务状态（只读）。"""
+    with DISK_TEST_LOCK:
+        jobs = {}
+        for k, v in DISK_TEST_JOBS.items():
+            jobs[k] = {kk: vv for kk, vv in v.items() if kk != "pid" and kk != "_proc"}
+    return jsonify({"ok": True, "jobs": jobs})
+
+
+@app.route("/api/disks/selftest", methods=["POST"])
+@require_admin()
+def api_disks_selftest_post():
+    """启动硬盘自检：type=long（SMART 长自检）或 badblocks（破坏性，仅限独立盘）。"""
+    try:
+        data = request.get_json(force=True) or {}
+    except Exception:
+        return jsonify({"ok": False, "error": "bad json"}), 400
+    dev = data.get("dev", "")
+    ttype = data.get("type", "")
+    confirm = data.get("confirm", False)
+    if not isinstance(dev, str) or not _safe_token(dev):
+        return jsonify({"ok": False, "error": "非法设备名"}), 400
+    if ttype not in ("long", "badblocks"):
+        return jsonify({"ok": False, "error": "type 须为 long 或 badblocks"}), 400
+    disks = get_disks()
+    if not any(d.get("dev") == dev for d in disks):
+        return jsonify({"ok": False, "error": "未找到该硬盘"}), 400
+    with DISK_TEST_LOCK:
+        if dev in DISK_TEST_JOBS and DISK_TEST_JOBS[dev]["state"] == "running":
+            return jsonify({"ok": False, "error": "该硬盘已有正在进行的自检"}), 400
+    if ttype == "badblocks":
+        if not confirm:
+            return jsonify({"ok": False, "error": "B 类坏块慢扫为破坏性测试，请确认"}), 400
+        ok, reason = _is_standalone_disk(dev)
+        if not ok:
+            return jsonify({"ok": False, "error": reason}), 400
+    try:
+        if ttype == "long":
+            _start_smart_long(dev)
+        else:
+            _start_badblocks(dev)
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/disks/selftest/abort", methods=["POST"])
+@require_admin()
+def api_disks_selftest_abort():
+    """中止指定硬盘的自检任务。"""
+    try:
+        data = request.get_json(force=True) or {}
+    except Exception:
+        return jsonify({"ok": False, "error": "bad json"}), 400
+    dev = data.get("dev", "")
+    if not isinstance(dev, str) or not _safe_token(dev):
+        return jsonify({"ok": False, "error": "非法设备名"}), 400
+    with DISK_TEST_LOCK:
+        job = DISK_TEST_JOBS.get(dev)
+    if not job:
+        return jsonify({"ok": False, "error": "无进行中的自检"}), 400
+    if job["state"] != "running":
+        return jsonify({"ok": False, "error": "该硬盘自检已结束"}), 400
+    try:
+        if job["type"] == "long":
+            _abort_smart_long(dev)
+        else:
+            _abort_badblocks(dev)
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
 
 @app.route("/api/storage")
 def api_storage():
@@ -4314,6 +4830,8 @@ def api_history():
 def api_fan_set():
     """设置风扇转速：设目标 PWM（后台缓变线程平滑过渡）或恢复自动控温"""
     try:
+        if not _FAN_CTRL_ENABLED:
+            return jsonify({"ok": False, "error": "风扇接管已关闭，nasdash 不控速（仅监控）"}), 400
         data = request.get_json(force=True) or {}
     except Exception:
         return jsonify({"ok": False, "error": "bad json"}), 400
@@ -4642,7 +5160,56 @@ def get_fan_status():
 @app.route("/api/fan/status")
 def api_fan_status():
     """轻量风扇状态：供前端高频轮询，实时显示转速/当前占空比/目标（常驻线程 2s tick）"""
-    return jsonify({"fans": get_fan_status()})
+    return jsonify({"fans": get_fan_status(), "control_enabled": _FAN_CTRL_ENABLED})
+
+
+@app.route("/api/fan/control")
+def api_fan_control_get():
+    """风扇接管总开关状态。"""
+    return jsonify({"enabled": _FAN_CTRL_ENABLED})
+
+@app.route("/api/fan/control", methods=["POST"])
+@require_admin()
+def api_fan_control_set():
+    """开关风扇接管：关闭后 nasdash 不再根据温度自动调速。若飞牛自带风扇服务已配置，
+    会交还它接管；否则保持当前转速、不再写 PWM。"""
+    global _FAN_CTRL_ENABLED
+    try:
+        data = request.get_json(force=True) or {}
+    except Exception:
+        return jsonify({"ok": False, "error": "bad json"}), 400
+    enabled = bool(data.get("enabled", True))
+    if not _save_json_file(FAN_CONTROL_CFG, {"enabled": enabled}):
+        return jsonify({"ok": False, "error": "写入配置失败"}), 500
+    _FAN_CTRL_ENABLED = enabled
+    # 状态已切换，立即清掉 FCS 状态缓存，让前端下一次拉取拿到最新状态。
+    _fcs_status_cached(clear=True)
+    if enabled:
+        # 重新接管前必须停掉系统风扇服务，否则 nasdash 会因 FCS 在跑而拒绝写 PWM。
+        # 只有 FCS 真的配置了参数时才需要停；没配置时它本来就不会控速。
+        # systemctl stop 交给后台线程，避免阻塞本 API 响应（开关才能真正秒回）。
+        try:
+            if _fcs_has_board_config():
+                def _stop_fcs():
+                    try:
+                        _fan_stop_ext_service()
+                        _FCS_TAKEN["v"] = True
+                    except Exception:
+                        pass
+                _threading.Thread(target=_stop_fcs, daemon=True).start()
+        except Exception:
+            pass
+        _FAN_ENABLE_CACHE.clear()
+    else:
+        # 接管关闭：后台线程把风扇降到安全待机转速并停手（详见 _fan_release_to_idle 注释），
+        # 避免同步写 sysfs 阻塞 API，造成前端 toggle 卡住、用户感觉「关不掉/打不开」。
+        def _release():
+            try:
+                _fan_release_to_idle()
+            except Exception:
+                pass
+        _threading.Thread(target=_release, daemon=True).start()
+    return jsonify({"ok": True, "enabled": enabled})
 
 
 @app.route("/api/fan/temps")
@@ -4930,8 +5497,9 @@ def api_fan_rules_set():
 
 @app.route("/api/fan/fcs")
 def api_fan_fcs_get():
-    """FanControlServer 状态：是否安装 / 开机自启 / 运行中 / 被用户永久禁用。"""
-    return jsonify(_fcs_status())
+    """FanControlServer 状态：是否安装 / 开机自启 / 运行中 / 被用户永久禁用。
+    使用短时缓存，避免每次打开面板都等待 systemctl。"""
+    return jsonify(_fcs_status_cached())
 
 
 @app.route("/api/fan/fcs", methods=["POST"])
@@ -4950,7 +5518,8 @@ def api_fan_fcs_post():
         _fcs_enable()
     else:
         return jsonify({"ok": False, "error": "action 需为 disable 或 enable"}), 400
-    return jsonify({"ok": True, "status": _fcs_status()})
+    # 操作完成后立即刷新缓存，让前端拿到最新状态
+    return jsonify({"ok": True, "status": _fcs_status_cached(clear=True)})
 
 
 @app.route("/api/fan/labels", methods=["GET"])

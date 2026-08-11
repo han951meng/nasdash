@@ -3,70 +3,160 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<script>
+  (function(){try{var t=localStorage.getItem('nasdash_theme');if(t==='dark'||(!t&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)){document.documentElement.setAttribute('data-theme','dark');}}catch(e){}})();
+</script>
 <title>飞牛 NAS 硬件监控</title>
 <style>
   :root{
-    --bg:#f0f2f5; --card:#ffffff; --border:#e5e7eb; --text:#1f2937; --muted:#6b7280;
-    --blue:#2563eb; --green:#16a34a; --orange:#ea580c; --red:#dc2626; --yellow:#ca8a04;
+    /* ===== fnOS Semi Design 真实设计变量（飞牛真值，仿 Semi Design 色阶） ===== */
+    --semi-grey-0:250,250,250; --semi-grey-1:243,243,243; --semi-grey-2:194,195,196; --semi-grey-3:159,160,161; --semi-grey-4:124,125,127; --semi-grey-5:90,91,92; --semi-grey-6:75,75,75; --semi-grey-7:48,48,48; --semi-grey-8:30,30,33; --semi-grey-9:11,11,12;
+    --semi-brand-0:230,244,255; --semi-brand-1:215,237,255; --semi-brand-2:171,219,255; --semi-brand-3:117,191,255; --semi-brand-4:51,133,255; --semi-brand-5:0,102,255; --semi-brand-6:0,94,235; --semi-brand-7:0,67,184; --semi-brand-8:0,45,112; --semi-brand-9:0,31,77;
+    --semi-green-4:35,177,120; --semi-green-5:0,158,97;
+    --semi-amber-4:255,125,0; --semi-amber-5:255,154,46;
+    --semi-red-4:226,96,82; --semi-red-5:219,56,44;
+    /* 派生语义色（对齐飞牛真值） */
+    --c-bg:#F7F8FA;
+    --c-bg-1:#FFFFFF;
+    --c-card:#FFFFFF;
+    --c-text-0:rgba(var(--semi-grey-9),1);
+    --c-text-1:rgba(var(--semi-grey-9),.75);
+    --c-text-2:rgba(var(--semi-grey-9),.5);
+    --c-text-3:rgba(var(--semi-grey-9),.25);
+    --c-border:rgba(var(--semi-grey-9),.12);
+    --c-fill-0:rgba(var(--semi-grey-9),.04);
+    --c-fill-1:rgba(var(--semi-grey-9),.06);
+    --c-fill-2:rgba(var(--semi-grey-9),.12);
+    --c-primary:rgba(var(--semi-brand-5),1);
+    --c-primary-hover:rgba(var(--semi-brand-6),1);
+    --c-primary-active:rgba(var(--semi-brand-7),1);
+    --c-primary-bg:rgba(var(--semi-brand-5),.10);
+    --c-success:rgba(var(--semi-green-5),1);
+    --c-warning:rgba(var(--semi-amber-5),1);
+    --c-danger:rgba(var(--semi-red-5),1);
+    --c-shadow:0 1px 2px rgba(var(--semi-grey-9),.05);
+    /* 圆角（Semi: sm3 / md6 / lg12） */
+    --r-sm:3px; --r-md:6px; --r-lg:12px; --r-xl:16px; --r-round:999px;
+    --s-1:4px; --s-2:8px; --s-3:12px; --s-4:16px; --s-5:20px; --s-6:24px; --s-8:32px;
+    /* 兼容别名：现有 JS / CSS 继续用旧名，无缝飞牛化 */
+    --blue:var(--c-primary); --green:var(--c-success); --orange:var(--c-warning); --red:var(--c-danger); --yellow:#CA8A04;
+    --primary:var(--c-primary); --primary-hover:var(--c-primary-hover); --primary-active:var(--c-primary-active);
+    --success:var(--c-success); --warning:var(--c-warning); --danger:var(--c-danger);
+    --text-1:var(--c-text-0); --text-2:var(--c-text-1); --text-3:var(--c-text-2); --text-4:var(--c-text-3);
+    --border:var(--c-border); --divider:var(--c-fill-1); --fill:var(--c-fill-1);
+    --bg:var(--c-bg); --card:var(--c-card);
+    --shadow:var(--c-shadow); --shadow-hover:0 4px 12px rgba(var(--semi-grey-9),.08);
+    --text:var(--text-1); --muted:var(--text-3);
+  }
+  [data-theme="dark"]{
+    /* 暗色：翻转色阶（同 Semi Design 机制） */
+    --c-bg:#1A1E23;
+    --c-bg-1:#23262B;
+    --c-card:#23262B;
+    --c-text-0:rgba(255,255,255,.92);
+    --c-text-1:rgba(255,255,255,.65);
+    --c-text-2:rgba(255,255,255,.45);
+    --c-text-3:rgba(255,255,255,.28);
+    --c-border:rgba(255,255,255,.12);
+    --c-fill-0:rgba(255,255,255,.04);
+    --c-fill-1:rgba(255,255,255,.06);
+    --c-fill-2:rgba(255,255,255,.12);
+    --c-primary:rgba(117,191,255,1);
+    --c-primary-hover:rgba(145,205,255,1);
+    --c-primary-active:rgba(86,170,255,1);
+    --c-primary-bg:rgba(117,191,255,.14);
+    --c-success:rgba(43,201,106,1);
+    --c-warning:rgba(255,154,46,1);
+    --c-danger:rgba(247,105,101,1);
+    --c-shadow:0 1px 3px rgba(0,0,0,.3);
+    --blue:var(--c-primary); --green:var(--c-success); --orange:var(--c-warning); --red:var(--c-danger); --yellow:#FFD60A;
+    --primary:var(--c-primary); --primary-hover:var(--c-primary-hover); --primary-active:var(--c-primary-active);
+    --success:var(--c-success); --warning:var(--c-warning); --danger:var(--c-danger);
+    --text-1:var(--c-text-0); --text-2:var(--c-text-1); --text-3:var(--c-text-2); --text-4:var(--c-text-3);
+    --border:var(--c-border); --divider:var(--c-fill-1); --fill:var(--c-fill-1);
+    --bg:var(--c-bg); --card:var(--c-card);
+    --shadow:var(--c-shadow); --shadow-hover:0 4px 12px rgba(0,0,0,.4);
+    --text:var(--text-1); --muted:var(--text-3);
   }
   *{box-sizing:border-box;margin:0;padding:0}
   body{font-family:-apple-system,"Microsoft YaHei",sans-serif;background:var(--bg);color:var(--text);line-height:1.5}
-  .header{background:linear-gradient(135deg,#1e3a5f,#2563eb);color:#fff;padding:18px 28px;display:flex;align-items:center;justify-content:space-between;box-shadow:0 2px 8px rgba(0,0,0,.1)}
-  .header h1{font-size:20px;font-weight:600}
-  .header .meta{font-size:13px;opacity:.9;display:flex;gap:16px;align-items:center}
-  .container{max-width:1600px;margin:0 auto;padding:20px;display:flex;gap:20px;align-items:flex-start}
-  .sidebar{width:210px;flex:0 0 210px;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:8px;box-shadow:0 1px 3px rgba(0,0,0,.06);position:sticky;top:20px;will-change:transform;max-height:calc(100vh - 40px);overflow-y:auto;overscroll-behavior:contain}
+  .header{display:none} /* 桌面去掉置顶栏；汉堡按钮仅在移动端显示 */
+  .hd-time{color:var(--text-3);font-size:12px;margin-right:2px}
+  .hd-sep{width:1px;height:16px;background:var(--border);margin:0 2px}
+  .icon-btn{width:30px;height:30px;padding:0;display:inline-flex;align-items:center;justify-content:center;border:1px solid transparent;background:transparent;border-radius:var(--r-md);cursor:pointer;font-size:14px;color:var(--text-2);transition:.15s;line-height:1}
+  .icon-btn:hover{background:var(--c-fill-1);color:var(--text-1)}
+  .container{max-width:1600px;margin:0 auto;padding:18px 20px;display:flex;gap:16px;align-items:flex-start}
+  .sidebar{width:208px;flex:0 0 208px;background:var(--card);border:1px solid var(--border);box-shadow:var(--c-shadow);border-radius:var(--r-md);padding:10px 8px;position:sticky;top:18px;will-change:transform;max-height:calc(100vh - 36px);overflow-y:auto;overscroll-behavior:contain}
   /* 滚动条：占位常驻（不抖），thumb 永远真透明（完全看不见，无论滚不滚） */
   .sidebar,html{scrollbar-width:thin;scrollbar-color:transparent transparent}
   .sidebar::-webkit-scrollbar,html::-webkit-scrollbar{width:8px;height:8px}
   .sidebar::-webkit-scrollbar-thumb,html::-webkit-scrollbar-thumb{background:transparent;border-radius:4px}
   .sidebar::-webkit-scrollbar-track,html::-webkit-scrollbar-track{background:transparent}
-  .sidebar-title{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;padding:6px 10px 10px}
-  .sb-group{font-size:11px;color:var(--muted);padding:11px 10px 3px;letter-spacing:.5px;border-top:1px solid var(--border);margin-top:6px}
-  .sb-group:first-of-type{border-top:none;margin-top:0}
-  .tabs{display:flex;flex-direction:column;gap:4px}
-  .tab{width:100%;padding:12px 14px;text-align:left;cursor:pointer;border-radius:8px;font-size:14px;font-weight:500;color:var(--muted);transition:all .2s;border:none;background:none;display:flex;align-items:center;gap:10px}
-  .tab:hover{background:#f3f4f6}
-  .tab.active{background:var(--blue);color:#fff}
+  .sidebar-title{font-size:12px;color:var(--text-3);letter-spacing:.3px;padding:2px 10px 8px}
+  .sb-group{font-size:11px;color:var(--text-3);padding:12px 10px 4px;letter-spacing:.3px;margin-top:4px}
+  .sb-group:first-of-type{margin-top:0}
+  .tabs{display:flex;flex-direction:column;gap:2px}
+  .tab{width:100%;padding:9px 12px;text-align:left;cursor:pointer;border-radius:var(--r-md);font-size:14px;font-weight:400;color:var(--text-1);transition:background .15s,color .15s;border:none;background:none;display:flex;align-items:center;gap:10px;position:relative}
+  .tab svg.ic,.tab img.ic,.hero-ic svg.ic,.hero-ic img.ic{width:30px;height:30px;flex:none;display:block;object-fit:contain}
+  .hero-ic img.ic{width:48px;height:48px}
+  /* 图标透明背景：直接浮在页面背景上，暗色下不会有白色底板 */
+  .tab img.ic,.hero-ic img.ic{background:transparent;border-radius:0;padding:0;box-shadow:none}
+  .tab:hover{background:var(--c-fill-1)}
+  .tab.active{background:#fff;color:var(--primary);font-weight:600;box-shadow:0 1px 4px rgba(0,0,0,.12);border-left:3px solid var(--primary);padding-left:9px}
   .content{flex:1;min-width:0}
   .panel{display:none}
   /* 移动端抽屉导航（桌面隐藏，仅手机显示汉堡按钮） */
   .menu-toggle{display:none}
   .nav-overlay{display:none;position:fixed;inset:0;background:rgba(15,23,42,.4);z-index:45}
+  .modal-overlay{display:none;position:fixed;inset:0;background:rgba(var(--semi-grey-9),.45);z-index:10000;align-items:center;justify-content:center;padding:16px;backdrop-filter:blur(2px)}
+  .modal-overlay.show{display:flex}
+  .modal-box{width:100%;max-width:420px;background:var(--c-card);border:1px solid var(--c-border);border-radius:var(--r-lg);box-shadow:var(--shadow-hover);padding:22px 24px 20px;display:flex;flex-direction:column;gap:14px;animation:modalIn .18s ease}
+  @keyframes modalIn{from{opacity:0;transform:translateY(-8px) scale(.98)}to{opacity:1;transform:translateY(0) scale(1)}}
+  .modal-title{font-size:16px;font-weight:600;color:var(--text-1)}
+  .modal-body{font-size:14px;color:var(--text-1);line-height:1.7;white-space:pre-line}
+  .modal-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:6px}
+  .modal-overlay .btn{min-width:72px}
   .panel.active{display:block}
   .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}
-  .card{background:var(--card);border-radius:10px;padding:16px;box-shadow:0 1px 3px rgba(0,0,0,.06);border:1px solid var(--border)}
-  .card h3{font-size:13px;color:var(--muted);margin-bottom:10px;font-weight:500;text-transform:uppercase;letter-spacing:.5px}
-  .kv{display:flex;justify-content:space-between;padding:4px 0;font-size:14px;border-bottom:1px solid #f3f4f6;gap:12px}
+  .card{background:var(--card);border-radius:var(--r-md);padding:var(--s-4);box-shadow:var(--shadow);border:1px solid var(--border);transition:box-shadow .2s}
+  .card h3{font-size:13px;color:var(--text-3);margin-bottom:10px;font-weight:600;letter-spacing:.3px}
+  .kv{display:flex;justify-content:space-between;padding:4px 0;font-size:14px;border-bottom:1px solid var(--divider);gap:12px}
   .kv:last-child{border-bottom:none}
   .kv .k{color:var(--muted);flex:0 0 auto;max-width:60%}
   .kv .v{font-weight:500;text-align:right;word-break:break-all;flex:1;min-width:0}
-  .badge{display:inline-block;padding:2px 10px;border-radius:12px;font-size:12px;font-weight:600}
-  .b-ok{background:#dcfce7;color:var(--green)}
-  .b-warn{background:#fef3c7;color:var(--yellow)}
-  .b-bad{background:#fee2e2;color:var(--red)}
-  .b-info{background:#dbeafe;color:var(--blue)}
-  .b-muted{background:#e5e7eb;color:var(--muted)}
+  .badge{display:inline-block;padding:2px 10px;border-radius:var(--r-sm);font-size:12px;font-weight:600}
+  .b-ok{background:rgba(0,180,42,.12);color:#0A8C20}
+  .b-warn{background:rgba(255,125,0,.12);color:#C85A00}
+  .b-bad{background:rgba(245,63,63,.12);color:#C7392F}
+  .b-info{background:var(--c-primary-bg);color:var(--primary)}
+  .b-muted{background:var(--fill);color:var(--text-3)}
   .disk-card{position:relative}
   .disk-card.bad{border-color:var(--red);background:#fef2f2}
   .disk-card.warn{border-color:var(--orange)}
   .disk-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
   .disk-head .name{font-size:16px;font-weight:600}
-  .temp-bar{height:6px;border-radius:3px;background:#e5e7eb;margin:8px 0;overflow:hidden}
+  .temp-bar{height:6px;border-radius:3px;background:var(--fill);margin:8px 0;overflow:hidden}
   .temp-fill{height:100%;border-radius:3px;transition:width .3s}
-  .table{width:100%;border-collapse:collapse;font-size:13px}
-  .table th,.table td{padding:8px 10px;text-align:left;border-bottom:1px solid var(--border)}
-  .table th{color:var(--muted);font-weight:500;background:#f9fafb}
-  .table tr:hover{background:#f9fafb}
-  .progress{height:20px;background:#e5e7eb;border-radius:10px;overflow:hidden;position:relative}
+  .table{width:100%;border-collapse:collapse;font-size:14px}
+  .table th,.table td{padding:10px 12px;text-align:left;border-bottom:1px solid var(--divider)}
+  .table th{color:var(--text-3);font-weight:500;background:var(--fill)}
+  .table tr:hover{background:var(--fill)}
+  .table td{color:var(--text-2)}
+  .progress{height:20px;background:var(--fill);border-radius:10px;overflow:hidden;position:relative}
   .progress-fill{height:100%;display:flex;align-items:center;justify-content:flex-end;padding-right:8px;color:#fff;font-size:11px;font-weight:600}
-  .btn{padding:6px 14px;border:1px solid rgba(255,255,255,.4);background:rgba(255,255,255,.15);color:#fff;border-radius:6px;cursor:pointer;font-size:13px}
-  .btn:hover{background:rgba(255,255,255,.25)}
+  .btn{border:1px solid var(--border);border-radius:var(--r-sm);padding:7px 16px;font-size:14px;cursor:pointer;transition:.2s;font-weight:500;background:transparent;color:var(--text-2)}
+  .btn:hover{border-color:var(--primary);color:var(--primary)}
+  .btn-primary{background:var(--primary);color:#fff;border-color:var(--primary)}
+  .btn-primary:hover{background:var(--primary-hover);border-color:var(--primary-hover);color:#fff}
+  .btn-danger{background:var(--danger);color:#fff;border-color:var(--danger)}
+  .btn-danger:hover{opacity:.9}
+  .btn-ghost{background:transparent;color:var(--primary);border-color:transparent}
+  .btn-ghost:hover{background:var(--c-primary-bg)}
   .switch{display:inline-flex;align-items:center;gap:6px;font-size:13px;cursor:pointer}
   .switch input{display:none}
-  .slider{width:34px;height:18px;background:rgba(255,255,255,.3);border-radius:10px;position:relative;transition:.2s}
+  .slider{width:34px;height:18px;background:var(--border);border-radius:10px;position:relative;transition:.2s}
   .slider:before{content:"";position:absolute;width:14px;height:14px;background:#fff;border-radius:50%;top:2px;left:2px;transition:.2s}
-  .switch input:checked+.slider{background:#16a34a}
+  .switch input:checked+.slider{background:var(--success)}
   .switch input:checked+.slider:before{transform:translateX(16px)}
   .spinner{display:inline-block;width:14px;height:14px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin .6s linear infinite}
   @keyframes spin{to{transform:rotate(360deg)}}
@@ -78,19 +168,86 @@
   pre{background:#1e293b;color:#e2e8f0;padding:14px;border-radius:8px;font-size:12px;overflow-x:auto;max-height:400px;white-space:pre-wrap}
   .section-title{font-size:15px;font-weight:600;margin:18px 0 10px;color:var(--text)}
   .pill{display:inline-block;padding:1px 8px;border-radius:6px;font-size:11px;margin-left:6px}
+  .pill.gray{background:var(--fill);color:var(--text-3)}
+  .pill.red{background:rgba(245,63,63,.12);color:var(--danger)}
+  .pill.green{background:rgba(0,180,42,.12);color:var(--success)}
   .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
   .grid-auto{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px}
   .sys-grid{display:flex;flex-wrap:wrap;gap:14px;align-items:stretch}
   .sys-grid .card{flex:1 1 280px;min-width:280px;max-width:100%;box-sizing:border-box;display:flex;flex-direction:column}
-  .detect-title{font-size:22px;font-weight:700;margin-bottom:2px}
-  .detect-sub{font-size:13px;color:var(--muted);margin-bottom:18px}
-  .statusbar{display:flex;justify-content:space-between;align-items:center;background:var(--card);border:1px solid var(--border);border-radius:12px;padding:10px 18px;margin-bottom:20px;box-shadow:0 1px 3px rgba(0,0,0,.06)}
-  .status-left{display:flex;align-items:center;gap:8px}
-  .status-dot{width:9px;height:9px;border-radius:50%;background:var(--green)}
-  .status-right{display:flex;gap:26px;align-items:center}
-  .status-item{display:flex;flex-direction:column;gap:2px}
-  .status-item .k{font-size:11px;color:var(--muted)}
-  .status-item .v{font-size:13px;font-weight:600}
+  .detect-title{font-size:16px;font-weight:500;margin-bottom:2px;color:var(--text-1)}
+  .detect-sub{font-size:13px;color:var(--text-3);margin-bottom:14px}
+  /* ===== hero 横幅（对齐飞牛虚拟机概览页）===== */
+  .hero{background:#fff;border:1px solid rgba(0,0,0,.06);box-shadow:0 1px 3px rgba(0,0,0,.05);border-radius:var(--r-md);padding:20px 24px;margin-bottom:16px;color:#1f2329;position:relative;overflow:hidden}
+  .hero::after{content:"";position:absolute;right:-40px;top:-60px;width:220px;height:220px;border-radius:50%;background:rgba(117,191,255,.05)}
+  .hero-head{display:flex;align-items:center;justify-content:space-between;gap:14px;position:relative;z-index:1;flex-wrap:nowrap;min-height:54px}
+  .hero-left{display:flex;align-items:center;gap:14px;flex:1 1 auto;min-width:0;overflow:hidden}
+  .hero-text{min-width:0}
+  .hero-right{display:inline-flex;align-items:center;gap:8px;flex:none;flex-wrap:nowrap}
+  .hero-ic{width:52px;height:52px;flex:none;border-radius:var(--r-md);background:transparent;border:1px solid transparent;box-shadow:none;display:flex;align-items:center;justify-content:center;font-size:26px;line-height:1}
+  .hero-title{font-size:18px;font-weight:500;color:#1f2329;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .hero-sub{font-size:12px;color:#646a73;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .hero-badge{display:inline-flex;align-items:center;gap:6px;background:rgba(117,191,255,.14);border-radius:var(--r-round);padding:5px 12px;font-size:12px;color:#2a6fd6;white-space:nowrap;flex-shrink:0}
+  .hero-badge .dot{width:6px;height:6px;border-radius:50%;background:#4ADE80}
+  .hero-badge.warn .dot{background:#FDE047}
+  .hero-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(104px,1fr));gap:8px;margin-top:18px;position:relative;z-index:1}
+  .hs{background:rgba(117,191,255,.06);border:1px solid rgba(0,0,0,.05);border-radius:var(--r-md);padding:10px 12px}
+  .hs-v{font-size:20px;font-weight:500;color:#1f2329;line-height:1.2;white-space:nowrap}
+  .hs-v small{font-size:12px;font-weight:400;opacity:.7;margin-left:2px}
+  .hs-k{font-size:12px;color:#646a73;margin-top:3px}
+  .hs-uptime .hs-v{white-space:normal;word-break:break-all;font-size:16px;line-height:1.25}
+  .hs.bad .hs-v{color:#E5484D}
+  .hs.warn .hs-v{color:#B45309}
+  /* 暗色主题：hero 用和页面卡片一致的深色卡，只留一条飞牛蓝左边条做标识，不再用高饱和蓝渐变 */
+  [data-theme="dark"] .hero{background:var(--c-card);border:1px solid var(--c-border);box-shadow:var(--c-shadow);border-left:3px solid var(--c-primary);color:var(--c-text-0)}
+  [data-theme="dark"] .hero::after{display:none}
+  [data-theme="dark"] .hero-title{color:var(--c-text-0)}
+  [data-theme="dark"] .hero-sub{color:var(--c-text-1)}
+  [data-theme="dark"] .hero-badge{background:var(--c-fill-2);color:var(--c-text-0)}
+  [data-theme="dark"] .hero-action .btn-mini{background:var(--c-fill-2);border-color:transparent;color:var(--c-text-0)}
+  [data-theme="dark"] .hero-action .btn-mini:hover{background:var(--c-fill-1);color:var(--c-primary-hover)}
+  [data-theme="dark"] .hero-ctrls .hd-time{color:var(--c-text-1)}
+  [data-theme="dark"] .hero-ctrls .icon-btn{color:var(--c-text-0);border-color:var(--c-border)}
+  [data-theme="dark"] .hero-ctrls .icon-btn:hover{background:var(--c-fill-2);color:var(--c-text-0)}
+  [data-theme="dark"] .hero-switch{color:var(--c-text-0)}
+  [data-theme="dark"] .hs{background:var(--c-fill-2);border-color:transparent}
+  [data-theme="dark"] .hs-v{color:var(--c-text-0)}
+  [data-theme="dark"] .hs-k{color:var(--c-text-1)}
+  [data-theme="dark"] .hs.bad .hs-v{color:#FECACA}
+  [data-theme="dark"] .hs.warn .hs-v{color:#FDE68A}
+  [data-theme="dark"] .tab.active{background:var(--c-primary-bg);color:var(--c-primary);box-shadow:var(--c-shadow);border-left:3px solid var(--c-primary)}
+  .hero-action{display:inline-flex;align-items:center;gap:8px;flex-wrap:nowrap;justify-content:flex-end}
+  .hero-action .btn-mini{background:rgba(117,191,255,.14);border-color:transparent;color:#2a6fd6}
+  .hero-action .btn-mini:hover{background:rgba(117,191,255,.24);color:#1d5fc0}
+  .hero-ctrls{display:inline-flex;align-items:center;gap:6px;flex-wrap:nowrap;justify-content:flex-end}
+  .hero-ctrls .hd-time{color:#646a73;font-size:12px;margin-right:2px;white-space:nowrap}
+  .hero-ctrls .icon-btn{color:#646a73;border-color:rgba(0,0,0,.12)}
+  .hero-ctrls .icon-btn:hover{background:rgba(0,0,0,.05);color:#1f2329}
+  .hero-ctrls .switch{color:#646a73;font-size:12px;gap:5px}
+  .hero-ctrls .switch .slider{background:rgba(0,0,0,.18)}
+  [data-theme="dark"] .hero-ctrls .switch{color:#fff}
+  [data-theme="dark"] .hero-ctrls .switch .slider{background:rgba(255,255,255,.25)}
+  .hero-ctrls .switch input:checked+.slider{background:var(--success)}
+  /* 风扇接管总开关（hero 内开关） */
+  .hero-switch{display:inline-flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:#1f2329;user-select:none}
+  .hero-switch input{position:absolute;opacity:0;width:0;height:0}
+  .hero-switch-track{position:relative;width:38px;height:20px;border-radius:999px;background:rgba(0,0,0,.18);transition:.2s;flex:none}
+  [data-theme="dark"] .hero-switch-track{background:rgba(255,255,255,.25)}
+  .hero-switch-knob{position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;transition:.2s}
+  .hero-switch input:checked + .hero-switch-track{background:#4ADE80}
+  .hero-switch input:checked + .hero-switch-track .hero-switch-knob{left:20px}
+  .hero-switch-txt{white-space:nowrap}
+  /* 接管关闭后锁定的风扇面板 */
+  .fan-locked .fan-grid,.fan-locked .fan-presets,.fan-locked .fan-rule-tip{pointer-events:none;opacity:.5;filter:grayscale(.35)}
+  .fan-locked .seg-btn,.fan-locked .fan-slider,.fan-locked .preset-btn,.fan-locked .btn-mini{pointer-events:none}
+  .fan-lock-banner{margin:0 0 14px;padding:10px 14px;border-radius:var(--r-md);background:var(--c-fill-1);border:1px solid var(--border);color:var(--text-2);font-size:13px;line-height:1.6}
+  /* 收编散落的静态 inline style */
+  .span-2{grid-column:span 2}
+  .span-all{grid-column:1/-1}
+  .scroll-x{overflow-x:auto}
+  .note{margin-top:6px;color:var(--muted);font-size:13px;line-height:1.7}
+  .hint{font-size:12px;color:var(--muted);margin-top:6px}
+  .w52{width:52px}
   .detect-cards{display:grid;grid-template-columns:1fr 1fr;gap:14px}
   .mem-slots{display:flex;gap:10px;flex-wrap:wrap;margin-top:6px}
   .mem-slot{flex:1;min-width:96px;border-radius:10px;padding:10px;border:1px solid var(--border);background:var(--bg)}
@@ -111,16 +268,31 @@
   .gpu-detail[open] summary::before{transform:rotate(90deg)}
   .gpu-detail .detail-body{padding-top:4px}
   .gpu-detail .detail-body .kv:first-child{border-top:none}
-  .disk-mini{display:flex;justify-content:space-between;padding:5px 0;font-size:13px;border-bottom:1px solid #f3f4f6;gap:10px}
+  .disk-mini{display:flex;justify-content:space-between;padding:5px 0;font-size:13px;border-bottom:1px solid var(--divider);gap:10px}
   .disk-mini:last-child{border-bottom:none}
   .disk-group-title{font-size:12px;font-weight:600;color:#6b7280;margin:10px 0 4px;padding-left:2px}
   .disk-group-title:first-child{margin-top:0}
-  .b-sas{background:#1e40af;color:#fff}
-  .b-sata{background:#15803d;color:#fff}
+.b-sas{background:#1e40af;color:#fff}
+.b-sata{background:#15803d;color:#fff}
+.btn-mini.disabled{opacity:.5;cursor:not-allowed;pointer-events:none}
+.disk-test-section{margin-top:12px;padding-top:12px;border-top:1px dashed var(--border)}
+.disk-test-title{font-size:12px;font-weight:600;color:var(--text-3);margin-bottom:8px;display:flex;align-items:center;gap:6px}
+.disk-test-btns{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.disk-test-progress{height:8px;background:var(--fill);border-radius:4px;overflow:hidden;margin:8px 0}
+.disk-test-progress-fill{height:100%;background:var(--primary);transition:width .3s}
+.disk-test-msg{font-size:12px;color:var(--text-2);margin-top:6px;line-height:1.5}
+.disk-test-msg.error{color:var(--danger)}
+.disk-test-msg.done{color:var(--success)}
+.disk-test-actions{display:flex;gap:8px;align-items:center;margin-top:8px}
+.disk-info-card{background:var(--fill-0);border:1px solid var(--border)}
+.disk-info-card h3{font-size:14px;font-weight:600;margin:0 0 10px;color:var(--text-1)}
+.disk-info-card .note{font-size:13px;line-height:1.8;color:var(--text-2)}
+.disk-info-card .note p{margin:0 0 6px}
+.disk-info-card .note p:last-child{margin-bottom:0}
+.disk-info-card .safe{color:var(--success)}
+.disk-info-card .warn{color:var(--danger)}
   @media(max-width:768px){
-    .header{flex-direction:column;align-items:flex-start;gap:10px;padding:14px 16px}
-    .header h1{font-size:18px}
-    .meta{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+    .header{display:flex;height:48px;padding:0 16px;align-items:center;border-bottom:1px solid var(--border);background:var(--bg)}
     .container{flex-direction:column;padding:12px 14px 20px;gap:14px}
     .menu-toggle{display:inline-flex;align-items:center;gap:6px}
     .nav-overlay.show{display:block}
@@ -128,9 +300,18 @@
     .sidebar.open{transform:translateX(0)}
     .content{width:100%;min-width:0}
     html,body{overflow-x:hidden}
-    .statusbar{flex-direction:column;align-items:stretch;gap:10px;padding:12px 14px;margin-bottom:14px}
-    .status-right{flex-wrap:wrap;width:100%;gap:12px 18px}
-    .status-item{min-width:42%}
+    .hero{padding:16px 16px;margin-bottom:14px}
+    .hero-head{gap:10px;flex-wrap:wrap}
+    .hero-left{flex:1 1 100%;min-width:0}
+    .hero-right{flex-wrap:wrap;width:100%;gap:8px}
+    .hero-ic{width:46px;height:46px;font-size:23px}
+    .hero-title{font-size:16px}
+    .hero-badge{margin-left:0;width:100%;justify-content:center;font-size:11px;padding:5px 9px}
+    .hero-action{width:100%;margin-left:0;justify-content:flex-end}
+    .hero-ctrls{justify-content:flex-end}
+    .hero-stats{grid-template-columns:repeat(2,1fr);gap:8px;margin-top:14px}
+    .hs-v{font-size:17px}
+    .hs-uptime .hs-v{font-size:14px}
     .detect-cards,.cards{grid-template-columns:1fr;gap:12px}
     .detect-cards>*,.cards>*{grid-column:auto!important}
     .grid-2,.grid-auto{grid-template-columns:1fr}
@@ -138,7 +319,7 @@
     .card{padding:14px}
     .kv{gap:8px}
     .kv .v{word-break:break-word;overflow-wrap:anywhere}
-    .detect-title{font-size:18px}
+    .detect-title{font-size:15px}
     .detect-sub{margin-bottom:12px}
     .table{font-size:12px;display:block;overflow-x:auto;max-width:100%}
     .table th,.table td{padding:7px 8px}
@@ -154,7 +335,7 @@
   .btn-mini:hover{background:var(--bg)}
   .btn-mini.b-ok{background:var(--green);color:#fff;border-color:var(--green)}
   .btn-mini.b-bad{background:var(--red);color:#fff;border-color:var(--red)}
-  .inp{padding:6px 8px;font-size:13px;border:1px solid var(--border);border-radius:6px;background:#fff;color:var(--text)}
+  .inp{padding:6px 8px;font-size:13px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text)}
   /* 风扇控制独立页面 */
   .fan-page{display:flex;flex-direction:column;gap:16px}
   .fcs-card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px}
@@ -163,7 +344,7 @@
   .fcs-desc{font-size:12.5px;color:var(--muted);line-height:1.6;margin:6px 0 10px}
   .fcs-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
   .fcs-msg{font-size:12.5px;color:var(--muted)}
-  .btn-mini.danger{border-color:#f0a3a3;color:#b91c1c;background:#fff5f5}
+  .btn-mini.danger{border-color:rgba(245,63,63,.4);color:var(--danger);background:rgba(245,63,63,.08)}
   .btn-mini.danger:hover{background:#b91c1c;color:#fff;border-color:#b91c1c}
   .fan-presets{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:14px;background:var(--card);border:1px solid var(--border);border-radius:10px}
   .fan-presets .label{font-size:13px;color:var(--muted);margin-right:2px}
@@ -201,7 +382,7 @@
   .fan-notach-lbl{display:inline-flex;align-items:center;gap:4px;font-size:12px;color:var(--muted);cursor:pointer;user-select:none;white-space:nowrap}
   .fan-notach-lbl input{margin:0;cursor:pointer}
   .fan-hw-sum{font-weight:600;color:var(--orange)}
-  .fan-hw-toggle{margin-left:auto;font-size:11px;font-weight:400;color:var(--muted);background:none;border:1px solid var(--border-tertiary);border-radius:5px;padding:1px 7px;cursor:pointer}
+  .fan-hw-toggle{margin-left:auto;font-size:11px;font-weight:400;color:var(--muted);background:none;border:1px solid var(--border);border-radius:5px;padding:1px 7px;cursor:pointer}
   .fan-hw-toggle:hover{color:var(--orange);border-color:var(--orange)}
   .fan-hw-detail{display:none;flex-basis:100%;margin-top:6px;font-size:11px;font-weight:400;color:var(--muted);line-height:1.7}
   .fan-hw-detail b{color:var(--orange);font-weight:600}
@@ -279,7 +460,7 @@
   /* 风扇曲线编辑器：横向自适应（节点放成表格，单元更紧凑） */
   .curve-pt-table{width:100%;border-collapse:collapse;font-size:12px}
   .curve-pt-table th{font-weight:500;color:var(--muted);padding:3px 4px;text-align:left;border-bottom:1px solid var(--border)}
-  .curve-pt-table td{padding:4px 4px;border-bottom:1px dashed #f3f4f6;vertical-align:middle}
+  .curve-pt-table td{padding:4px 4px;border-bottom:1px dashed var(--divider);vertical-align:middle}
   .curve-pt-table tr:last-child td{border-bottom:none}
   .curve-pt-num{color:var(--muted);text-align:center;width:24px;font-variant-numeric:tabular-nums}
   .curve-pt-input{display:inline-flex;align-items:stretch;border:1px solid var(--border);border-radius:6px;background:#fff;overflow:hidden}
@@ -287,7 +468,7 @@
   .curve-pt-input input:focus{outline:none;background:#eff6ff}
   .curve-pt-input .unit{padding:4px 6px;font-size:11px;color:var(--muted);background:var(--bg);border-left:1px solid var(--border);min-width:22px;text-align:center}
   .curve-pt-del{background:none;border:1px solid var(--border);color:var(--muted);border-radius:6px;padding:3px 7px;cursor:pointer;font-size:12px}
-  .curve-pt-del:hover{color:var(--red);border-color:#f0a3a3}
+  .curve-pt-del:hover{color:var(--red);border-color:rgba(245,63,63,.4)}
   .curve-canvas{width:100%;height:120px;background:var(--bg);border:1px solid var(--border);border-radius:8px;margin-top:8px;display:block}
   /* 硬盘温度控制风扇面板 */
   .dt-panel{--dt-gap:16px;padding:18px}
@@ -330,7 +511,7 @@
   .seg{display:inline-flex;gap:6px;margin:2px 0 4px}
   .seg-btn{background:var(--bg);color:var(--muted);border:1px solid var(--border);border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;transition:.15s}
   .seg-btn:hover{color:var(--text)}
-  .seg-btn.active{background:var(--accent,#3a7afe);color:#fff;border-color:var(--accent,#3a7afe)}
+  .seg-btn.active{background:var(--primary);color:#fff;border-color:var(--primary)}
   /* 告警横幅 */
   .alert-banner{display:none;align-items:flex-start;gap:12px;background:linear-gradient(135deg,#b91c1c,#ef4444);color:#fff;padding:11px 18px;border-radius:10px;margin-bottom:16px;box-shadow:0 2px 10px rgba(185,28,28,.28);font-size:14px;line-height:1.6}
   .alert-banner.show{display:flex}
@@ -340,6 +521,42 @@
   .auto-head,.manual-head{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;margin-bottom:16px;flex-wrap:wrap}
   .auto-head h2,.manual-head h2{margin:0;font-size:18px;color:var(--text)}
   .auto-head .auto-sub,.manual-head .auto-sub{font-size:12px;color:var(--muted);margin-top:3px}
+  /* 操作手册：右侧可自动隐藏的目录（抽屉式，不挤占正文） */
+  .man-layout{display:block}
+  .man-content{width:100%}
+  /* 目录面板：固定在右侧中部，可滑入/滑出 */
+  .man-toc{position:fixed;top:50%;right:38px;transform:translateY(-50%);z-index:40;
+    width:212px;max-height:74vh;overflow:auto;
+    background:var(--card);border:1px solid var(--border);border-right:none;
+    border-radius:14px 0 0 14px;padding:14px 12px;box-shadow:-3px 3px 14px rgba(0,0,0,.10);
+    transition:transform .25s ease,opacity .25s ease}
+  .man-toc.collapsed{transform:translateY(-50%) translateX(120%);opacity:0;pointer-events:none}
+  .man-toc-title{font-size:12px;font-weight:600;color:var(--muted);letter-spacing:.04em;margin-bottom:8px;padding:0 6px}
+  .man-toc ul{list-style:none;margin:0;padding:0}
+  .man-toc li{margin:1px 0;line-height:1.45}
+  .man-toc li.lv3{padding-left:12px}
+  .man-toc a{display:block;color:var(--text);text-decoration:none;font-size:13px;padding:4px 6px;border-radius:6px;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .man-toc a:hover{background:var(--fill);color:var(--primary)}
+  /* 右侧常驻的「目录」开关按钮（竖向标签） */
+  .man-toc-btn{position:fixed;top:50%;right:0;transform:translateY(-50%);z-index:41;
+    background:var(--primary);color:#fff;border:none;border-radius:12px 0 0 12px;
+    padding:15px 9px;cursor:pointer;font-size:13px;letter-spacing:.14em;
+    writing-mode:vertical-rl;box-shadow:-2px 2px 8px rgba(0,0,0,.16)}
+  .man-toc-btn:hover{filter:brightness(1.06)}
+  @media(max-width:820px){
+    .man-toc{width:172px;max-height:66vh}
+    .man-toc-btn{padding:12px 7px;font-size:12px}
+  }
+  /* 当前版本段：版本号匹配 APP_VERSION 时由前端整体标红（不止标题） */
+  /* 用 .man-body .man-red-block ... 双重类选择器，确保优先级高于手册内嵌的 .man-body p/h2/blockquote 等颜色规则 */
+  .man-body .man-red-block,
+  .man-body .man-red-block h1,.man-body .man-red-block h2,.man-body .man-red-block h3,.man-body .man-red-block h4,
+  .man-body .man-red-block p,.man-body .man-red-block li,.man-body .man-red-block ul,.man-body .man-red-block ol,
+  .man-body .man-red-block blockquote,.man-body .man-red-block strong,.man-body .man-red-block b,
+  .man-body .man-red-block a,.man-body .man-red-block td,.man-body .man-red-block th{
+    color:var(--danger)
+  }
   .auto-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px 18px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.06)}
   .auto-card h3{margin:0 0 14px;font-size:15px;color:var(--text);display:flex;align-items:center;gap:8px}
   .auto-alerts{list-style:none;padding:0;margin:0}
@@ -352,7 +569,7 @@
   .auto-field input[type=number],.auto-field input[type=text]{width:100%;padding:7px 9px;background:#fff;border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px}
   .auto-field .unit{font-size:11px;color:var(--muted)}
   .dt-toggle{display:flex;align-items:center;gap:8px;font-size:13px;margin:8px 0;cursor:pointer;color:var(--text)}
-  .dt-toggle input{width:16px;height:16px;accent-color:var(--accent,#3a7afe)}
+  .dt-toggle input{width:16px;height:16px;accent-color:var(--primary)}
   .chan{background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:12px}
   .chan h4{margin:0 0 10px;font-size:13px;color:var(--text);display:flex;align-items:center;gap:8px}
   .chan-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}
@@ -363,38 +580,47 @@
   /* 风扇曲线编辑器 */
   .curve-presets{display:flex;gap:6px;margin:6px 0 10px;flex-wrap:wrap}
   .curve-canvas{width:100%;height:150px;background:var(--bg);border:1px solid var(--border);border-radius:8px;margin-top:8px;display:block}
+  /* 2.0 暗色兜底：子面板背景跟随 fill，避免黑底黑块；文字色统一走 Token */
+  [data-theme="dark"] .mem-slot,[data-theme="dark"] .temp-chip,[data-theme="dark"] .fan-card,[data-theme="dark"] .fcs-card,[data-theme="dark"] .fan-presets,[data-theme="dark"] .dt-field,[data-theme="dark"] .dt-opt,[data-theme="dark"] .chan,[data-theme="dark"] .dt-live,[data-theme="dark"] .fan-rule-tip,[data-theme="dark"] .fan-hw-note,[data-theme="dark"] .fan-dc-note,[data-theme="dark"] .fan-nosig-note,[data-theme="dark"] .dt-hint,[data-theme="dark"] .temp-overview,[data-theme="dark"] .sleep-panel,[data-theme="dark"] .auto-card,[data-theme="dark"] .curve-pt-input,[data-theme="dark"] .fan-label-input,[data-theme="dark"] .fan-volt-select,[data-theme="dark"] .fan-rule-src,[data-theme="dark"] .fan-rule-fields input,[data-theme="dark"] .dt-field input,[data-theme="dark"] .auto-field input,[data-theme="dark"] .curve-canvas{background:var(--fill);border-color:var(--border)}
+  [data-theme="dark"] .kv{border-color:var(--divider)}
+  [data-theme="dark"] .disk-group-title{color:var(--text-3)}
+  [data-theme="dark"] .disk-card.bad{background:rgba(247,105,101,.08)}
+  [data-theme="dark"] .disk-card.warn{background:rgba(255,154,46,.08)}
+  [data-theme="dark"] .b-sas,[data-theme="dark"] .b-sata{background:var(--fill);color:var(--text-2);border:1px solid var(--border)}
+  [data-theme="dark"] .fan-hw-toggle{border-color:var(--border)}
+  [data-theme="dark"] .update-banner,[data-theme="dark"] .alert-banner{filter:brightness(.92)}
+  [data-theme="dark"] .temp-bar,[data-theme="dark"] .progress{background:var(--border)}
+  [data-theme="dark"] .temp-chip-tag.on{background:var(--fill);color:var(--text-2)}
+  [data-theme="dark"] .btn-mini.danger{background:rgba(247,105,101,.12);color:#ff9a8a;border-color:rgba(247,105,101,.4)}
+  [data-theme="dark"] .dt-warn{background:rgba(255,154,46,.12);color:#ffb56b;border-color:rgba(255,154,46,.4)}
+  [data-theme="dark"] .b-ok{color:var(--success)} [data-theme="dark"] .b-warn{color:var(--warning)} [data-theme="dark"] .b-bad{color:var(--danger)}
+  [data-theme="dark"] .curve-pt-input input:focus{background:var(--fill)}
+  [data-theme="dark"] .auto-alerts li.danger{color:#ff8a85} [data-theme="dark"] .auto-alerts li.warn{color:#ffb56b} [data-theme="dark"] .auto-alerts li.ok{color:#5fd98a}
 </style>
 </head>
 <body>
 <div class="header">
-  <h1>🖥️ 飞牛 NAS 硬件监控</h1>
-  <div class="meta">
-    <button class="btn menu-toggle" id="menuToggle" onclick="toggleSidebar()">☰ 模块</button>
-    <span id="lastUpdate">加载中…</span>
-    <span><span class="spinner" id="spin"></span></span>
-    <label class="switch"><input type="checkbox" id="autoRefresh"><span class="slider"></span>自动刷新</label>
-    <button class="btn" onclick="loadData()">🔄 刷新</button>
-    <button class="btn" id="checkUpdateBtn" onclick="checkUpdate(true)">🔔 检查更新</button>
-  </div>
+  <button class="btn menu-toggle" id="menuToggle" onclick="toggleSidebar()">☰ 模块</button>
 </div>
 
 <div class="container">
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-title">监控模块</div>
     <div class="tabs">
-      <button class="tab active" onclick="switchTab('detect',this)">🔧 硬件配置检测</button>
+      <button class="tab active" onclick="switchTab('detect',this)"><img src="{{ ICON_DETECT_DATA }}" class="ic" alt="硬件配置检测"> 硬件配置检测</button>
       <div class="sb-group">资源监控</div>
-      <button class="tab" onclick="switchTab('system',this)">📊 系统资源</button>
-      <button class="tab" onclick="switchTab('sys-hist',this)">📈 历史趋势</button>
+      <button class="tab" onclick="switchTab('system',this)"><img src="{{ ICON_SYSTEM_DATA }}" class="ic" alt="系统资源"> 系统资源</button>
+      <button class="tab" onclick="switchTab('sys-hist',this)"><img src="{{ ICON_HISTORY_DATA }}" class="ic" alt="历史趋势"> 历史趋势</button>
       <div class="sb-group">存储</div>
-      <button class="tab" onclick="switchTab('raid',this)">💾 阵列卡</button>
-      <button class="tab" onclick="switchTab('disks',this)">💿 硬盘 SMART</button>
-      <button class="tab" onclick="switchTab('storage',this)">🗄️ 存储卷</button>
+      <button class="tab" onclick="switchTab('raid',this)"><img src="{{ ICON_RAID_DATA }}" class="ic" alt="阵列卡"> 阵列卡</button>
+      <button class="tab" onclick="switchTab('disks',this)"><img src="{{ ICON_HDD_DATA }}" class="ic" alt="硬盘"> 硬盘 SMART</button>
+      <button class="tab" onclick="switchTab('storage',this)"><img src="{{ ICON_STORAGE_DATA }}" class="ic" alt="存储卷"> 存储卷</button>
       <div class="sb-group">其他</div>
-      <button class="tab" onclick="switchTab('fan',this)">🌀 风扇控制</button>
-      <button class="tab" onclick="switchTab('docker',this)">🐳 Docker</button>
-      <button class="tab" onclick="switchTab('automation',this)">🔔 控制与自动化</button>
-      <button class="tab" onclick="switchTab('manual',this)">📘 操作手册</button>
+      <button class="tab" onclick="switchTab('fan',this)"><img src="{{ ICON_FAN_DATA }}" class="ic" alt="风扇控制"> 风扇控制</button>
+      <button class="tab" onclick="switchTab('docker',this)"><img src="{{ ICON_DOCKER_DATA }}" class="ic" alt="Docker"> Docker</button>
+      <button class="tab" onclick="switchTab('automation',this)"><img src="{{ ICON_AUTOMATION_DATA }}" class="ic" alt="控制与自动化"> 控制与自动化</button>
+      <button class="tab" onclick="switchTab('manual',this)"><img src="{{ ICON_MANUAL_DATA }}" class="ic" alt="操作手册"> 操作手册</button>
+      <button class="tab" onclick="switchTab('about',this)"><img src="{{ ICON_ABOUT_DATA }}" class="ic" alt="关于"> 关于 nasdash</button>
     </div>
   </aside>
   <main class="content">
@@ -419,11 +645,29 @@
     <div id="docker" class="panel"><div class="sk-card"><div class="skeleton sk-line" style="width:34%"></div><div class="skeleton sk-line" style="width:78%"></div><div class="skeleton sk-line" style="width:54%"></div></div></div>
     <div id="automation" class="panel"><div class="sk-card"><div class="skeleton sk-line" style="width:48%"></div><div class="skeleton sk-line" style="width:86%"></div><div class="skeleton sk-line" style="width:60%"></div></div></div>
     <div id="manual" class="panel"><div class="sk-card"><div class="skeleton sk-line" style="width:40%"></div><div class="skeleton sk-line" style="width:82%"></div><div class="skeleton sk-line" style="width:58%"></div></div></div>
+    <div id="about" class="panel"><div class="sk-card"><div class="skeleton sk-line" style="width:40%"></div><div class="skeleton sk-line" style="width:82%"></div><div class="skeleton sk-line" style="width:58%"></div></div></div>
   </main>
 </div>
 <div class="nav-overlay" id="navOverlay" onclick="closeSidebar()"></div>
 
 <script>
+// 2.0 明暗主题切换
+function toggleTheme(){
+  var d=document.documentElement;
+  var dark=d.getAttribute('data-theme')==='dark';
+  d.setAttribute('data-theme',dark?'light':'dark');
+  try{localStorage.setItem('nasdash_theme',dark?'light':'dark');}catch(e){}
+  updateThemeBtn();
+}
+function isThemeDark(){ return document.documentElement.getAttribute('data-theme')==='dark'; }
+function updateThemeBtn(){
+  var dark=isThemeDark();
+  document.querySelectorAll('.themeToggle').forEach(b=>{
+    b.textContent=dark?'☀️':'🌙';
+    b.title=dark?'切换到浅色':'切换到深色';
+  });
+}
+document.addEventListener('DOMContentLoaded',updateThemeBtn);
 // 统一网关适配：页面位于 /app/{appname} 路径下时，自动为所有绝对根路径 fetch 补上前缀；
 // 本地 TCP 模式（根路径）下前缀为空，行为完全不变。无需逐个改 fetch 调用。
 (function(){
@@ -457,8 +701,31 @@ function switchTab(id, btn){
   if(id==='sys-hist'){ initHistory(); }  // 面板打开时才初始化，避免隐藏时宽度=0 画布空白
   if(id==='automation'){ initAutomation(); }
   if(id==='manual'){ initManual(); }  // 操作手册：拉取 /manual?embed=1 片段就地渲染
+  if(id==='about'){ renderAbout(); }
   refreshPanel(id);  // 切换导航即拉取该板块最新数据（点哪个刷哪个）
   closeSidebar();  // 手机端选完模块自动收起抽屉
+  window.scrollTo({top:0, left:0, behavior:'smooth'});  // 切换板块后内容回到顶部
+}
+// 用板块 id 直接切换（供页面内链接用，避免依赖按钮元素）
+function goTab(id){ var t=document.querySelector('.tab[onclick*="'+id+'"]'); if(t) switchTab(id,t); }
+// 「关于 nasdash」页面：版本号常驻展示 + 项目信息
+function renderAbout(){
+  var el=document.getElementById('about'); if(!el) return;
+  var fnos = (DATA && DATA.fnos_version) ? DATA.fnos_version : '';
+  var fnosText = fnos ? esc(fnos)+' (Debian 底层)' : '（切到「硬件配置检测」后自动显示）';
+  var kernel = (DATA && DATA.system && DATA.system.kernel) ? DATA.system.kernel : '—';
+  el.innerHTML = panelHero({icon:ICON_ABOUT, title:'关于 nasdash', sub:'nasdash {{ APP_VERSION }}'})
+  + '<div class="detect-cards">'
+    + '<div class="card"><h3>版本信息</h3>'
+      + '<div class="kv"><span class="k">fnOS 版本</span><span class="v">'+fnosText+'</span></div>'
+      + '<div class="kv"><span class="k">运行内核</span><span class="v">'+esc(kernel)+'</span></div>'
+    + '</div>'
+    + '<div class="card"><h3>项目</h3>'
+      + '<div class="kv"><span class="k">开源仓库</span><span class="v"><a href="https://github.com/han951meng/nasdash" target="_blank" rel="noopener">github.com/han951meng/nasdash</a></span></div>'
+      + '<div class="kv"><span class="k">论坛地址</span><span class="v"><a href="https://club.fnnas.com/forum.php?mod=viewthread&tid=67060" target="_blank" rel="noopener">club.fnnas.com 讨论帖</a></span></div>'
+      + '<div class="kv"><span class="k">检查更新</span><span class="v"><button class="btn-mini" onclick="checkUpdate(true)">检查新版本</button></span></div>'
+    + '</div>'
+  + '</div>';
 }
 // 当前处于激活状态的板块 id（无独立状态变量，直接从 DOM 读取，最鲁棒）
 function currentTab(){ var p=document.querySelector('.panel.active'); return p?p.id:'detect'; }
@@ -518,7 +785,7 @@ function smartUpdate(el, html){
 
 async function refreshPanel(id){
   if(!DATA){ return; }  // 首屏尚未 loadData 完成时不介入
-  var spin=document.getElementById('spin'); if(spin) spin.style.display='inline-block';
+  document.querySelectorAll('.spin').forEach(spin=>spin.style.display='inline-block');
   try{
     if(id==='detect'){ // 硬件配置检测是全局概览，需要所有数据 → 走全量
       var rr=await fetch('/api/all?_='+Date.now()); DATA=await rr.json(); renderAll(); return;
@@ -539,7 +806,7 @@ async function refreshPanel(id){
     if(d.elapsed!==undefined) DATA.elapsed=d.elapsed;
     renderPanel(id);
   }catch(e){}
-  finally{ if(spin) spin.style.display='none'; }
+  finally{ document.querySelectorAll('.spin').forEach(spin=>spin.style.display='none'); }
 }
 // 只重渲指定板块（不碰其他面板 DOM）
 function renderPanel(id){
@@ -556,11 +823,69 @@ function renderPanel(id){
       refreshFanPanel();
     }
   }
-  var lu=document.getElementById('lastUpdate');
-  if(lu && DATA.time) lu.textContent='更新于 '+DATA.time+(DATA.elapsed!==undefined?' ('+DATA.elapsed+'s)':'');
+  if(DATA.time){
+    document.querySelectorAll('.lastUpdate').forEach(lu=>{ lu.textContent='更新于 '+DATA.time+(DATA.elapsed!==undefined?' ('+DATA.elapsed+'s)':''); });
+  }
 }
 function badge(ok, okText='正常', badText='异常'){
   return `<span class="badge ${ok?'b-ok':'b-bad'}">${ok?okText:badText}</span>`;
+}
+// 全局控件：原置顶栏的时间/自动刷新/刷新/更新/主题，现下沉到每个 panel 的 hero 右上角
+var autoRefreshEnabled = false;
+function setAutoRefresh(on){
+  autoRefreshEnabled = !!on;
+  document.querySelectorAll('.autoRefresh').forEach(cb=>{ cb.checked = autoRefreshEnabled; });
+  if(timer){ clearInterval(timer); timer = null; }
+  if(autoRefreshEnabled){ timer = setInterval(autoRefreshTick, 30000); }
+  try{ localStorage.setItem('nasdash_autorefresh', autoRefreshEnabled ? '1':'0'); }catch(e){}
+}
+function heroControls(){
+  var dark=isThemeDark();
+  return '<div class="hero-ctrls">'
+    + '<span class="lastUpdate hd-time">加载中…</span>'
+    + '<span class="spin spinner" style="display:none"></span>'
+    + '<label class="switch" title="自动刷新"><input type="checkbox" class="autoRefresh" onchange="setAutoRefresh(this.checked)"'+(autoRefreshEnabled?' checked':'')+'><span class="slider"></span>自动刷新</label>'
+    + '<button class="icon-btn" onclick="loadData()" title="立即刷新">🔄</button>'
+    + '<button class="icon-btn checkUpdateBtn" onclick="checkUpdate(true)" title="检查更新">🔔</button>'
+    + '<button class="icon-btn themeToggle" onclick="toggleTheme()" title="'+(dark?'切换到浅色':'切换到深色')+'">'+(dark?'☀️':'🌙')+'</button>'
+    + '</div>';
+}
+
+// 统一面板 hero 横幅（对齐飞牛虚拟机概览页风格）：icon 图标 / title 标题 / sub 副标题
+// badge:{ok,text} 健康徽章 / action 右上角操作按钮 / stats:[{v,unit,k,cls}] 指标格
+// 统一彩色插画图标（base64 内嵌，避免网关 302 问题）。tab 按钮和面板大图标共用。
+var ICON_DETECT     = '<img src="{{ ICON_DETECT_DATA }}" class="ic" alt="硬件配置检测">';
+var ICON_SYSTEM     = '<img src="{{ ICON_SYSTEM_DATA }}" class="ic" alt="系统资源">';
+var ICON_HISTORY    = '<img src="{{ ICON_HISTORY_DATA }}" class="ic" alt="历史趋势">';
+var ICON_RAID       = '<img src="{{ ICON_RAID_DATA }}" class="ic" alt="阵列卡">';
+var ICON_HDD        = '<img src="{{ ICON_HDD_DATA }}" class="ic" alt="硬盘 SMART">';
+var ICON_STORAGE    = '<img src="{{ ICON_STORAGE_DATA }}" class="ic" alt="存储卷">';
+var ICON_FAN        = '<img src="{{ ICON_FAN_DATA }}" class="ic" alt="风扇控制">';
+var ICON_DOCKER     = '<img src="{{ ICON_DOCKER_DATA }}" class="ic" alt="Docker">';
+var ICON_AUTOMATION = '<img src="{{ ICON_AUTOMATION_DATA }}" class="ic" alt="控制与自动化">';
+var ICON_MANUAL     = '<img src="{{ ICON_MANUAL_DATA }}" class="ic" alt="操作手册">';
+var APP_VERSION      = "{{ APP_VERSION }}";  // 用于手册当前版本段自动标红判定
+var ICON_ABOUT      = '<img src="{{ ICON_ABOUT_DATA }}" class="ic" alt="关于">';
+function panelHero(o){
+  o = o||{};
+  let stats = (o.stats||[]).map(function(st){
+    let cls = st.cls ? ' '+st.cls : '';
+    let unit = st.unit ? '<small>'+st.unit+'</small>' : '';
+    let uptimeCls = (st.k === '已运行') ? ' hs-uptime' : '';
+    return '<div class="hs'+cls+uptimeCls+'"><div class="hs-v">'+st.v+unit+'</div><div class="hs-k">'+st.k+'</div></div>';
+  }).join('');
+  let badge = o.badge ? '<div class="hero-badge'+(o.badge.ok?'':' warn')+'"><span class="dot"></span>'+o.badge.text+'</div>' : '';
+  let action = '<div class="hero-action">' + heroControls() + (o.action || '') + '</div>';
+  return '<div class="hero">'
+    + '<div class="hero-head">'
+    +   '<div class="hero-left">'
+    +     (o.icon?'<div class="hero-ic">'+o.icon+'</div>':'')
+    +     '<div class="hero-text"><div class="hero-title">'+o.title+'</div>'+(o.sub?'<div class="hero-sub">'+o.sub+'</div>':'')+'</div>'
+    +   '</div>'
+    +   '<div class="hero-right">' + badge + action + '</div>'
+    + '</div>'
+    + (stats?'<div class="hero-stats">'+stats+'</div>':'')
+  + '</div>';
 }
 function tempColor(t, trip){
   if(t==null) return 'var(--muted)';
@@ -578,11 +903,11 @@ function fmtHours(h){
 function renderRaid(r, disks){
   // 纯 SATA 主板：无独立阵列卡 / HBA
   if(r.mode === 'none'){
-    return '<div class="card"><div class="loading">'+(r.note||'未检测到阵列卡')+'</div></div>';
+    return panelHero({icon:ICON_RAID,title:'阵列卡',sub:'MegaRAID / HBA 控制器与物理盘',badge:{ok:false,text:'未配置'},stats:[{v:'未配置',k:'控制器状态',cls:'warn'},{v:r.model||'—',k:'型号'},{v:'—',k:'芯片温度'},{v:0,k:'物理盘数'}]})+'<div class="card"><div class="loading">'+(r.note||'未检测到阵列卡')+'</div></div>';
   }
   // MegaRAID 卡存在但 storcli 读取失败
   if(r.mode === 'mega_error'){
-    return '<div class="card"><div class="loading" style="color:var(--red)">'+(r.note||'读取失败')+'</div></div>';
+    return panelHero({icon:ICON_RAID,title:'阵列卡',sub:'MegaRAID / HBA 控制器与物理盘',badge:{ok:false,text:'读取失败'},stats:[{v:'读取失败',k:'控制器状态',cls:'warn'},{v:r.model||'—',k:'型号'},{v:'—',k:'芯片温度'},{v:0,k:'物理盘数'}]})+'<div class="card"><div class="loading" style="color:var(--red)">'+(r.note||'读取失败')+'</div></div>';
   }
   // HBA 直通卡（IT 模式）：盘由系统直接管理，内联 smartctl 直读的磁盘温度
   if(r.mode === 'hba'){
@@ -595,6 +920,11 @@ function renderRaid(r, disks){
       return `<tr><td>${d.dev}</td><td>${mdl}</td><td>${typ}</td><td style="color:${tcol};font-weight:600">${tstr}</td></tr>`;
     }).join('') : '<tr><td colspan=4>未检测到磁盘（请用 smartctl 确认盘已被系统识别）</td></tr>';
     return `
+    ${panelHero({icon:ICON_RAID,title:'阵列卡',sub:'HBA 直通 · 磁盘由系统直接管理',stats:[
+      {v:'HBA 直通',k:'模式'},
+      {v:(r.controller_temp!=null?r.controller_temp+'°C':'—'),k:'芯片温度'},
+      {v:((disks&&disks.length)||0),k:'已识别磁盘'}
+    ]})}
     <div class="cards">
       <div class="card">
         <h3>控制器 (HBA 直通)</h3>
@@ -603,9 +933,9 @@ function renderRaid(r, disks){
         <div class="kv"><span class="k">状态</span><span class="v" style="color:var(--green)">✓ 正常工作</span></div>
         ${r.controller_temp != null ? `<div class="kv"><span class="k">芯片温度</span><span class="v" style="color:${tempColor(r.controller_temp,85)};font-weight:600">${r.controller_temp}°C</span></div>` : ''}
       </div>
-      <div class="card" style="grid-column: span 2">
+      <div class="card span-2">
         <h3>说明</h3>
-        <div style="margin-top:6px;color:var(--muted);font-size:13px;line-height:1.7">${r.note}</div>
+        <div class="note">${r.note}</div>
       </div>
     </div>
     <div class="section-title">已识别磁盘温度（smartctl 直读，无需阵列卡）</div>
@@ -619,6 +949,11 @@ function renderRaid(r, disks){
   let ctCol = tempColor(ct, 85);
   let drives = r.drives.map(d=>`<tr><td>${d.slot}</td><td>${d.brand||'-'}</td><td>${d.model}${d.feature?` <span class="badge b-info">${d.feature}</span>`:''}</td><td>${d.intf} ${d.media}</td><td>${d.size}${d.size_note?`<br><span style="font-size:11px;color:var(--muted)">${d.size_note}</span>`:''}</td><td><span class="badge ${d.state==='JBOD'||d.state==='Onln'?'b-ok':'b-warn'}">${d.state}${d.sp==='D'?' · 已停转':''}</span></td><td>${d.rpm||'-'}</td></tr>`).join('');
   return `
+  ${panelHero({icon:ICON_RAID,title:'阵列卡',sub:'MegaRAID (IR) 控制器与物理盘',badge:{ok:true,text:'阵列卡正常'},stats:[
+    {v:'MegaRAID',k:'模式'},
+    {v:(r.controller_temp!=null?r.controller_temp+'°C':'—'),k:'芯片温度'},
+    {v:((r.drives&&r.drives.length)||0),k:'物理盘数'}
+  ]})}
   <div class="cards">
     <div class="card">
       <h3>阵列卡信息</h3>
@@ -642,7 +977,7 @@ function renderRaid(r, disks){
       <div class="kv"><span class="k">CacheVault</span><span class="v">${r.cachevault}</span></div>
       <div class="kv"><span class="k">JBOD 盘数</span><span class="v">${r.jbod_count}</span></div>
     </div>
-    <div class="card" style="grid-column: 1 / -1">
+      <div class="card span-all">
       <h3>说明</h3>
       <div style="margin-top:6px;color:var(--muted);font-size:13px;line-height:1.7">MegaRAID (IR 模式)：磁盘由阵列卡固件统一管理，支持 RAID 0/1/5/10 与 JBOD。阵列卡芯片温度由 storcli 读取（ROC temperature）；每张物理盘的状态与转速见下方列表，单盘 SMART 温度与健康度请见「硬盘 SMART」标签页。</div>
     </div>
@@ -653,9 +988,31 @@ function renderRaid(r, disks){
   </div>`;
 }
 
+// 硬盘 SMART 页顶部说明卡：回答"会不会一直扫描/伤盘" + A/B 双档说明
+function diskInfoCard(){
+  return '<div class="card disk-info-card">'
+    + '<h3>💡 SMART 读取会伤盘吗？</h3>'
+    + '<div class="note">'
+      + '<p>平时 nasdash 只是<b class="safe">只读 SMART 属性</b>（读健康度、温度、通电时间等），<b>不会扫描盘面，也不会写入数据</b>，对硬盘没有额外磨损。刷新一次也就 1～2 秒，点刷新/自动刷新都不会让你的硬盘一直转或一直扫。</p>'
+      + '<p>只有当你手动点下面每块盘里的<b>A 档</b>或<b>B 档</b>，才是真正的自检：</p>'
+      + '<p>• <b>A 档 · SMART 长自检</b>：只读扫描整盘，不伤数据，适合二手盘/老盘体检。</p>'
+      + '<p>• <b>B 档 · 坏块慢扫（badblocks）</b>：会<b class="warn">写满整盘并清空数据</b>，且很慢。因此只让「独立盘」（没挂载、不在阵列、不在 LVM）跑；在用盘按钮置灰，硬点也会被拦下。</p>'
+    + '</div>'
+  + '</div>';
+}
+
 function renderDisks(disks){
-  if(!disks||!disks.length) return '<div class="card"><div class="loading">未检测到硬盘</div></div>';
-  return '<div class="cards">'+disks.map(d=>{
+  if(!disks||!disks.length) return panelHero({icon:ICON_HDD,title:'硬盘 SMART',sub:'全部硬盘健康度 / 温度 / 寿命',stats:[{v:0,k:'硬盘总数'},{v:'0/0',k:'健康'},{v:0,k:'NVMe'},{v:'—',k:'最高温度'}]})+diskInfoCard()+'<div class="card"><div class="loading">未检测到硬盘</div></div>';
+  let _total=disks.length, _healthy=disks.filter(d=>d.health_ok).length,
+      _nvme=disks.filter(d=>(d.type||'').toLowerCase()==='nvme').length,
+      _maxT=null;
+  disks.forEach(d=>{ if(d.temp!=null) _maxT = (_maxT==null?d.temp:Math.max(_maxT,d.temp)); });
+  return panelHero({icon:ICON_HDD,title:'硬盘 SMART',sub:'全部硬盘健康度 / 温度 / 寿命',stats:[
+    {v:_total,k:'硬盘总数'},
+    {v:_healthy+'<small>/'+_total+'</small>',k:'健康',cls:(_healthy===_total?'':'warn')},
+    {v:_nvme,k:'NVMe'},
+    {v:(_maxT!=null?_maxT+'°C':'—'),k:'最高温度'}
+  ]}) + diskInfoCard() + '<div class="cards">'+disks.map(d=>{
     let isSAS = d.type==='sas';
     let isNVMe = d.type==='nvme';
     let healthBadge = d.health_ok ? '<span class="badge b-ok">'+d.health+'</span>' : '<span class="badge b-bad">'+d.health+'</span>';
@@ -666,44 +1023,228 @@ function renderDisks(disks){
     let detail = '';
     if(isSAS){
       detail = `
-        <div class="kv"><span class="k">已用时长</span><span class="v">${fmtHours(d.power_on_hours)}</span></div>
-        <div class="kv"><span class="k">缺陷扇区</span><span class="v" style="color:${d.defects>0?'var(--red)':'var(--text)'}">${d.defects}</span></div>
-        <div class="kv"><span class="k">待处理缺陷</span><span class="v" style="color:${d.pending>0?'var(--orange)':'var(--text)'}">${d.pending}</span></div>
-        <div class="kv"><span class="k">非介质错误</span><span class="v">${d.non_medium_errors||0}</span></div>
-        <div class="kv"><span class="k">读错误(不可纠正)</span><span class="v">${d.read_errors}</span></div>
-        <div class="kv"><span class="k">写错误(不可纠正)</span><span class="v">${d.write_errors}</span></div>`;
+        <div class="kv"><span class="k" title="${esc(smartTip('已用时长'))}">已用时长</span><span class="v">${fmtHours(d.power_on_hours)}</span></div>
+        <div class="kv"><span class="k" title="${esc(smartTip('缺陷扇区'))}">缺陷扇区</span><span class="v" style="color:${d.defects>0?'var(--red)':'var(--text)'}">${d.defects}</span></div>
+        <div class="kv"><span class="k" title="${esc(smartTip('待处理缺陷'))}">待处理缺陷</span><span class="v" style="color:${d.pending>0?'var(--orange)':'var(--text)'}">${d.pending}</span></div>
+        <div class="kv"><span class="k" title="${esc(smartTip('非介质错误'))}">非介质错误</span><span class="v">${d.non_medium_errors||0}</span></div>
+        <div class="kv"><span class="k" title="${esc(smartTip('读错误(不可纠正)'))}">读错误(不可纠正)</span><span class="v">${d.read_errors}</span></div>
+        <div class="kv"><span class="k" title="${esc(smartTip('写错误(不可纠正)'))}">写错误(不可纠正)</span><span class="v">${d.write_errors}</span></div>`;
     } else if(isNVMe) {
       detail = `
-        <div class="kv"><span class="k">已用时长</span><span class="v">${fmtHours(d.power_on_hours)}</span></div>
-        <div class="kv"><span class="k">已用寿命</span><span class="v" style="color:${d.percentage_used>0?'var(--orange)':'var(--text)'}">${d.percentage_used!=null?d.percentage_used+'%':'N/A'}</span></div>
-        <div class="kv"><span class="k">剩余备用</span><span class="v">${d.available_spare!=null?d.available_spare+'%':'N/A'}</span></div>
-        <div class="kv"><span class="k">临界告警</span><span class="v" style="color:${d.critical_warning&&d.critical_warning!=='0'?'var(--red)':'var(--text)'}">0x${d.critical_warning||'0'}</span></div>
-        <div class="kv"><span class="k">读取量</span><span class="v">${d.data_units_read||'N/A'}</span></div>
-        <div class="kv"><span class="k">写入量</span><span class="v">${d.data_units_written||'N/A'}</span></div>`;
+        <div class="kv"><span class="k" title="${esc(smartTip('已用时长'))}">已用时长</span><span class="v">${fmtHours(d.power_on_hours)}</span></div>
+        <div class="kv"><span class="k" title="${esc(smartTip('已用寿命'))}">已用寿命</span><span class="v" style="color:${d.percentage_used>0?'var(--orange)':'var(--text)'}">${d.percentage_used!=null?d.percentage_used+'%':'N/A'}</span></div>
+        <div class="kv"><span class="k" title="${esc(smartTip('剩余备用'))}">剩余备用</span><span class="v">${d.available_spare!=null?d.available_spare+'%':'N/A'}</span></div>
+        <div class="kv"><span class="k" title="${esc(smartTip('临界告警'))}">临界告警</span><span class="v" style="color:${ (parseInt(d.critical_warning||'0',16)||0)>0 ? 'var(--red)' : 'var(--green)' }">${ (parseInt(d.critical_warning||'0',16)||0)>0 ? ('0x'+d.critical_warning+' 告警') : '正常' }</span></div>
+        <div class="kv"><span class="k" title="${esc(smartTip('读取量'))}">读取量</span><span class="v">${d.data_units_read||'N/A'}</span></div>
+        <div class="kv"><span class="k" title="${esc(smartTip('写入量'))}">写入量</span><span class="v">${d.data_units_written||'N/A'}</span></div>`;
     } else {
       detail = `
-        <div class="kv"><span class="k">已用时长</span><span class="v">${fmtHours(d.power_on_hours)}</span></div>
-        <div class="kv"><span class="k">重映射扇区</span><span class="v" style="color:${d.reallocated>0?'var(--red)':'var(--text)'}">${d.reallocated}</span></div>
-        <div class="kv"><span class="k">待处理扇区</span><span class="v" style="color:${d.pending>0?'var(--orange)':'var(--text)'}">${d.pending}</span></div>
-        <div class="kv"><span class="k">不可纠正扇区</span><span class="v" style="color:${d.uncorrectable>0?'var(--red)':'var(--text)'}">${d.uncorrectable}</span></div>
-        <div class="kv"><span class="k">UDMA CRC 错误</span><span class="v">${d.udma_crc||0}</span></div>`;
+        <div class="kv"><span class="k" title="${esc(smartTip('已用时长'))}">已用时长</span><span class="v">${fmtHours(d.power_on_hours)}</span></div>
+        <div class="kv"><span class="k" title="${esc(smartTip('重映射扇区'))}">重映射扇区</span><span class="v" style="color:${d.reallocated>0?'var(--red)':'var(--text)'}">${d.reallocated}</span></div>
+        <div class="kv"><span class="k" title="${esc(smartTip('待处理扇区'))}">待处理扇区</span><span class="v" style="color:${d.pending>0?'var(--orange)':'var(--text)'}">${d.pending}</span></div>
+        <div class="kv"><span class="k" title="${esc(smartTip('不可纠正扇区'))}">不可纠正扇区</span><span class="v" style="color:${d.uncorrectable>0?'var(--red)':'var(--text)'}">${d.uncorrectable}</span></div>
+        <div class="kv"><span class="k" title="${esc(smartTip('UDMA CRC 错误'))}">UDMA CRC 错误</span><span class="v">${d.udma_crc||0}</span></div>`;
     }
     return `<div class="card disk-card ${cls}">
       <div class="disk-head">
         <span class="name">${d.dev}</span>
         ${healthBadge}
       </div>
-      <div class="kv"><span class="k">型号</span><span class="v">${d.brand?d.brand+' ':''}${d.vendor?d.vendor+' ':''}${d.model}</span></div>
-      <div class="kv"><span class="k">容量 / 类型</span><span class="v">${d.size} · ${isNVMe?'NVMe':(isSAS?'SAS':'SATA')} · ${d.rota=='1'?'HDD':'SSD'}${d.feature?' · '+d.feature:''}</span></div>
-      <div class="kv"><span class="k">转速</span><span class="v">${d.rpm||(d.rota=='1'||isSAS?'—':'固态(SSD)')}</span></div>
-      <div class="kv"><span class="k">序列号</span><span class="v" style="font-size:12px">${d.serial}</span></div>
-      <div style="margin-top:8px"><span style="font-size:13px;color:var(--muted)">温度 ${tempStr}</span><div class="temp-bar"><div class="temp-fill" style="width:${tempPct}%;background:${tempColor(d.temp,trip)}"></div></div></div>
+      <div class="kv"><span class="k" title="${esc(smartTip('型号'))}">型号</span><span class="v">${d.brand?d.brand+' ':''}${d.vendor?d.vendor+' ':''}${d.model}</span></div>
+      <div class="kv"><span class="k" title="${esc(smartTip('容量 / 类型'))}">容量 / 类型</span><span class="v">${d.size} · ${isNVMe?'NVMe':(isSAS?'SAS':'SATA')} · ${d.rota=='1'?'HDD':'SSD'}${d.feature?' · '+d.feature:''}</span></div>
+      <div class="kv"><span class="k" title="${esc(smartTip('转速'))}">转速</span><span class="v">${d.rpm||(d.rota=='1'||isSAS?'—':'固态(SSD)')}</span></div>
+      <div class="kv"><span class="k" title="${esc(smartTip('序列号'))}">序列号</span><span class="v" style="font-size:12px">${d.serial}</span></div>
+      <div style="margin-top:8px" title="${esc(smartTip('温度'))}"><span style="font-size:13px;color:var(--muted)">温度 ${tempStr}</span><div class="temp-bar"><div class="temp-fill" style="width:${tempPct}%;background:${tempColor(d.temp,trip)}"></div></div></div>
       ${detail}
+      ${renderDiskTest(d)}
     </div>`;
   }).join('')+'</div>';
 }
 
+// ===== 硬盘自检（A/B 双档）前端 =====
+var DISK_TEST_JOBS = {};
+var diskTestTimer = null;      // 本地 1 秒 elapsed 计时器
+var diskTestPollTimer = null;  // 后端 3 秒状态轮询计时器
+function fmtSec(s){ if(s==null) return '-'; if(s<60) return s+'秒'; var m=Math.floor(s/60), h=Math.floor(m/60); m=m%60; if(h) return h+'小时'+m+'分'; return m+'分'+(s%60)+'秒'; }
+function renderDiskTest(d){
+  var job = (DISK_TEST_JOBS || {})[d.dev];
+  if(job && job.state === 'running'){
+    var pct = job.progress!=null ? Math.min(100, Math.round(job.progress)) : 0;
+    var prog = job.progress!=null
+      ? '<div class="disk-test-progress"><div class="disk-test-progress-fill" style="width:'+pct+'%"></div></div>'
+        + '<div class="disk-test-pct" style="text-align:right;font-size:12px;color:var(--primary);font-weight:600;margin-top:3px">'+pct+'%</div>'
+      : '';
+    var elapsedNow = job.started_at ? Math.max(0, Math.floor(Date.now()/1000 - job.started_at)) : (job.elapsed || 0);
+    var etaHtml = '';
+    if(job.started_at){
+      if(job.progress!=null && job.progress>0){
+        var _total = elapsedNow * 100 / job.progress;
+        var _remain = Math.max(0, _total - elapsedNow);
+        etaHtml = ' · 预计剩余 <span id="dt-eta-'+esc(d.dev)+'">'+fmtSec(_remain)+'</span> / 总用时约 '+fmtSec(_total);
+      }else{
+        var hint = job.eta_total_hint ? '参考总用时约 '+fmtSec(job.eta_total_hint) : '刚开始，进度更新较慢';
+        etaHtml = ' · 预计剩余 <span id="dt-eta-'+esc(d.dev)+'">计算中…</span>（'+hint+'）';
+      }
+    }
+    return '<div class="disk-test-section">'
+      +'<div class="disk-test-title">🩺 硬盘自检</div>'
+      +'<div class="disk-test-msg">'+esc(job.message)+' · 已运行 <span id="dt-elapsed-'+esc(d.dev)+'">'+fmtSec(elapsedNow)+'</span>'+etaHtml+'</div>'
+      +prog
+      +'<div class="disk-test-actions"><button class="btn-mini" onclick="abortDiskTest(\''+esc(d.dev)+'\')">中止</button><span class="disk-test-msg" id="dt-state-'+esc(d.dev)+'"></span></div>'
+    +'</div>';
+  }
+  if(job && (job.state === 'done' || job.state === 'error' || job.state === 'aborted')){
+    var cls = job.state==='done'?'done':(job.state==='error'?'error':'');
+    var result = '';
+    if(job.result && job.result.read_errors!==undefined){
+      result = ' · 读错误 '+job.result.read_errors+' / 写错误 '+job.result.write_errors+' / 可纠正 '+job.result.corrected;
+    }
+    return '<div class="disk-test-section">'
+      +'<div class="disk-test-title">🩺 硬盘自检 · '+(job.state==='done'?'完成':(job.state==='error'?'失败':'中止'))+'</div>'
+      +'<div class="disk-test-msg '+cls+'">'+esc(job.message)+result+'</div>'
+      +'<div class="disk-test-actions"><button class="btn-mini" onclick="clearDiskTest(\''+esc(d.dev)+'\')">清除</button></div>'
+    +'</div>';
+  }
+  var bDisabled = !d.standalone;
+  var bTitle = d.standalone ? '破坏性测试，会覆盖全盘数据，仅用于独立盘' : (d.standalone_reason || '该盘不是独立盘');
+  var bClass = d.standalone ? 'btn-mini danger' : 'btn-mini disabled';
+  var modelArg = esc(d.model || '未知型号').replace(/'/g,"\\'");
+  var bOnclick = d.standalone ? 'startDiskTest(\''+esc(d.dev)+'\',\'badblocks\',\''+modelArg+'\')' : '';
+  return '<div class="disk-test-section">'
+    +'<div class="disk-test-title">🩺 硬盘自检</div>'
+    +'<div class="disk-test-btns">'
+      +'<button class="btn-mini" onclick="startDiskTest(\''+esc(d.dev)+'\',\'long\',\''+modelArg+'\')">A：SMART 长自检</button>'
+      +'<button class="'+bClass+'"'+(bTitle?' title="'+esc(bTitle)+'"':'')+' onclick="'+bOnclick+'"'+(bDisabled?' disabled':'')+'>B：坏块慢扫（破坏性）</button>'
+    +'</div>'
+    +'<div class="disk-test-msg" id="dt-state-'+esc(d.dev)+'"></div>'
+  +'</div>';
+}
+async function startDiskTest(dev,type,model){
+  model = model || '未知型号';
+  if(type==='badblocks' && !await appConfirm({
+    title: '确认对 '+model+' 执行 B 档坏块慢扫？',
+    body: '目标磁盘：'+model+'（/dev/'+dev+'）\n\nB 类坏块慢扫会对该盘执行读写覆盖测试，这会擦除盘上所有数据，且耗时很长。\n请再次确认该盘为独立盘（未挂载、非 RAID/LVM 成员）。',
+    danger: true,
+    ok: '确定执行',
+    cancel: '取消'
+  })) return;
+  var st=document.getElementById('dt-state-'+dev); if(st){ st.textContent='启动中…'; st.className='disk-test-msg'; }
+  try{
+    var r=await fetch('/api/disks/selftest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dev:dev,type:type,confirm:true})});
+    var j=await r.json();
+    if(st){ st.textContent=j.ok?'已启动':('失败：'+(j.error||'')); st.className=j.ok?'disk-test-msg':'disk-test-msg error'; }
+    if(j.ok) pollDiskTests();
+  }catch(e){ if(st){ st.textContent='请求失败'; st.className='disk-test-msg error'; } }
+}
+async function abortDiskTest(dev){
+  try{
+    var r=await fetch('/api/disks/selftest/abort',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dev:dev})});
+    var j=await r.json();
+    if(j.ok) pollDiskTests();
+  }catch(e){}
+}
+function clearDiskTest(dev){
+  if(DISK_TEST_JOBS) delete DISK_TEST_JOBS[dev];
+  refreshPanel('disks');
+}
+function diskTestTick(){
+  var any = false;
+  for(var dev in DISK_TEST_JOBS){
+    var job = DISK_TEST_JOBS[dev];
+    if(job && job.state === 'running' && job.started_at){
+      any = true;
+      var s = Math.max(0, Math.floor(Date.now()/1000 - job.started_at));
+      var el = document.getElementById('dt-elapsed-'+dev);
+      if(el){ el.textContent = fmtSec(s); }
+      var et = document.getElementById('dt-eta-'+dev);
+      if(et){
+        if(job.progress && job.progress>0){
+          var tot = s * 100 / job.progress;
+          et.textContent = fmtSec(Math.max(0, tot - s));
+        }else{
+          et.textContent = '计算中…';
+        }
+      }
+    }
+  }
+  if(!any && diskTestTimer){ clearInterval(diskTestTimer); diskTestTimer = null; }
+}
+async function pollDiskTests(){
+  try{
+    var r=await fetch('/api/disks/selftest?_='+Date.now());
+    var j=await r.json();
+    if(j.ok) DISK_TEST_JOBS = j.jobs || {};
+  }catch(e){}
+  if(currentTab()==='disks'){ renderPanel('disks'); }
+  var hasRunning = Object.values(DISK_TEST_JOBS).some(function(jj){ return jj.state==='running'; });
+  if(hasRunning && !diskTestTimer){ diskTestTimer = setInterval(diskTestTick, 1000); diskTestTick(); }
+  if(diskTestPollTimer) clearTimeout(diskTestPollTimer);
+  if(hasRunning) diskTestPollTimer = setTimeout(pollDiskTests, 3000);
+}
+
+function appConfirm(opts){
+  opts = opts || {};
+  return new Promise(function(resolve){
+    var modal = document.getElementById('app-modal');
+    var titleEl = document.getElementById('app-modal-title');
+    var bodyEl = document.getElementById('app-modal-body');
+    var actionsEl = document.getElementById('app-modal-actions');
+    if(!modal || !titleEl || !bodyEl || !actionsEl){ resolve(false); return; }
+    function cleanup(){
+      modal.classList.remove('show');
+      modal.setAttribute('aria-hidden','true');
+      document.removeEventListener('keydown', onKey);
+    }
+    function onKey(e){
+      if(e.key === 'Escape'){ cleanup(); resolve(false); }
+      else if(e.key === 'Enter'){ cleanup(); resolve(true); }
+    }
+    titleEl.textContent = opts.title || '请确认';
+    bodyEl.textContent = opts.body || opts.message || '';
+    actionsEl.innerHTML = '';
+    var cancelBtn = document.createElement('button');
+    cancelBtn.className = 'btn';
+    cancelBtn.textContent = opts.cancel || '取消';
+    cancelBtn.onclick = function(){ cleanup(); resolve(false); };
+    var okBtn = document.createElement('button');
+    okBtn.className = 'btn ' + (opts.danger ? 'btn-danger' : 'btn-primary');
+    okBtn.textContent = opts.ok || '确定';
+    okBtn.onclick = function(){ cleanup(); resolve(true); };
+    actionsEl.appendChild(cancelBtn);
+    actionsEl.appendChild(okBtn);
+    modal.onclick = function(e){ if(e.target === modal){ cleanup(); resolve(false); } };
+    modal.classList.add('show');
+    modal.setAttribute('aria-hidden','false');
+    setTimeout(function(){ okBtn.focus(); }, 0);
+    document.addEventListener('keydown', onKey);
+  });
+}
 function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function smartTip(label){
+  var tips={
+    '型号':'硬盘的品牌与完整型号名称',
+    '容量 / 类型':'硬盘总容量与接口/介质类型（NVMe/SAS/SATA · SSD/HDD）',
+    '转速':'机械盘每分钟转数；SSD 无转动，显示为固态',
+    '序列号':'硬盘出厂唯一编号（SN）',
+    '温度':'硬盘当前温度传感器读数',
+    '已用时长':'硬盘累计通电运行小时数',
+    '重映射扇区':'硬盘已自动替换的坏扇区数量，>0 表示盘体已有损伤',
+    '待处理扇区':'读写时被发现不稳定、尚待确认或替换的扇区',
+    '不可纠正扇区':'发生错误且无法通过重映射修复的扇区，>0 风险较高',
+    'UDMA CRC 错误':'SATA 传输过程中产生的 CRC 校验错误，多为数据线/接口接触问题',
+    '已用寿命':'SSD/NVMe 已消耗的预计寿命百分比',
+    '剩余备用':'SSD/NVMe 保留的备用块剩余比例，低于阈值可能掉速或报废',
+    '临界告警':'NVMe 固态盘的告警标志：0x00 表示一切正常、无任何告警；若变成 0x01、0x02 等数字，才代表某项（如温度/备用空间/可靠性）超标需关注',
+    '读取量':'SSD/NVMe 累计读取的数据量',
+    '写入量':'SSD/NVMe 累计写入的数据量',
+    '缺陷扇区':'SAS 硬盘报告的已发现缺陷扇区数',
+    '待处理缺陷':'SAS 硬盘尚待处理的缺陷扇区',
+    '非介质错误':'SAS 硬盘与介质无关的报错次数（如通信/协议层）',
+    '读错误(不可纠正)':'SAS 累计不可纠正读错误数',
+    '写错误(不可纠正)':'SAS 累计不可纠正写错误数'
+  };
+  return tips[label] || '';
+}
 function gpuRow(k, v, note){
   // v: 已格式化的字符串或 null；note: 该字段不适用于本显卡时的说明（iGPU 无独显参数）
   if(v!=null && v!==''){
@@ -762,6 +1303,12 @@ function renderSystem(s){
   let diskHtml = fmtDiskRows(DATA.diskio);
   let loadColor = (l)=>parseFloat(l)>s.cpu_threads?'var(--red)':parseFloat(l)>s.cpu_threads*0.7?'var(--orange)':'var(--green)';
   return `
+  ${panelHero({icon:ICON_SYSTEM,title:'系统资源',sub:'CPU / 内存 / 传感器实时状态',stats:[
+    {v:(s.cpu_temp!=null?s.cpu_temp+'°C':'N/A'),k:'CPU 温度'},
+    {v:memPct+'%',k:'内存占用'},
+    {v:(s.load&&s.load[0]!=null?s.load[0]:'N/A'),k:'1分钟负载'},
+    {v:(s.uptime?String(s.uptime).replace(/\s+/g,''):'—'),k:'已运行'}
+  ]})}
   <div class="sys-grid">
     <div class="card">
       <h3>负载</h3>
@@ -860,7 +1407,7 @@ function renderFanControl(){
   let hiddenCount=allFans.filter(f=>f.hidden).length;
   let fans=SHOW_HIDDEN_FANS?allFans:allFans.filter(f=>!f.hidden);
   FAN_LIST=fans;
-  if(!allFans.length) return '<div class="card"><div class="loading">未检测到可调控风扇（部分 NAS 由系统固件统一控温，本工具不接管）</div></div>';
+  if(!allFans.length) return panelHero({icon:ICON_FAN,title:'风扇温控',sub:'预设档位 / 实时转速 / 曲线调速',stats:[{v:0,k:'可控风扇'},{v:0,k:'停转'},{v:'—',k:'平均转速'}]})+'<div class="card"><div class="loading">未检测到可调控风扇（部分 NAS 由系统固件统一控温，本工具不接管）</div></div>';
   let presets=[['0','停转'],['auto','默认'],['100','全速'],['10','10%'],['20','20%'],['30','30%'],['40','40%'],['50','50%'],['60','60%'],['70','70%'],['80','80%'],['90','90%']];
   let presetHtml=presets.map(p=>`<button class="preset-btn ${p[0]==='100'?'full':''}" data-preset="${p[0]}" onclick="applyFanPreset('${p[0]}')">${p[1]}</button>`).join('');
   let cards=fans.map(f=>{
@@ -937,7 +1484,20 @@ function renderFanControl(){
   let hideToggle = hiddenCount>0 ? `<button class="btn-mini" style="margin-left:8px" onclick="toggleShowHiddenFans()">${SHOW_HIDDEN_FANS?('收起已隐藏('+hiddenCount+')'):('显示已隐藏通道('+hiddenCount+')')}</button>` : '';
   let gridInner = cards || `<div class="loading">可见风扇均已隐藏${hiddenCount>0?'，点上方「显示已隐藏通道」可展开':''}。</div>`;
   ensureTempPolling();
-  return `<div class="fan-page">
+  let _ctrl=allFans.length;
+  let _stopped=allFans.filter(f=>(f.stopped||(f.rpm||0)<1)).length;
+  let _rpms=allFans.map(f=>f.rpm||0).filter(x=>x>0);
+  let _avg=_rpms.length?Math.round(_rpms.reduce((a,b)=>a+b,0)/_rpms.length):0;
+  let _ctrlToggle = `<label class="hero-switch" title="关闭后 nasdash 不再根据温度自动调速。若飞牛自带风扇服务已配置好，会交还它接管；否则保持当前转速，不再写 PWM。"><input type="checkbox" id="fanCtrlToggle" ${FAN_CTRL_ENABLED?'checked':''} ${FAN_CTRL_CHANGING?'disabled':''} onchange="setFanControl(this.checked)"><span class="hero-switch-track"><span class="hero-switch-knob"></span></span><span class="hero-switch-txt">接管风扇控制</span></label>`;
+  let _fanHero=panelHero({icon:ICON_FAN,title:'风扇温控',sub:'预设档位 / 实时转速 / 曲线调速',action:_ctrlToggle,stats:[
+    {v:_ctrl,k:'可控风扇'},
+    {v:_stopped,k:'停转',cls:(_stopped?'warn':'')},
+    {v:_avg?_avg+' RPM':'—',k:'平均转速'}
+  ]});
+  refreshFanControlState();
+  let _lock = FAN_CTRL_ENABLED ? '' : `<div class="fan-lock-banner">⚠️ 风扇接管已关闭：nasdash 不再根据温度自动调速。若飞牛自带风扇服务已配置好，会由它接管；否则保持当前转速。开启上方「接管风扇控制」才能用下方调速。</div>`;
+  return _fanHero + `<div class="fan-page${FAN_CTRL_ENABLED?'':' fan-locked'}">
+    ${_lock}
     ${renderSleepLinkPanel()}
     ${renderTempOverview()}
     <div class="fan-presets">
@@ -947,10 +1507,85 @@ function renderFanControl(){
     </div>
     <div class="fan-rule-tip">💡 每张卡片 3 个按钮选控速方案：<b>线性温控</b>（开转/全速 直线）、<b>曲线温控</b>（≥2 节点分段插值）、<b>手动固定</b>（拖滑块）。3 选 1 即生效、互不影响，徽标实时显示当前跑的是哪个。</div>
     <div class="fan-grid">${gridInner}</div>
-    <div class="card fcs-card" id="fcs-panel"><div class="loading">加载系统风扇服务状态…</div></div>
+    <div class="card fcs-card" id="fcs-panel"><div class="fcs-head"><b>系统风扇服务（pwm-fancontrol）</b><span class="pill gray">读取中…</span></div><p class="fcs-desc">正在检测飞牛自带风扇服务…</p></div>
   </div>`;
 }
 // ===== 风扇 自动/手动 分段开关 + 极简硬盘休眠联动面板（stage2）=====
+// 风扇接管总开关：关闭后 nasdash 仅监控、不写 PWM，控速交还系统原生（BIOS/BMC/主板自动）
+var FAN_CTRL_ENABLED = true;
+var FAN_CTRL_CHANGING = false; // 开关操作进行中，禁止轮询/同步把状态刷回旧值
+var FAN_CTRL_TIMER = null;     // 开关兜底解锁定时器
+// 仅局部更新「接管锁定态」视觉（横幅/面板 class），不整面板重绘——
+// 否则每次切开关都会把 fcs-panel 重置成「读取中…」并重新拉取，造成卡 loading 的观感。
+function applyFanLockVisual(){
+  // 纯视觉更新，任何异常都不能冒泡出去——否则会打断 setFanControl 里后续的 fetch，
+  // 导致请求没发出、CHANGING 卡死、开关 disabled 再也不复位（表现为「开关点不动」）。
+  try{
+    var fp=document.getElementById('fan'); if(!fp) return;
+    var page=fp.querySelector('.fan-page');
+    if(page) page.classList.toggle('fan-locked', !FAN_CTRL_ENABLED);
+    var banner=fp.querySelector('.fan-lock-banner');
+    if(!FAN_CTRL_ENABLED){
+      if(!banner && page){
+        banner=document.createElement('div');
+        banner.className='fan-lock-banner';
+        banner.textContent='⚠️ 风扇接管已关闭：nasdash 不再根据温度自动调速。若飞牛自带风扇服务已配置好，会由它接管；否则保持当前转速。开启上方「接管风扇控制」才能用下方调速。';
+        // 必须挂到 .fan-page 下（渲染时 ${_lock} 就是 .fan-page 的第一个子节点）。
+        // 早期写成 fp.insertBefore(banner, .fan-grid)——.fan-grid 不是 #fan 的直接子节点，必抛 NotFoundError。
+        page.insertBefore(banner, page.firstChild);
+      }
+    } else if(banner){ banner.remove(); }
+  }catch(e){ /* 视觉降级即可，绝不阻断开关逻辑 */ }
+}
+// 开关兜底解锁：无论成功/失败/异常/超时，都必须把「操作中」标志与 disabled 复位
+function releaseFanCtrlLock(){
+  FAN_CTRL_CHANGING=false;
+  if(FAN_CTRL_TIMER){ clearTimeout(FAN_CTRL_TIMER); FAN_CTRL_TIMER=null; }
+  // 面板可能在请求期间被重绘过，必须重新取元素，不能用调用前缓存的旧引用
+  var el=document.getElementById('fanCtrlToggle');
+  if(el) el.disabled=false;
+}
+function setFanControl(on){
+  if(FAN_CTRL_CHANGING) return; // 上一次还没落定，忽略连点
+  var t=document.getElementById('fanCtrlToggle');
+  // 乐观更新：先按目标状态立即改锁定态视觉，开关瞬间响应，等 POST 结果再微调；
+  // 不整面板重绘，避免 fcs-panel 重新「读取中…」与全面板闪烁。
+  FAN_CTRL_ENABLED=on;
+  FAN_CTRL_CHANGING=true; // 操作期间禁止轮询把状态刷回旧值
+  if(t){ t.disabled=true; }
+  applyFanLockVisual(); // 内部已 try/catch，不会阻断下面的请求
+  // 兜底看门狗：极端情况（请求被网关吞掉、页面切后台）也要在 10s 后解锁，永不卡死
+  FAN_CTRL_TIMER=setTimeout(function(){ releaseFanCtrlLock(); refreshFanControlState(); }, 10000);
+  fetch('/api/fan/control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:on})})
+    .then(function(r){return r.json();})
+    .then(function(d){
+      releaseFanCtrlLock();
+      var el=document.getElementById('fanCtrlToggle');
+      if(d && d.ok){ FAN_CTRL_ENABLED=on; if(el) el.checked=on; applyFanLockVisual(); }
+      else { FAN_CTRL_ENABLED=!on; if(el) el.checked=!on; applyFanLockVisual(); alert('操作失败：'+((d&&d.error)||'未知错误')); }
+    })
+    .catch(function(e){
+      releaseFanCtrlLock();
+      var el=document.getElementById('fanCtrlToggle');
+      FAN_CTRL_ENABLED=!on; if(el) el.checked=!on; applyFanLockVisual(); alert('网络错误，请重试');
+    });
+}
+function refreshFanPanel(){
+  var fp=document.getElementById('fan'); if(!fp) return;
+  fp.innerHTML=renderFanControl(); bindFanSliders(); loadFcsStatus();
+}
+var FAN_CTRL_SYNCING = false; // 同步请求在途，避免面板重绘时叠发多个请求
+function refreshFanControlState(){
+  // 用户正在切开关时，后端状态可能还没落定，此时同步会把它刷回旧状态造成「跳回」。
+  if(FAN_CTRL_CHANGING || FAN_CTRL_SYNCING) return;
+  FAN_CTRL_SYNCING=true;
+  fetch('/api/fan/control?_='+Date.now()).then(function(r){return r.json();}).then(function(d){
+    FAN_CTRL_SYNCING=false;
+    if(FAN_CTRL_CHANGING) return;
+    var en=!!(d&&d.enabled);
+    if(en!==FAN_CTRL_ENABLED){ FAN_CTRL_ENABLED=en; refreshFanPanel(); }
+  }).catch(function(){ FAN_CTRL_SYNCING=false; });
+}
 function syncFanData(hwmon, idx, mode){
   if(DATA && DATA.system && DATA.system.sensors && DATA.system.sensors.fans){
     DATA.system.sensors.fans.forEach(function(ff){ if(ff.hwmon===hwmon && ff.idx===idx){ ff.mode=mode; } });
@@ -1095,7 +1730,7 @@ function renderSleepLinkPanel(){
     +'</div>'
     +'<div class="sleep-panel-body" id="sleep-panel-body" style="display:none">'
       +'<label class="dt-toggle"><input type="checkbox" id="sl-sleep"> 监控盘全部休眠时停转风扇</label>'
-      +'<label class="dt-toggle">监控盘连续无读写满 <input type="number" id="sl-idle" min="1" max="120" value="5" style="width:52px"> 分钟也停转风扇</label>'
+      +'<label class="dt-toggle">监控盘连续无读写满 <input type="number" id="sl-idle" min="1" max="120" value="5" class="w52"> 分钟也停转风扇</label>'
       +'<div class="dt-actions"><button class="btn-mini" onclick="saveSleepLink()">保存</button><span class="dt-save-state" id="sl-state"></span></div>'
       +'<div class="dt-hint">选「硬盘温度」为温度源的风扇，会在监控盘全部休眠或连续空闲时自动停转。监控盘默认取全部硬盘；此联动仅控制「是否停转」，不影响温度曲线调速。</div>'
       +'<div class="dt-hint-title">硬盘已经休眠，风扇却还在转？按顺序对一下：</div>'
@@ -1396,6 +2031,12 @@ async function loadFcsStatus(){
   // 不存在则短暂轮询等待，待 renderFans 生成该元素后再发请求（避免永久“加载中”）。
   if(!box){ if((loadFcsStatus._r=(loadFcsStatus._r||0)+1)<=40) setTimeout(loadFcsStatus,200); return; }
   loadFcsStatus._r=0;
+  // 保留已有内容骨架，只把徽标换成“读取中…”，避免切换开关时出现大块空白 loading。
+  let head=box.querySelector('.fcs-head');
+  if(head){
+    let oldPill=head.querySelector('.pill');
+    if(oldPill) oldPill.outerHTML='<span class="pill gray">读取中…</span>';
+  }
   let s;
   try{
     const ctrl=new AbortController();
@@ -1414,15 +2055,15 @@ async function loadFcsStatus(){
   box.dataset.fcsTried='';
   let pill, desc, actions;
   if(!s.installed){
-    pill='<span class="pill" style="background:#e5e7eb;color:#6b7280">未检测到</span>';
+    pill='<span class="pill gray">未检测到</span>';
     desc='本机未检测到 fnOS 系统风扇服务（pwm-fancontrol），无需处理——nasdash 是唯一的风扇控制器。';
     actions='';
   }else if(s.disabled_by_user){
-    pill='<span class="pill" style="background:#fee2e2;color:#b91c1c">已永久禁用</span>';
+    pill='<span class="pill red">已永久禁用</span>';
     desc='系统风扇服务（pwm-fancontrol）已被永久禁用（已停止且重启不再自启）。当前仅由 nasdash 管理风扇。如需恢复系统原生控温，可点下方按钮。';
     actions='<button class="btn-mini" onclick="toggleFcs(\'enable\')">恢复 pwm-fancontrol</button>';
   }else{
-    pill='<span class="pill" style="background:#dcfce7;color:#15803d">'+(s.running?'运行中':'已安装')+(s.enabled?' · 开机自启':'')+'</span>';
+    pill='<span class="pill green">'+(s.running?'运行中':'已安装')+(s.enabled?' · 开机自启':'')+'</span>';
     desc='nasdash 控速时会自动临时接管（停止 pwm-fancontrol），交还自动温控后再自动拉起，二者不冲突。若你确认永远只用 nasdash 管风扇，可永久禁用它（停止 + 关闭开机自启，重启不复活）。';
     actions='<button class="btn-mini danger" onclick="toggleFcs(\'disable\')">永久禁用 pwm-fancontrol</button>';
   }
@@ -1432,7 +2073,13 @@ async function loadFcsStatus(){
 }
 async function toggleFcs(action){
   let msg=document.getElementById('fcs-msg');
-  if(action==='disable' && !confirm('确定永久禁用系统风扇服务（pwm-fancontrol）吗？\n将停止该服务并关闭开机自启（重启后不再启动），风扇改由 nasdash 独立管理。\n可随时点「恢复」还原。')) return;
+  if(action==='disable' && !await appConfirm({
+    title: '确认永久禁用 pwm-fancontrol？',
+    body: '确定永久禁用系统风扇服务（pwm-fancontrol）吗？\n将停止该服务并关闭开机自启（重启后不再启动），风扇改由 nasdash 独立管理。\n可随时点「恢复」还原。',
+    danger: true,
+    ok: '确定禁用',
+    cancel: '取消'
+  })) return;
   if(msg) msg.textContent=(action==='disable'?'正在禁用…':'正在恢复…');
   try{
     let r=await (await fetch('/api/fan/fcs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action})})).json();
@@ -1805,7 +2452,15 @@ function renderStorage(st){
     let col = pct>85?'var(--red)':pct>70?'var(--orange)':'var(--green)';
     return `<tr><td>${v.mount}</td><td>${v.fstype}</td><td>${v.size}</td><td>${v.used} / ${v.avail}</td><td style="min-width:140px"><div class="progress"><div class="progress-fill" style="width:${pct}%;background:${col}">${pct}%</div></div></td></tr>`;
   }).join('');
+  let _raids=(st.raid_arrays||[]), _vols=(st.volumes||[]);
+  let _avgPct = _vols.length ? Math.round(_vols.reduce((a,v)=>a+parseInt(v.pcent||0),0)/_vols.length) : 0;
   return `
+  ${panelHero({icon:ICON_STORAGE,title:'存储卷',sub:'RAID 阵列 / 卷容量 / 拓扑',stats:[
+    {v:_raids.length,k:'RAID 阵列'},
+    {v:_vols.length,k:'存储卷'},
+    {v:_avgPct+'%',k:'平均使用率',cls:(_avgPct>85?'bad':_avgPct>70?'warn':'')},
+    {v:(st.topology?'有':'无'),k:'拓扑'}
+  ]})}
   <div class="section-title">RAID 阵列 (mdadm)</div>
   <div class="card">
     <table class="table"><thead><tr><th>阵列</th><th>级别</th><th>状态</th><th>容量</th><th>成员盘</th></tr></thead><tbody>${raids||'<tr><td colspan=5>无</td></tr>'}</tbody></table>
@@ -1836,15 +2491,31 @@ function renderDetect(D){
   let sasHealthy = sasDisks.filter(d=>d.health_ok).length;
   let sataHealthy = sataDisks.filter(d=>d.health_ok).length;
   let dockerStr = (dk.running||0)+' 运行中';
+  // hero 横幅：整体健康 = 风扇 + 阵列卡 + 全部硬盘均正常
+  let allDiskOk = (sasHealthy===sasDisks.length) && (sataHealthy===sataDisks.length);
+  let sysOk = (fans.length===0 || fanOk) && raidOk && allDiskOk;
   let statusBar = `
-  <div class="statusbar">
-    <div class="status-left"><span class="status-dot"></span><span>系统运行正常 · 最近检测 ${D.time||''}</span></div>
-    <div class="status-right">
-      <div class="status-item"><span class="k">散热风扇</span><span class="v" style="color:${fanOk?'var(--green)':'var(--red)'}">${fanStr}</span></div>
-      <div class="status-item"><span class="k">阵列卡</span><span class="v" style="color:${raidOk?'var(--green)':'var(--yellow)'}">${raidStr}</span></div>
-      ${sasDisks.length?`<div class="status-item"><span class="k">SAS硬盘</span><span class="v" style="color:${sasHealthy===sasDisks.length?'var(--green)':'var(--orange)'}">${sasHealthy+'/'+sasDisks.length} 健康</span></div>`:''}
-      ${sataDisks.length?`<div class="status-item"><span class="k">SATA硬盘</span><span class="v" style="color:${sataHealthy===sataDisks.length?'var(--green)':'var(--orange)'}">${sataHealthy+'/'+sataDisks.length} 健康</span></div>`:''}
-      <div class="status-item"><span class="k">Docker</span><span class="v" style="color:var(--blue)">${dockerStr}</span></div>
+  <div class="hero">
+    <div class="hero-head">
+      <div class="hero-left">
+        <div class="hero-ic"><img src="{{ ICON_DETECT_DATA }}" class="ic" alt="硬件配置检测"></div>
+        <div class="hero-text">
+          <div class="hero-title">硬件配置检测</div>
+          <div class="hero-sub">实时监测设备健康状态与硬件详情 · 最近检测 ${D.time||'—'}</div>
+        </div>
+      </div>
+      <div class="hero-right">
+        <div class="hero-badge${sysOk?'':' warn'}"><span class="dot"></span>${sysOk?'系统运行正常':'存在需关注项'}</div>
+        <div class="hero-action">${heroControls()}</div>
+      </div>
+    </div>
+    <div class="hero-stats">
+      <div class="hs${fans.length===0?'':(fanOk?'':' bad')}"><div class="hs-v">${fanStr}</div><div class="hs-k">散热风扇</div></div>
+      <div class="hs${raidOk?'':' warn'}"><div class="hs-v">${raidStr}</div><div class="hs-k">阵列卡</div></div>
+      ${sasDisks.length?`<div class="hs${sasHealthy===sasDisks.length?'':' warn'}"><div class="hs-v">${sasHealthy}<small>/${sasDisks.length}</small></div><div class="hs-k">SAS 硬盘健康</div></div>`:''}
+      ${sataDisks.length?`<div class="hs${sataHealthy===sataDisks.length?'':' warn'}"><div class="hs-v">${sataHealthy}<small>/${sataDisks.length}</small></div><div class="hs-k">SATA 硬盘健康</div></div>`:''}
+      <div class="hs"><div class="hs-v">${dk.running||0}<small>/${dk.total||0}</small></div><div class="hs-k">Docker 运行中</div></div>
+      <div class="hs hs-uptime"><div class="hs-v">${s.uptime? String(s.uptime).replace(/\s+/g,'') : '—'}</div><div class="hs-k">已运行</div></div>
     </div>
   </div>`;
   // 系统配置
@@ -1957,7 +2628,7 @@ function renderDetect(D){
     <h3>显卡</h3>
     ${(s.gpus&&s.gpus.length)?s.gpus.map(g=>{
       let isIgpu = (g.type==='核显');
-      let rows=`<div class="kv"><span class="k">${esc(g.type||'显卡')}</span><span class="v"${g.name_full?` title="完整设备名：${esc(g.name_full)}"`:''}>${esc(g.name||'')}${g.name_arch?`<small>${esc(g.name_arch)}</small>`:''}</span></div>`;
+      let rows=`<div class="kv"><span class="k">${esc(g.type||'显卡')}</span><span class="v"${g.name_full||g.name_arch?` title="完整设备名：${esc(g.name_full||g.name)}${g.name_arch?' ('+g.name_arch+')':''}"`:''}>${esc(g.name||'')}</span></div>`;
       // —— 常驻：GPU 温度 ——
       let tcol = g.temp!=null?tempColor(g.temp,95):'var(--muted)';
       rows+=gpuRow('GPU 温度', g.temp!=null?('<span style="color:'+tcol+'">'+g.temp+'°C</span>'):null, null);
@@ -2010,7 +2681,7 @@ function renderDetect(D){
   let tempWallCard = `
   <div class="card" style="grid-column:1/-1">
     <h3>温度墙</h3>
-    ${tempEntries.length?`<div class="temp-wall">${tempEntries.map(t=>{let raw=t.raw||'';let tip=raw?raw+'（原始测点名）':'';return `<div class="temp-chip" style="border-color:${tempColor(t.value,85)}" title="${esc(tip)}"><span class="tc-name">${esc(t.name)}</span><span class="tc-val" style="color:${tempColor(t.value,85)}">${t.value}°C</span></div>`;}).join('')}</div>`:'<div class="loading">未检测到温度测点</div>'}
+    ${tempEntries.length?`<div class="temp-wall">${tempEntries.map(t=>{let raw=t.raw||'';let tip=raw?raw+'（原始测点名）':'';return `<div class="temp-chip" title="${esc(tip)}"><span class="tc-name">${esc(t.name)}</span><span class="tc-val" style="color:${tempColor(t.value,85)}">${t.value}°C</span></div>`;}).join('')}</div>`:'<div class="loading">未检测到温度测点</div>'}
     <div style="margin-top:8px;font-size:12px;color:var(--muted)">主板传感器测点全览（已过滤无效 0°C / 负温）；鼠标悬停可查看原始英文名。颜色：绿正常 · 橙偏高 · 红危险</div>
   </div>`;
   let sysConfig = `
@@ -2083,31 +2754,17 @@ function renderDetect(D){
   </div>`;
   // 存储卷、Docker 容器列表均已移至左侧独立标签页，硬件配置检测仅保留概览状态栏
   return `
-  <div class="detect-title">硬件配置检测</div>
-  <div class="detect-sub">实时监测设备健康状态与硬件详情 · {{ APP_VERSION }}</div>
   ${statusBar}
-  <div class="detect-title" style="font-size:16px;margin-bottom:10px">系统配置</div>
+  <div class="detect-title" style="margin-bottom:10px">系统配置</div>
   ${sysConfig}
-  <div class="detect-title" style="font-size:16px;margin:18px 0 10px">阵列卡 &amp; 磁盘</div>
+  <div class="detect-title" style="margin:20px 0 10px">阵列卡 &amp; 磁盘</div>
   ${raidDisk}
   `;
 }
 
 function renderDocker(dk){
   if(!dk) dk={};
-  let head = `
-  <div class="grid-2">
-    <div class="card">
-      <h3>容器概览</h3>
-      <div class="kv"><span class="k">运行中</span><span class="v" style="color:var(--green)">${dk.running||0}</span></div>
-      <div class="kv"><span class="k">总数</span><span class="v">${dk.total||0}</span></div>
-      <div class="kv"><span class="k">状态</span><span class="v" style="color:${dk.ok?'var(--green)':'var(--red)'}">${dk.ok?'正常':'读取失败'}</span></div>
-    </div>
-    <div class="card">
-      <h3>说明</h3>
-      <div style="font-size:13px;color:var(--muted);line-height:1.7">列出所有容器及其运行状态、占用内存与端口映射。内存仅对运行中容器有效；停止的容器显示 N/A。</div>
-    </div>
-  </div>`;
+  let noteCard = `<div class="card"><h3>说明</h3><div class="note">列出所有容器及其运行状态、占用内存与端口映射。内存仅对运行中容器有效；停止的容器显示 N/A。</div></div>`;
   let rows = (dk.containers&&dk.containers.length) ? dk.containers.map(c=>{
     let badge = c.running?'b-ok':'b-warn';
     let stateTxt = c.running?'运行':'停止';
@@ -2128,19 +2785,17 @@ function renderDocker(dk){
   <div class="card">
     <table class="table"><thead><tr><th>状态</th><th>名称 / 镜像</th><th>CPU</th><th>内存</th><th>网络 (↓收/↑发)</th><th>端口映射</th><th>运行时长</th></tr></thead><tbody>${rows}</tbody></table>
   </div>`;
-  return head + table;
+  return panelHero({icon:ICON_DOCKER,title:'Docker',sub:'容器运行状态与资源占用',stats:[
+    {v:(dk.running||0)+'/'+(dk.total||0),k:'运行中'},
+    {v:(dk.ok?'正常':'读取失败'),k:'状态',cls:(dk.ok?'':'warn')},
+    {v:(dk.total||0),k:'容器总数'}
+  ]}) + noteCard + table;
 }
 
 // ===================== 控制与自动化 =====================
 let AUTOMATION_INITED=false, autoTimer=null, lastAlerts=[];
 function renderAutomation(){
-  return `<div class="auto-head">
-    <div>
-      <h2>🔔 控制与自动化</h2>
-      <div class="auto-sub">温度 / 硬盘健康告警、外部通知与一键健康报告导出</div>
-    </div>
-    <button class="btn-mini" onclick="exportReport('html')">📄 导出健康报告</button>
-  </div>
+  return panelHero({icon:ICON_AUTOMATION,title:'控制与自动化',sub:'温度 / 硬盘健康告警、外部通知与一键健康报告',action:'<button class="btn-mini" onclick="exportReport(\'html\')">📄 导出健康报告</button>'}) + `
   <div class="auto-card">
     <h3>🔍 活动告警 <span class="badge b-info">每 15 秒刷新</span></h3>
     <ul class="auto-alerts" id="auto-alert-list"><li class="ok">加载中…</li></ul>
@@ -2260,7 +2915,69 @@ async function initManual(){
     var r=await fetch('/manual?embed=1&_='+Date.now());
     if(!r.ok){ throw new Error('HTTP '+r.status); }
     var html=await r.text();
-    box.innerHTML=html;
+    // 整段（含内嵌 <style>）放进内容区，保证手册样式不丢；目录做右侧可隐藏抽屉
+    box.innerHTML=panelHero({icon:ICON_MANUAL,title:'操作手册',sub:'nasdash 使用说明 · {{ APP_VERSION }}'})
+      +'<div class="man-layout">'
+      +  '<div class="man-content">'+html+'</div>'
+      +'</div>'
+      +'<button class="man-toc-btn" id="manTocBtn" type="button" aria-label="展开目录">目录</button>'
+      +'<nav class="man-toc collapsed" id="manToc" aria-hidden="true"><div class="man-toc-title">本页目录</div><ul></ul></nav>';
+    var content=box.querySelector('.man-content');
+    var toc=box.querySelector('#manToc');
+    var tocBtn=box.querySelector('#manTocBtn');
+    var heads=[].slice.call(content.querySelectorAll('.man-body h2, .man-body h3'));
+    var ul=toc.querySelector('ul');
+    heads.forEach(function(h,i){
+      if(!h.id) h.id='mh'+i;
+      var li=document.createElement('li');
+      li.className=(h.tagName==='H3')?'lv3':'lv2';
+      var a=document.createElement('a');
+      a.href='#mh'+i; a.textContent=h.textContent;
+      a.addEventListener('click', function(e){
+        e.preventDefault();
+        h.scrollIntoView({behavior:'smooth', block:'start'});
+        closeToc();  // 点了目录项自动收起，不挡正文
+      });
+      li.appendChild(a); ul.appendChild(li);
+    });
+    // 自动标红：当前版本段（版本号 == APP_VERSION）整体标红，不止标题
+    // 逻辑：找到含 APP_VERSION 或“本版本新增”的起始元素，到其后的第一个 <hr> 或“往期”为止，
+    // 整段包裹进 .man-red-block（CSS 让里面所有文字变红）。版本号对不上就不标红。
+    (function autoRedCurrentVersion(){
+      var body=content.querySelector('.man-body'); if(!body) return;
+      var kids=[].slice.call(body.children);
+      var startIdx=-1;
+      for(var i=0;i<kids.length;i++){
+        var t=kids[i].textContent||'';
+        if(t.indexOf(APP_VERSION)>=0 || t.indexOf('本版本新增')>=0){ startIdx=i; break; }
+      }
+      if(startIdx<0) return;
+      var endIdx=kids.length;
+      for(var j=startIdx+1;j<kids.length;j++){
+        var t2=kids[j].textContent||'';
+        if(kids[j].tagName==='HR' || t2.indexOf('往期')>=0){ endIdx=j; break; }
+      }
+      var block=kids.slice(startIdx,endIdx);
+      var ref=kids[endIdx]||null;
+      var wrap=document.createElement('div');
+      wrap.className='man-red-block';
+      block.forEach(function(n){ wrap.appendChild(n); });
+      body.insertBefore(wrap, ref);
+    })();
+    // 抽屉开关 + 自动隐藏（滚动一段时间后自动收起）
+    var hideTimer=null;
+    function openToc(){ toc.classList.remove('collapsed'); toc.setAttribute('aria-hidden','false');
+      tocBtn.textContent='收起'; tocBtn.setAttribute('aria-label','收起目录'); }
+    function closeToc(){ toc.classList.add('collapsed'); toc.setAttribute('aria-hidden','true');
+      tocBtn.textContent='目录'; tocBtn.setAttribute('aria-label','展开目录'); }
+    function toggleToc(){ toc.classList.contains('collapsed')?openToc():closeToc(); }
+    tocBtn.addEventListener('click', toggleToc);
+    document.addEventListener('scroll', scheduleHide, true);
+    function scheduleHide(){
+      if(toc.classList.contains('collapsed')) return;
+      if(hideTimer) clearTimeout(hideTimer);
+      hideTimer=setTimeout(closeToc, 1600);  // 滚动 1.6s 后自动隐藏
+    }
     box.dataset.loaded='1';
   }catch(e){
     box.innerHTML='<div class="loading" style="color:var(--red)">操作手册加载失败：'+esc(String(e))+'</div>';
@@ -2377,7 +3094,8 @@ function renderAll(isCache){
   }
   smartUpdate(document.getElementById('storage'), renderStorage(DATA.storage));
   smartUpdate(document.getElementById('docker'), renderDocker(DATA.docker));
-  document.getElementById('lastUpdate').textContent = (isCache?'（缓存）':'更新于 ')+DATA.time+(isCache?'':(' ('+DATA.elapsed+'s)'));
+  document.querySelectorAll('.lastUpdate').forEach(lu=>{ lu.textContent = (isCache?'（缓存）':'更新于 ')+DATA.time+(isCache?'':(' ('+DATA.elapsed+'s)')); });
+  updateThemeBtn();
   showAlerts(DATA.alerts);
 }
 
@@ -2393,7 +3111,10 @@ function getCSS(v){ return (getComputedStyle(document.documentElement).getProper
 function initHistory(){
   const box = document.getElementById('sys-hist');
   if(box && !_histInited){
-    box.innerHTML = `
+    box.innerHTML = panelHero({icon:ICON_HISTORY,title:'历史趋势',sub:'磁盘 I/O 读写速率（自适应时间范围）',stats:[
+      {v:'24 小时',k:'当前区间'},
+      {v:'30 天',k:'数据保留'}
+    ]}) + `
       <div class="section-title">磁盘 I/O 历史趋势</div>
       <div class="card">
         <div class="seg">
@@ -2402,7 +3123,7 @@ function initHistory(){
           <button class="seg-btn" data-range="30d">30天</button>
         </div>
         <canvas id="hist-canvas" style="width:100%;height:170px;margin-top:10px;display:block"></canvas>
-        <div style="font-size:12px;color:var(--muted);margin-top:6px">读 <span style="color:#4aa3ff">■</span> &nbsp; 写 <span style="color:#ff7a59">■</span> &nbsp; 速率自适应 B/s·KB/s·MB/s（数据自部署起累积，自动保留 30 天）</div>
+        <div style="font-size:12px;color:var(--muted);margin-top:6px">读 <span style="color:var(--primary)">■</span> &nbsp; 写 <span style="color:var(--warning)">■</span> &nbsp; 速率自适应 B/s·KB/s·MB/s（数据自部署起累积，自动保留 30 天）</div>
       </div>`;
     box.querySelectorAll('.seg-btn').forEach(b=>{
       b.onclick = ()=>{
@@ -2473,7 +3194,7 @@ async function loadData(){
     }
   }catch(e){ DATA = null; }
   // 2) 后台静默拉取最新全量数据，到了再无缝覆盖
-  document.getElementById('spin').style.display='inline-block';
+  document.querySelectorAll('.spin').forEach(spin=>spin.style.display='inline-block');
   try{
     let r = await fetch('/api/all?_='+Date.now());
     DATA = await r.json();
@@ -2481,30 +3202,22 @@ async function loadData(){
     try{ localStorage.setItem(CACHE_KEY, JSON.stringify({data:DATA, savedAt:new Date().toISOString()})); }catch(e){}
     initHistory();
     loadHistory();
+    pollDiskTests();
   }catch(e){
     // 有缓存就保持缓存内容并提示后台刷新失败；无缓存才显示加载失败
     if(!usedCache){
       document.querySelectorAll('.panel').forEach(p=>p.innerHTML='<div class="card"><div class="loading" style="color:var(--red)">加载失败: '+esc(String(e))+'</div></div>');
     }
-    document.getElementById('lastUpdate').textContent = (usedCache?'后台刷新失败，当前显示缓存 · ':'加载失败: ')+e;
+    document.querySelectorAll('.lastUpdate').forEach(lu=>{ lu.textContent = (usedCache?'后台刷新失败，当前显示缓存 · ':'加载失败: ')+e; });
   }
-  document.getElementById('spin').style.display='none';
+  document.querySelectorAll('.spin').forEach(spin=>spin.style.display='none');
 }
 
 // 定时刷新只刷「当前正在看的板块」，不再每 30s 全量 /api/all
 function autoRefreshTick(){ refreshPanel(currentTab()); }
-var ar = document.getElementById('autoRefresh');
-ar.addEventListener('change', function(){
-  if(this.checked){ timer=setInterval(autoRefreshTick, 30000); }
-  else if(timer){ clearInterval(timer); timer=null; }
-  try{ localStorage.setItem('nasdash_autorefresh', this.checked ? '1':'0'); }catch(e){}
-});
-try{
-  if(localStorage.getItem('nasdash_autorefresh') === '1'){
-    ar.checked = true;
-    timer = setInterval(autoRefreshTick, 30000);
-  }
-}catch(e){}
+// 自动刷新开关状态从 localStorage 恢复；控件渲染后由 setAutoRefresh 统一同步所有面板
+autoRefreshEnabled = (localStorage.getItem('nasdash_autorefresh') === '1');
+if(autoRefreshEnabled){ timer = setInterval(autoRefreshTick, 30000); }
 
 loadData();  // 首屏仍全量拉取一次，打底填充所有板块 DATA
 startNetRateTimer();  // 启动轻量实时流量刷新（每 2s 只拉 /api/metrics，不动重采集）
@@ -2515,8 +3228,7 @@ async function checkUpdate(force){
   const banner = document.getElementById('updateBanner');
   if(!force && updateDismissed) return;
   if(force){
-    const btn = document.getElementById('checkUpdateBtn');
-    if(btn){ btn.disabled = true; btn.textContent = '🔔 检查中…'; }
+    document.querySelectorAll('.checkUpdateBtn').forEach(btn=>{ btn.disabled = true; btn.textContent = '⏳'; btn.title = '检查中…'; });
   }
   try{
     const r = await fetch('/api/version' + (force ? '?force=1' : ''));
@@ -2547,8 +3259,7 @@ async function checkUpdate(force){
     }
   }finally{
     if(force){
-      const btn = document.getElementById('checkUpdateBtn');
-      if(btn){ btn.disabled = false; btn.textContent = '🔔 检查更新'; }
+      document.querySelectorAll('.checkUpdateBtn').forEach(btn=>{ btn.disabled = false; btn.textContent = '🔔'; btn.title = '检查更新'; });
     }
   }
 }
@@ -2576,5 +3287,12 @@ checkUpdate(false);
   }, {passive:true});
 })();
 </script>
+<div id="app-modal" class="modal-overlay" aria-hidden="true">
+  <div class="modal-box" role="dialog" aria-modal="true">
+    <div class="modal-title" id="app-modal-title"></div>
+    <div class="modal-body" id="app-modal-body"></div>
+    <div class="modal-actions" id="app-modal-actions"></div>
+  </div>
+</div>
 </body>
 </html>

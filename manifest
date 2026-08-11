@@ -1,7 +1,7 @@
 appname               = com.dashboard.nasdash
 version               = 2.0.0
 display_name          = NAS硬件监控
-desc                  = <p><b>飞牛OS 硬件监控面板</b> —— 可视化查看 NAS 硬件状态，免去 SSH 敲命令。</p><p><b>功能模块</b></p><ul><li><b>硬件配置检测</b>：单页仪表盘，含顶部状态栏 + 系统配置（CPU / 显卡 / 主板 / 内存条品牌型号 / 运行时间 / 网络含实时↓收↑发速率）+ 阵列卡与磁盘概览</li><li><b>阵列卡</b>：自动识别卡类型，显示型号 / 模式 / 芯片温度与物理盘列表（品牌识别准确）</li><li><b>硬盘 SMART</b>：每块盘健康、温度、转速、品牌、容量与型号</li><li><b>系统资源</b>：负载 / 内存 / 温度 / 风扇转速 / 电压 / 磁盘 I/O（每盘读写为实时速率）+ 历史趋势图（24h/7d/30d）</li><li><b>风扇控制</b>：预设档调速 + 实时 RPM/占空比；每风扇自定义名称与电压；两套独立温控（硬盘/主板CPU）；<b>曲线编辑器</b>自定义温度→PWM + 静音/均衡/性能预设；<b>系统风扇服务安全接管</b>：接管风扇时自动停止 pwm-fancontrol、全部交还自动温控后自动重启，规避抢写 PWM 冲突；面板内置一键永久禁用/恢复</li><li><b>存储卷</b>：mdadm 软阵列</li><li><b>Docker</b>：容器状态、内存(字节/百分比)、CPU%、网络RX/TX、端口映射、运行时长</li><li><b>控制与自动化</b>：温度/硬盘健康告警（面板提示 + 可选 Telegram/Bark/邮件）+ 一键 JSON/HTML 健康报告</li><li><b>主板型号标注</b> / <b>内存品牌</b>(SPD直读) / <b>版本自检</b>(面板显示当前/最新)</li></ul><p><b>依赖说明</b></p><p>安装时自动安装：smartmontools、lm-sensors、mdadm、Flask、dmidecode、i2c-tools。<br><b>storcli 现已随包内置</b>：MegaRAID 卡与 HBA 直通卡用户无需再从 Broadcom 官网手动下载，安装即自动落地到 /opt/MegaRAID/storcli。</p><!--APP_CHANGELOG_START--><p><b>最近更新</b></p><ul><li><b>2.0.0</b> 界面全面换新装：11 个板块图标重画为蓝紫渐变透明图标，应用中心图标换新；配色向飞牛原生应用对齐；新增硬盘 SMART 自检（A 档）、坏块慢扫（B 档）、风扇控制接管总开关</li></ul><!--APP_CHANGELOG_END-->
+desc                  = <p><b>nasdash</b> 是飞牛OS 上的 NAS 硬件监控面板，把原本要 SSH 敲命令才能查看的 CPU、内存、温度、风扇、硬盘 SMART、阵列卡、存储卷等状态聚合到一个网页里。</p><p><b>主要功能</b>：硬件概览 · 阵列卡 · 硬盘 SMART · 系统资源监控 · 风扇调速 · 存储卷 · Docker 监控 · 温度与硬盘健康告警 · 一键健康报告</p><p>安装时自动安装 smartmontools、lm-sensors、mdadm 等依赖；MegaRAID/HBA 阵列卡所需的 <b>storcli 已随包内置</b>，无需手动下载。</p><!--APP_CHANGELOG_START--><p><b>最近更新</b></p><ul><li><b>2.0.0</b> 界面换新装、向飞牛原生应用对齐，新增硬盘 SMART 自检（A 档）、坏块慢扫（B 档）、风扇控制接管总开关。</li></ul><!--APP_CHANGELOG_END-->
 platform              = x86
 source                = thirdparty
 maintainer            = han951meng
@@ -19,4 +19,4 @@ service_port          = 9800
 checkport             = false
 disable_authorization_path = true
 changelog             = 2.0.0: 界面全面换新装（蓝紫渐变透明图标、飞牛原生配色对齐），新增硬盘 SMART 自检（A 档）、坏块慢扫（B 档）、风扇控制接管总开关
-checksum              = 908b7b223f16a00f8f1727deff4ae931
+checksum              = 099db404947a5699be9c6acae87d8c54
