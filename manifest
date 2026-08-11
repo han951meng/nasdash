@@ -19,4 +19,4 @@ service_port          = 9800
 checkport             = false
 disable_authorization_path = true
 changelog             = 2.0.0: 界面全面换新装（蓝紫渐变透明图标、飞牛原生配色对齐），新增硬盘 SMART 自检（A 档）、坏块慢扫（B 档）、风扇控制接管总开关
-checksum              = 23d4e97369f469f48c6b7f3e41588287
+checksum              = e427a86c159329ec38e55f325815c3a3
