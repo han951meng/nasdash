@@ -364,7 +364,6 @@
   .fan-label-save{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap}
   .fan-volt-select{padding:4px 6px;font-size:12px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text)}
   .fan-volt-select:focus{outline:none;border-color:var(--blue)}
-  .fan-pwmmode-badge{display:inline-block;padding:4px 8px;font-size:12px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text)}
   .nic-tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
   .nic-tab{padding:6px 14px;border:1px solid var(--border);background:var(--bg);color:var(--text);border-radius:6px;cursor:pointer;font-size:13px;line-height:1.4}
   .nic-tab.active{background:var(--blue);color:#fff;border-color:var(--blue)}
@@ -377,10 +376,6 @@
   .fan-hw-note{margin-top:8px;padding:6px 10px;border-radius:7px;background:rgba(245,158,11,.10);border:1px solid rgba(245,158,11,.35);font-size:12px;line-height:1.5;display:none;align-items:center;flex-wrap:wrap;gap:8px}
   /* DC(电压)调速提示：该接口用电压高低调速，低档更易停转，与 PWM 行为不同需明确告知 */
   .fan-dc-note{margin-top:8px;padding:6px 10px;border-radius:7px;background:rgba(56,189,248,.10);border:1px solid rgba(56,189,248,.35);font-size:12px;line-height:1.5}
-  /* 无反馈线风扇插在 PWM 口 → 调速指令收不到、恒满速。比 DC 提示更严重，用橙色警示。 */
-  .fan-nosig-note{margin-top:8px;padding:7px 10px;border-radius:7px;background:rgba(245,158,11,.12);border:1px solid rgba(245,158,11,.45);font-size:12px;line-height:1.6}
-  .fan-notach-lbl{display:inline-flex;align-items:center;gap:4px;font-size:12px;color:var(--muted);cursor:pointer;user-select:none;white-space:nowrap}
-  .fan-notach-lbl input{margin:0;cursor:pointer}
   .fan-hw-sum{font-weight:600;color:var(--orange)}
   .fan-hw-toggle{margin-left:auto;font-size:11px;font-weight:400;color:var(--muted);background:none;border:1px solid var(--border);border-radius:5px;padding:1px 7px;cursor:pointer}
   .fan-hw-toggle:hover{color:var(--orange);border-color:var(--orange)}
@@ -581,7 +576,7 @@
   .curve-presets{display:flex;gap:6px;margin:6px 0 10px;flex-wrap:wrap}
   .curve-canvas{width:100%;height:150px;background:var(--bg);border:1px solid var(--border);border-radius:8px;margin-top:8px;display:block}
   /* 2.0 暗色兜底：子面板背景跟随 fill，避免黑底黑块；文字色统一走 Token */
-  [data-theme="dark"] .mem-slot,[data-theme="dark"] .temp-chip,[data-theme="dark"] .fan-card,[data-theme="dark"] .fcs-card,[data-theme="dark"] .fan-presets,[data-theme="dark"] .dt-field,[data-theme="dark"] .dt-opt,[data-theme="dark"] .chan,[data-theme="dark"] .dt-live,[data-theme="dark"] .fan-rule-tip,[data-theme="dark"] .fan-hw-note,[data-theme="dark"] .fan-dc-note,[data-theme="dark"] .fan-nosig-note,[data-theme="dark"] .dt-hint,[data-theme="dark"] .temp-overview,[data-theme="dark"] .sleep-panel,[data-theme="dark"] .auto-card,[data-theme="dark"] .curve-pt-input,[data-theme="dark"] .fan-label-input,[data-theme="dark"] .fan-volt-select,[data-theme="dark"] .fan-rule-src,[data-theme="dark"] .fan-rule-fields input,[data-theme="dark"] .dt-field input,[data-theme="dark"] .auto-field input,[data-theme="dark"] .curve-canvas{background:var(--fill);border-color:var(--border)}
+  [data-theme="dark"] .mem-slot,[data-theme="dark"] .temp-chip,[data-theme="dark"] .fan-card,[data-theme="dark"] .fcs-card,[data-theme="dark"] .fan-presets,[data-theme="dark"] .dt-field,[data-theme="dark"] .dt-opt,[data-theme="dark"] .chan,[data-theme="dark"] .dt-live,[data-theme="dark"] .fan-rule-tip,[data-theme="dark"] .fan-hw-note,[data-theme="dark"] .fan-dc-note,[data-theme="dark"] .dt-hint,[data-theme="dark"] .temp-overview,[data-theme="dark"] .sleep-panel,[data-theme="dark"] .auto-card,[data-theme="dark"] .curve-pt-input,[data-theme="dark"] .fan-label-input,[data-theme="dark"] .fan-volt-select,[data-theme="dark"] .fan-rule-src,[data-theme="dark"] .fan-rule-fields input,[data-theme="dark"] .dt-field input,[data-theme="dark"] .auto-field input,[data-theme="dark"] .curve-canvas{background:var(--fill);border-color:var(--border)}
   [data-theme="dark"] .kv{border-color:var(--divider)}
   [data-theme="dark"] .disk-group-title{color:var(--text-3)}
   [data-theme="dark"] .disk-card.bad{background:rgba(247,105,101,.08)}
@@ -612,7 +607,6 @@
       <button class="tab" onclick="switchTab('system',this)"><img src="{{ ICON_SYSTEM_DATA }}" class="ic" alt="系统资源"> 系统资源</button>
       <button class="tab" onclick="switchTab('sys-hist',this)"><img src="{{ ICON_HISTORY_DATA }}" class="ic" alt="历史趋势"> 历史趋势</button>
       <div class="sb-group">存储</div>
-      <button class="tab" onclick="switchTab('raid',this)"><img src="{{ ICON_RAID_DATA }}" class="ic" alt="阵列卡"> 阵列卡</button>
       <button class="tab" onclick="switchTab('disks',this)"><img src="{{ ICON_HDD_DATA }}" class="ic" alt="硬盘"> 硬盘 SMART</button>
       <button class="tab" onclick="switchTab('storage',this)"><img src="{{ ICON_STORAGE_DATA }}" class="ic" alt="存储卷"> 存储卷</button>
       <div class="sb-group">其他</div>
@@ -636,7 +630,6 @@
       <button class="ab-close" onclick="dismissAlerts()">✕</button>
     </div>
     <div id="detect" class="panel active"><div class="sk-card"><div class="skeleton sk-line" style="width:42%"></div><div class="skeleton sk-line" style="width:88%"></div><div class="skeleton sk-line" style="width:64%"></div></div></div>
-    <div id="raid" class="panel"><div class="sk-card"><div class="skeleton sk-line" style="width:36%"></div><div class="skeleton sk-line" style="width:82%"></div><div class="skeleton sk-line" style="width:58%"></div></div></div>
     <div id="disks" class="panel"><div class="sk-card"><div class="skeleton sk-line" style="width:46%"></div><div class="skeleton sk-line" style="width:90%"></div><div class="skeleton sk-line" style="width:70%"></div></div></div>
     <div id="system" class="panel"><div class="sk-card"><div class="skeleton sk-line" style="width:40%"></div><div class="skeleton sk-line" style="width:86%"></div><div class="skeleton sk-line" style="width:62%"></div></div></div>
     <div id="sys-hist" class="panel"><div class="sk-card"><div class="skeleton sk-line" style="width:50%"></div><div class="skeleton sk-line" style="width:84%"></div><div class="skeleton sk-line" style="width:66%"></div></div></div>
@@ -1283,7 +1276,13 @@ function renderSystem(s){
   let memPct = s.memory.percent;
   let memColor = memPct>85?'var(--red)':memPct>70?'var(--orange)':'var(--green)';
   let sens = s.sensors || {};
-  let tempsHtml = (sens.temps||[]).map(t=>{
+  let tempsHtml = (sens.temps||[]).filter(t=>{
+    let _n=(t.name||'').toLowerCase();
+    // 仅保留：主板 / 南桥(PCH 芯片组) / CPU 整体(封装)；过滤掉每个 CPU 核心、T_Sensor、VRM 等细分探头
+    if(_n.includes('主板')||_n.includes('acpi')||_n.includes('pch')||_n.includes('芯片组')) return true;
+    if(_n.includes('cpu') && !_n.includes('核心') && !_n.includes('ccd')) return true;
+    return false;
+  }).map(t=>{
     let col = t.crit&&t.value>=t.crit ? 'var(--red)' : t.max&&t.value>=t.max ? 'var(--orange)' : 'inherit';
     let extra = t.crit ? ` (上限${t.max||'-'}°C/临界${t.crit}°C)` : t.max ? ` (上限${t.max}°C)` : '';
     return `<div class="kv"><span class="k">${t.name}</span><span class="v" style="color:${col}">${t.value}°C${extra}</span></div>`;
@@ -1434,21 +1433,18 @@ function renderFanControl(){
             <option value="5V" ${f.voltage==='5V'?'selected':''}>5V</option>
             <option value="未知" ${(!f.voltage||f.voltage==='未知')?'selected':''}>未知</option>
           </select>
-          ${f.pwm_mode?`<span class="fan-pwmmode-badge" title="当前接口调速信号类型，由主板 BIOS 决定：PWM=4针脉宽调速，DC=3针直流电压调速。nasdash 只读取并显示当前模式，不修改（改不动是主板硬件限制，需在 BIOS 里切）。">调速方式：${f.pwm_mode==='pwm'?'PWM 调速':'DC 调速'}</span>`:''}
-          <label class="fan-notach-lbl" title="勾上表示这口接的是 2 针或 3 针风扇（没有转速反馈线）。勾选后转速栏不再显示刺眼的 0，改显『无反馈线』，也不会再被当成故障风扇报警。"><input type="checkbox" id="${id}-notach" ${f.no_tach?'checked':''}>无反馈线</label>
           <button class="btn-mini" onclick="saveFanLabel('${f.hwmon}', ${f.idx})">保存标注</button>
           <button class="btn-mini" onclick="toggleFanHidden('${f.hwmon}', ${f.idx}, ${f.hidden?'false':'true'})" title="隐藏无风扇/无转速的空通道，可随时恢复">${f.hidden?'取消隐藏':'隐藏'}</button>
           <span id="${id}-label-state" class="fan-label-state"></span>
         </span>
       </div>
-      <div class="fan-rpm" ${f.has_tach?'':(f.no_tach?'title="你已标注此口风扇没有转速反馈线（2/3针），读不到转速属正常现象，不是故障。"':'title="读不到转速：可能是一分二分线器的副风扇（转速线未接）、风扇本身未接转速线，或主板未把该通道布线到风扇接口。若此通道无风扇，可点下方『隐藏』把它收起；若确实接了无反馈线的 2/3 针风扇，勾上『无反馈线』。"')}><span id="${id}-rpm">${f.has_tach?(f.rpm||0):'—'}</span><small id="${id}-rpm-unit">${f.has_tach?'RPM':(f.no_tach?'无反馈线（正常）':'无转速信号')}</small></div>
+      <div class="fan-rpm" ${f.has_tach?'':'title="读不到转速：可能是一分二分线器的副风扇（转速线未接）、风扇本身未接转速线，或主板未把该通道布线到风扇接口。若此通道无风扇，可点下方『隐藏』把它收起。"'}><span id="${id}-rpm">${f.has_tach?(f.rpm||0):'—'}</span><small id="${id}-rpm-unit">${f.has_tach?'RPM':'无转速信号'}</small></div>
       <div class="fan-hw-note" id="${id}-hwnote" style="display:none">
         <span class="fan-hw-sum" id="${id}-hwsum"></span>
         <button class="fan-hw-toggle" id="${id}-hwtoggle" type="button" onclick="toggleFanHwNote('${id}')">说明 ▾</button>
         <div class="fan-hw-detail" id="${id}-hwdetail" style="display:none"></div>
       </div>
       ${f.pwm_mode==='dc'?`<div class="fan-dc-note">🔌 此接口当前是 <b>DC（电压）调速</b>：调速靠改供电电压，低档位比 PWM 更容易转不动或直接停转。若风扇低速时抖动、启动不了，把最低转速调高一些，或切回 PWM 调速。</div>`:''}
-      ${(f.no_tach && f.pwm_mode==='pwm')?`<div class="fan-nosig-note">⚠️ <b>这口的百分比可能不起作用。</b>你标注了此口风扇没有转速反馈线（2/3 针），而接口现在是 <b>PWM 调速</b>——PWM 靠单独的第 4 根信号线下发指令，2/3 针风扇收不到，供电会一直给满，风扇很可能<b>始终全速转</b>，面板上调多少都没反应。<br>解决办法：把上面的下拉框切成 <b>DC 调速</b>（靠调电压控速，2/3 针可用）；切不动说明主板这口硬件不支持，那就得进 BIOS 找 DC/Voltage 选项，或换一把 4 针 PWM 风扇。</div>`:''}
       <div class="fan-speed-bar"><div class="fan-speed-fill" id="${id}-bar" style="width:${pct}%"></div></div>
       <div class="fan-pct-line">
         <span>当前 <b id="${id}-cur">${pct}</b>%</span>
@@ -2170,7 +2166,7 @@ async function fetchFanStatus(){
       if(cur) cur.textContent=(f.pwm!=null?f.pwm:'--');
       if(tgt) tgt.textContent=(f.target_pct!=null && f.target_pct!==f.pwm)?('→ 目标 '+f.target_pct+'%'):(f.mode==='auto'?'· 自动控温':(f.mode==='sys_temp'?'· 系统温度控':(f.mode==='disk_temp'?'· 硬盘温度控':'')));
       if(rpm) rpm.textContent=(f.has_tach?(f.rpm||0):'—');
-      let unit=document.getElementById(id+'-rpm-unit'); if(unit) unit.textContent=(f.has_tach?'RPM':(f.no_tach?'无反馈线（正常）':'无转速信号'));
+      let unit=document.getElementById(id+'-rpm-unit'); if(unit) unit.textContent=(f.has_tach?'RPM':'无转速信号');
       let bar=document.getElementById(id+'-bar');
       if(bar) bar.style.width=(f.pwm!=null?f.pwm:50)+'%';
       // 实时刷新状态徽标：模式可能随时变化（如拖滑块→手动、点恢复自动→自动），
@@ -2702,29 +2698,44 @@ function renderDetect(D){
     ${netCard}
   </div>`;
   // 阵列卡 & 磁盘
-  let raidCard;
+  let raidCardsHtml;
   if(r.mode==='mega'){
-    raidCard = `
+    raidCardsHtml = `
     <div class="card">
       <h3>RAID 控制器</h3>
       <div class="kv"><span class="k">型号</span><span class="v">${r.model}</span></div>
       <div class="kv"><span class="k">模式</span><span class="v"><span class="badge b-info">MegaRAID (IR)</span></span></div>
       <div class="kv"><span class="k">状态</span><span class="v" style="color:var(--green)">✓ 正常</span></div>
+      <div class="kv"><span class="k">序列号</span><span class="v">${r.serial||'-'}</span></div>
+      <div class="kv"><span class="k">SAS 地址</span><span class="v">${r.sas_address||'-'}</span></div>
+      <div class="kv"><span class="k">PCI 地址</span><span class="v">${r.pci||'-'}</span></div>
       <div class="kv"><span class="k">芯片温度</span><span class="v" style="color:${tempColor(r.controller_temp,85)}">${r.controller_temp!=null?r.controller_temp+'°C':'N/A'}</span></div>
+    </div>
+    <div class="card">
+      <h3>固件版本</h3>
+      <div class="kv"><span class="k">FW Package</span><span class="v">${r.fw_package||'-'}</span></div>
+      <div class="kv"><span class="k">FW Version</span><span class="v">${r.fw_version||'-'}</span></div>
+      <div class="kv"><span class="k">BIOS</span><span class="v">${r.bios_version||'-'}</span></div>
+      <div class="kv"><span class="k">驱动</span><span class="v">${r.driver||'-'}</span></div>
+    </div>
+    <div class="card">
+      <h3>缓存 / 电池</h3>
+      <div class="kv"><span class="k">CacheVault</span><span class="v">${r.cachevault||'-'}</span></div>
+      <div class="kv"><span class="k">JBOD 盘数</span><span class="v">${r.jbod_count||0}</span></div>
       <div class="kv"><span class="k">物理盘</span><span class="v">${r.drives?r.drives.length:0} 块</span></div>
-      <div class="kv"><span class="k">固件</span><span class="v">${r.fw_package||'-'}</span></div>
     </div>`;
   } else if(r.mode==='hba'){
-    raidCard = `
+    raidCardsHtml = `
     <div class="card">
       <h3>控制器 (HBA 直通)</h3>
       <div class="kv"><span class="k">型号</span><span class="v">${r.model}</span></div>
       <div class="kv"><span class="k">模式</span><span class="v"><span class="badge b-info">IT 直通</span></span></div>
       <div class="kv"><span class="k">状态</span><span class="v" style="color:var(--green)">✓ 正常工作</span></div>
-      <div class="kv"><span class="k">温度</span><span class="v" style="color:var(--muted)">卡无传感器 · 见「硬盘 SMART」</span></div>
+      ${r.controller_temp!=null?`<div class="kv"><span class="k">芯片温度</span><span class="v" style="color:${tempColor(r.controller_temp,85)};font-weight:600">${r.controller_temp}°C</span></div>`:''}
+      <div class="kv"><span class="k">说明</span><span class="v" style="font-size:12px">${r.note||''}</span></div>
     </div>`;
   } else {
-    raidCard = `<div class="card"><h3>阵列卡</h3><div class="loading">${r.note||'未检测到阵列卡'}</div></div>`;
+    raidCardsHtml = `<div class="card"><h3>阵列卡</h3><div class="loading">${r.note||'未检测到阵列卡'}</div></div>`;
   }
   let diskItem = d => {
     let t = (d.type||'').toUpperCase();
@@ -2746,7 +2757,7 @@ function renderDetect(D){
   if(!disks.length) diskMini = '<div class="loading">未检测到硬盘</div>';
   let raidDisk = `
   <div class="detect-cards">
-    ${raidCard}
+    ${raidCardsHtml}
     <div class="card">
       <h3>磁盘健康 (SMART)</h3>
       ${diskMini}

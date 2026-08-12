@@ -1,6 +1,6 @@
 # nasdash
 
-**当前版本：v2.0.0** · [下载最新 fpk](https://github.com/han951meng/nasdash/releases/latest) · [📖 操作手册](docs/使用手册.md) · [💬 飞牛社区讨论帖](https://club.fnnas.com/forum.php?mod=viewthread&tid=67060)
+**当前版本：v2.0.1** · [下载最新 fpk](https://github.com/han951meng/nasdash/releases/latest) · [📖 操作手册](docs/使用手册.md) · [💬 飞牛社区讨论帖](https://club.fnnas.com/forum.php?mod=viewthread&tid=67060)
 
 飞牛OS（fnOS）NAS 硬件监控面板 —— FPK 应用包
 
@@ -194,6 +194,10 @@
 > 本应用仅在以上硬件完成完整实测；其他主板/阵列卡组合功能可能不同，欢迎在 Issues 反馈。
 
 ## 更新日志
+
+### v2.0.1
+- 论坛反馈修复：温度传感器精简为仅显示主板/CPU/南桥三项；风扇控制去除调速方式与无反馈线异常显示；阵列卡独立页合并进硬件检测去重
+
 
 ### v2.0.0
 
