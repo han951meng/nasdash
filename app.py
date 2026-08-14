@@ -2949,7 +2949,7 @@ def get_memory_modules():
 _TEMP_NAME_ZH = {
     # Nuvoton NCT67xx 常见测点
     "SYSTIN": "主板温度",
-    "CPUTIN": "CPU 温度（主板探头）",
+    "CPUTIN": "主板·CPU 区域",
     "AUXTIN0": "扩展温度探头 0",
     "AUXTIN1": "扩展温度探头 1",
     "AUXTIN2": "扩展温度探头 2",

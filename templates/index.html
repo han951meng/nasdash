@@ -266,6 +266,7 @@
   .temp-wall{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px;margin-top:6px}
   .temp-chip{border-radius:10px;padding:10px 12px;border:1px solid var(--border);background:var(--bg);display:flex;flex-direction:column;gap:4px}
   .temp-chip .tc-name{font-size:12px;color:var(--muted);word-break:break-all}
+  .temp-chip .best-tag{font-size:10px;color:#fff;background:#16a34a;border-radius:4px;padding:1px 5px;margin-left:4px;vertical-align:1px}
   .temp-chip .tc-val{font-size:16px;font-weight:600}
   .gpu-sep{height:1px;background:var(--border);margin:8px 0}
   /* 显卡卡片收纳折叠 */
@@ -976,7 +977,7 @@ function panelHero(o){
     let cls = st.cls ? ' '+st.cls : '';
     let unit = st.unit ? '<small>'+st.unit+'</small>' : '';
     let uptimeCls = (st.k === '已运行') ? ' hs-uptime' : '';
-    return '<div class="hs'+cls+uptimeCls+'"><div class="hs-v">'+st.v+unit+'</div><div class="hs-k">'+st.k+'</div></div>';
+    return '<div class="hs'+cls+uptimeCls+'"><div class="hs-v">'+st.v+unit+'</div><div class="hs-k"'+(st.tip?' title="'+esc(st.tip)+'"':'')+'>'+st.k+'</div></div>';
   }).join('');
   let badge = o.badge ? '<div class="hero-badge'+(o.badge.ok?'':' warn')+'"><span class="dot"></span>'+o.badge.text+'</div>' : '';
   let action = '<div class="hero-action">' + heroControls() + (o.action || '') + '</div>';
@@ -1581,7 +1582,7 @@ function renderTemps(s){
   }).join('');
   // 主板测点全览墙（过滤无效 0°C / 负温）
   let tempEntries = (sens.temps||[]).filter(t=>typeof t.value==='number'&&t.value>0&&t.value<150);
-  let wall = tempEntries.length?`<div class="temp-wall">${tempEntries.map(t=>{let raw=t.raw||'';let tip=raw?raw+'（原始测点名）':'';return `<div class="temp-chip" title="${esc(tip)}"><span class="tc-name">${esc(t.name)}</span><span class="tc-val" style="color:${tempColor(t.value,85)}">${t.value}°C</span></div>`;}).join('')}</div>`:'<div class="loading">未检测到温度测点</div>';
+  let wall = tempEntries.length?`<div class="temp-wall">${tempEntries.map(t=>{let raw=t.raw||'';let tip=raw?raw+'（原始测点名）':'';let star=(t.name==='CPU 封装温度')?' <span class="best-tag" title="CPU 内部传感器直读，最准确">★最准</span>':'';return `<div class="temp-chip" title="${esc(tip)}"><span class="tc-name">${esc(t.name)}${star}</span><span class="tc-val" style="color:${tempColor(t.value,85)}">${t.value}°C</span></div>`;}).join('')}</div>`:'<div class="loading">未检测到温度测点</div>';
   // 温度汇总：最高、平均、偏高/告警数量（与系统资源页的 CPU/内存解耦，避免重复）
   let maxTemp = null, avgTemp = null, warnCount = 0, critCount = 0;
   if(tempEntries.length){
@@ -1599,7 +1600,7 @@ function renderTemps(s){
   let statusOk = !critCount && !warnCount;
   return `
   ${panelHero({icon:ICON_TEMPS,title:'温度监控',sub:'主板 / CPU / 芯片组 温度与阈值',badge:{ok:statusOk,text:statusText},stats:[
-    {v:(s.cpu_temp!=null?s.cpu_temp+'°C':'N/A'),k:'CPU 温度'},
+    {v:(s.cpu_temp!=null?s.cpu_temp+'°C':'N/A'),k:'CPU 温度',tip:'CPU 封装温度（Package id），CPU 内部传感器直读，最准确'},
     {v:(maxTemp!=null?maxTemp+'°C':'—'),k:'最高温度'},
     {v:(avgTemp!=null?avgTemp+'°C':'—'),k:'平均温度'},
     {v:(tempEntries.length||'—'),k:'温度测点'}
