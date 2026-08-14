@@ -119,6 +119,18 @@
   .modal-body{font-size:14px;color:var(--text-1);line-height:1.7;white-space:pre-line}
   .modal-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:6px}
   .modal-overlay .btn{min-width:72px}
+  .modal-box.modal-wide{max-width:820px;width:100%}
+  .logstat{margin-bottom:10px;font-size:13px;color:var(--text-1)}
+  .logstat b{font-size:13px;margin:0 2px}
+  .logstat b.danger{color:#e0394a}
+  .logstat b.warn{color:#c47b00}
+  .log-list{border:1px solid var(--c-border);border-radius:8px;max-height:480px;overflow:auto;background:var(--c-fill-2)}
+  .log-line{font-family:Consolas,Menlo,monospace;font-size:12px;padding:5px 12px;border-bottom:1px solid var(--c-border);white-space:pre-wrap;word-break:break-all;line-height:1.55;color:var(--text-1)}
+  .log-line:last-child{border-bottom:none}
+  .log-line .lt{color:var(--muted);margin-right:8px;font-size:11px}
+  .log-line.lv-err{background:rgba(224,57,74,.10);color:#e0394a}
+  .log-line.lv-warn{background:rgba(196,123,0,.10);color:#c47b00}
+  .log-empty{padding:18px 12px;color:var(--muted);text-align:center;font-size:13px}
   .panel.active{display:block}
   .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}
   .card{background:var(--card);border-radius:var(--r-md);padding:var(--s-4);box-shadow:var(--shadow);border:1px solid var(--border);transition:box-shadow .2s}
@@ -1569,9 +1581,11 @@ function renderSystem(s){
 // ===== 温度监控独立页面（关键温度阈值 + 主板测点温度墙）=====
 function renderTemps(s){
   let sens = (s&&s.sensors) || {};
-  // 关键温度阈值列表：主板 / 南桥(PCH 芯片组) / CPU 整体(封装)；过滤掉每个 CPU 核心、T_Sensor、VRM 等细分探头
+  // 关键温度阈值列表：主板 / 南桥(PCH 芯片组) / CPU 整体(封装)；过滤掉每个 CPU 核心、T_Sensor、VRM、PECI 代理等细分探头，以及未接线的 0°C 无效测点
   let tempsHtml = (sens.temps||[]).filter(t=>{
     let _n=(t.name||'').toLowerCase();
+    if(_n.includes('peci')) return false;                        // PECI 代理与封装温度重复，防误导
+    if(typeof t.value!=='number'||t.value<=0) return false;      // 未接线测点(0°C)不显示
     if(_n.includes('主板')||_n.includes('acpi')||_n.includes('pch')||_n.includes('芯片组')) return true;
     if(_n.includes('cpu') && !_n.includes('核心') && !_n.includes('ccd')) return true;
     return false;
@@ -3147,7 +3161,7 @@ function renderDocker(dk){
 // ===================== 控制与自动化 =====================
 let AUTOMATION_INITED=false, autoTimer=null, lastAlerts=[];
 function renderAutomation(){
-  return panelHero({icon:ICON_AUTOMATION,title:'控制与自动化',sub:'温度 / 硬盘健康告警、外部通知与一键健康报告',action:'<button class="btn-mini" onclick="exportReport(\'html\')"><svg class="ico" viewBox="0 0 24 24"><use href="#i-file"/></svg> 导出健康报告</button>'}) + `
+  return panelHero({icon:ICON_AUTOMATION,title:'控制与自动化',sub:'温度 / 硬盘健康告警、外部通知与一键健康报告',action:''}) + `
   <div class="auto-card">
     <h3><svg class="ico" viewBox="0 0 24 24"><use href="#i-search"/></svg> 活动告警 <span class="badge b-info">每 15 秒刷新</span></h3>
     <ul class="auto-alerts" id="auto-alert-list"><li class="ok">加载中…</li></ul>
@@ -3199,11 +3213,11 @@ function renderAutomation(){
   </div>
   <div class="auto-card">
     <h3><svg class="ico" viewBox="0 0 24 24"><use href="#i-report"/></svg> 一键健康报告</h3>
-    <div style="font-size:13px;color:var(--muted);margin-bottom:12px">汇总全部硬件状态与活动告警，导出供排查留档。JSON 可直接查看，HTML 为排版报告。<b>遇到风扇/传感器异常</b>时，点「复制诊断信息」一键复制设备原生态（含每台风扇通道的 hwmon::idx、pwm_enable 原始值、温控规则命中情况），直接贴给开发者最快定位。</div>
+    <div style="font-size:13px;color:var(--muted);margin-bottom:12px">汇总全部硬件状态与活动告警，导出供排查留档。JSON 可直接查看，HTML 为排版报告（内含融合分级的运行日志）。<b>遇到 bug 或异常</b>时，点「查看运行日志」在弹窗中查看错误/警告（置顶着色），确认后再决定要不要复制贴给开发者。</div>
     <div class="auto-actions">
       <button class="btn-mini" onclick="exportReport('json')">导出 JSON</button>
       <button class="btn-mini" onclick="exportReport('html')">导出 HTML 报告</button>
-      <button class="btn-mini" onclick="copyDiagnostics()"><svg class="ico" viewBox="0 0 24 24"><use href="#i-clipboard"/></svg> 复制诊断信息</button>
+      <button class="btn-mini" onclick="showRunLog()"><svg class="ico" viewBox="0 0 24 24"><use href="#i-clipboard"/></svg> 查看运行日志</button>
     </div>
   </div>`;
 }
@@ -3398,20 +3412,96 @@ function toast(msg){
   t.textContent=msg; t.style.opacity='1';
   clearTimeout(t._timer); t._timer=setTimeout(function(){ t.style.opacity='0'; }, 2600);
 }
-async function copyDiagnostics(){
-  try{
-    var r=await fetch('/api/diagnostics?format=txt&_='+Date.now());
-    var txt=await r.text();
-    if(navigator.clipboard && navigator.clipboard.writeText){
-      await navigator.clipboard.writeText(txt);
-      toast('已复制诊断信息，直接粘贴到论坛或发给开发者即可');
+async function showRunLog(){
+  // 运行日志弹窗（与健康报告 HTML 同源同规则：错误/警告置顶着色，看完再决定是否复制）
+  var modal=document.getElementById('app-modal');
+  var titleEl=document.getElementById('app-modal-title');
+  var bodyEl=document.getElementById('app-modal-body');
+  var actionsEl=document.getElementById('app-modal-actions');
+  if(!modal||!titleEl||!bodyEl||!actionsEl){ alert('弹窗组件未就绪'); return; }
+  function cleanup(){
+    modal.classList.remove('show'); modal.classList.remove('modal-wide');
+    modal.setAttribute('aria-hidden','true');
+    document.removeEventListener('keydown', onKey);
+    modal.onclick=null;
+  }
+  function onKey(e){ if(e.key==='Escape') cleanup(); }
+  titleEl.textContent='运行日志（诊断）';
+  bodyEl.innerHTML='<div class="log-empty">加载中…</div>';
+  actionsEl.innerHTML='';
+  modal.classList.add('modal-wide');
+  modal.classList.add('show');
+  modal.setAttribute('aria-hidden','false');
+  document.addEventListener('keydown', onKey);
+  modal.onclick=function(e){ if(e.target===modal) cleanup(); };
+  var closeBtn=document.createElement('button');
+  closeBtn.className='btn'; closeBtn.textContent='关闭';
+  closeBtn.onclick=cleanup;
+  var copyBtn=document.createElement('button');
+  copyBtn.className='btn btn-primary'; copyBtn.textContent='复制全部日志';
+  copyBtn.onclick=function(){
+    var txt=copyBtn.getAttribute('data-txt')||'';
+    if(!txt){ toast('暂无日志可复制'); return; }
+    if(navigator.clipboard&&navigator.clipboard.writeText){
+      navigator.clipboard.writeText(txt).then(function(){ toast('已复制到剪贴板'); });
     } else {
-      // 老浏览器兜底：弹出文本供手动复制
       var ta=document.createElement('textarea'); ta.value=txt; document.body.appendChild(ta); ta.select();
-      try{ document.execCommand('copy'); toast('已复制诊断信息'); }catch(e){ alert(txt); }
+      try{ document.execCommand('copy'); toast('已复制到剪贴板'); }catch(e){ alert(txt); }
       ta.remove();
     }
-  }catch(e){ alert('复制失败：'+e); }
+  };
+  actionsEl.appendChild(copyBtn);
+  actionsEl.appendChild(closeBtn);
+  // 拉日志（从健康报告 JSON 取 log_tail，避免重复后端实现）
+  var logText='';
+  try{
+    var r=await fetch('/api/report?format=json&_='+Date.now());
+    var j=await r.json();
+    logText=j.log_tail||'';
+  }catch(e){
+    bodyEl.innerHTML='<div class="log-empty">加载日志失败：'+e+'</div>';
+    return;
+  }
+  copyBtn.setAttribute('data-txt', logText);
+  // 前端解析分级（与后端 _parse_log_entries 同规则）
+  var lines=(logText||'').split('\n');
+  var entries=[];
+  for(var i=0;i<lines.length;i++){
+    var s=lines[i].replace(/^\s+|\s+$/g,'');
+    if(!s) continue;
+    var m=s.match(/^(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2})[ ,]*(.*)$/);
+    var ts=m?m[1]:'';
+    var txt=m?m[2]:s;
+    var low=txt.toLowerCase();
+    var lvl='INFO';
+    if(low.indexOf('traceback')>=0||low.indexOf('error')>=0||low.indexOf('exception')>=0||
+       low.indexOf('failed')>=0||txt.indexOf('失败')>=0||txt.indexOf('错误')>=0) lvl='ERROR';
+    else if(low.indexOf('warn')>=0||low.indexOf('warning')>=0||txt.indexOf('警告')>=0) lvl='WARN';
+    entries.push({ts:ts, lvl:lvl, txt:txt});
+  }
+  var nE=0,nW=0;
+  for(var k=0;k<entries.length;k++){ if(entries[k].lvl==='ERROR') nE++; else if(entries[k].lvl==='WARN') nW++; }
+  if(!entries.length){
+    bodyEl.innerHTML='<div class="log-empty">（暂无运行日志）</div>';
+    return;
+  }
+  // 错误/警告置顶
+  entries.sort(function(a,b){
+    var order={ERROR:0, WARN:1, INFO:2};
+    return order[a.lvl]-order[b.lvl];
+  });
+  var html='<div class="logstat">运行日志共 <b>'+entries.length+'</b> 行：';
+  html+='<b class="danger">错误 '+nE+'</b> · <b class="warn">警告 '+nW+'</b> · 常规 '+(entries.length-nE-nW);
+  html+='（错误/警告置顶着色，方便先看 bug）</div>';
+  html+='<div class="log-list">';
+  for(var j2=0;j2<entries.length;j2++){
+    var e=entries[j2];
+    html+='<div class="log-line lv-'+e.lvl.toLowerCase()+'">';
+    if(e.ts) html+='<span class="lt">'+esc(e.ts)+'</span>';
+    html+=esc(e.txt)+'</div>';
+  }
+  html+='</div>';
+  bodyEl.innerHTML=html;
 }
 // 全局告警横幅
 let alertsDismissed=false;

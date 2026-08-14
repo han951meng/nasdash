@@ -15,85 +15,18 @@ fi
 PYTHON=$(which python3 2>/dev/null || echo "/usr/bin/python3")
 LOG_FILE="${TRIM_PKGVAR}/app.log"
 
-# 网关重启冷却(2026-08-14 修正): self_heal 与常驻看门狗共享同一冷却时间戳，仅防重启风暴。
-# 根因是 ui/config 的 gatewaySocket 路径错(应为 target/app.sock)，已修正；此处冷却只需短到
-# 确保"飞牛清空 entry -> 看门狗补 DB -> 重启网关重载"的恢复链路不被阻断(180s 远小于清空周期)。
-RESTART_COOLDOWN=60   # 网关重启冷却: 60s 防重启风暴(飞牛清空周期~1min，60s 已足够)
-RESTART_TS="${TRIM_PKGVAR:-/var/apps/com.dashboard.nasdash/var}/gw_restart_ts"
-gateway_restart_allowed() {
-    local now ts
-    now=$(date +%s)
-    ts=$(cat "$RESTART_TS" 2>/dev/null | tr -d '[:space:]')
-    if [ -n "$ts" ] && [ "$((now - ts))" -lt "$RESTART_COOLDOWN" ]; then
-        return 1
-    fi
-    echo "$now" > "$RESTART_TS"
-    return 0
-}
-
-# 飞牛统一网关的上游 socket 路径登记在 PostgreSQL trim_sac.entry 表(gateway_socket 字段)。
-# nasdash 该记录早期(ui/config 尚未配好 gatewaySocket 时)建立，之后每次重装走 UPDATE 分支，
-# appcenter 不再重算该字段 -> gateway_socket 长期为空 -> 网关收到登录态请求后找不到上游 -> 404。
-# 自愈：每次启动把此字段补正确；仅当确有变更时才重启网关进程使其重载(幂等，已正确则零打扰)。
-# 本函数绝不阻断应用启动：任何失败仅记日志后返回。
-self_heal_gateway() {
-    local SOCK_TARGET="/var/apps/com.dashboard.nasdash/target/app.sock"
-    local PREFIX="/app/com.dashboard.nasdash"
-    local HEAL_LOG="${TRIM_PKGVAR:-/var/apps/com.dashboard.nasdash/var}/gateway_heal.log"
-    local PSQL_BIN
-    PSQL_BIN="$(command -v psql 2>/dev/null || echo /usr/bin/psql)"
-    [ -x "$PSQL_BIN" ] || { echo "$(date '+%F %T') psql not found, skip gateway heal" >> "$HEAL_LOG"; return 0; }
-    # 先查是否已正确：避免把 psql 的 "UPDATE 0" 命令标签误判为“已变更”而冗余重启网关。
-    local ok
-    ok=$(sudo -u postgres "$PSQL_BIN" -d trim_sac -tAc \
-        "SELECT 1 FROM entry WHERE app_name='com.dashboard.nasdash' \
-           AND gateway_socket='$SOCK_TARGET' AND gateway_prefix='$PREFIX' LIMIT 1;" 2>/dev/null)
-    if [ "$ok" = "1" ]; then
-        return 0   # 已正确：零打扰、不写日志、不重启网关
-    fi
-    # 需要修复：写回正确 socket 并重启网关使其从库重载入口(勿用 kill -HUP，会直接杀掉该进程)。
-    sudo -u postgres "$PSQL_BIN" -d trim_sac -c \
-        "UPDATE entry SET gateway_socket='$SOCK_TARGET', gateway_prefix='$PREFIX' \
-         WHERE app_name='com.dashboard.nasdash';" >> "$HEAL_LOG" 2>&1
-    echo "$(date '+%F %T') gateway entry fixed (was empty/recreated)" >> "$HEAL_LOG"
-    if gateway_restart_allowed; then
-        echo "$(date '+%F %T') cooldown passed, restarting trim_http_cgi" >> "$HEAL_LOG"
-        systemctl restart trim_http_cgi >> "$HEAL_LOG" 2>&1 || \
-            echo "$(date '+%F %T') WARN: systemctl restart trim_http_cgi failed" >> "$HEAL_LOG"
-    else
-        echo "$(date '+%F %T') WARN: gateway restart suppressed (cooldown <${RESTART_COOLDOWN}s since last), will retry on next cycle / app restart" >> "$HEAL_LOG"
-    fi
-    return 0
-}
-
-# 常驻看门狗：以 setsid 分离启动独立的 gw_watchdog.sh（不依赖本 shell 存活），
-# 每 30s(及启动时立即)校验 entry，若被 appcenter 重建/清空则自动补回。按进程名判断是否已在运行。
-launch_watchdog() {
-    local WD="$APP_DIR/../cmd/gw_watchdog.sh"
-    [ -x "$WD" ] || WD="/var/apps/com.dashboard.nasdash/cmd/gw_watchdog.sh"
-    [ -f "$WD" ] || return 0
-    # 启动前先杀掉任何旧看门狗进程(可能来自上一版代码，detached 后 fnOS 管不到，
-    # admin 无权限杀 root 进程，必须在这里用 root 身份 pkill)。否则旧进程活着时
-    # 下面"按进程名判断是否已在运行"会返回 true，导致新版代码永远不被启动，
-    # 出现"装了修复版但跑的还是老逻辑"的间歇性 404。
-    pkill -9 -f "[g]w_watchdog.sh" 2>/dev/null
-    sleep 0.5  # 等旧进程彻底退出，避免 races
-    if ps -ef 2>/dev/null | grep -q "[g]w_watchdog.sh"; then
-        echo "$(date '+%F %T') WARN: old gw_watchdog.sh still running after pkill, skipping" >> "${TRIM_PKGVAR:-/var/apps/com.dashboard.nasdash/var}/gateway_heal.log" 2>/dev/null
-        return 0
-    fi
-    setsid bash "$WD" </dev/null >/dev/null 2>&1 &
-    echo $! > "${TRIM_PKGVAR:-/var/apps/com.dashboard.nasdash/var}/gw_watchdog.pid"
-}
+# 打开方式：cgi 反代（对齐 fnpackup），不走飞牛统一网关入口。
+# 不再需要网关自愈/看门狗：cgi 模式下面板由飞牛内嵌 iframe 打开
+# /cgi/ThirdParty/.../index.cgi/，经 index.cgi 在本机转发到 127.0.0.1:9800；
+# 端口仅本机访问，飞牛无法清空此入口，无 404 风险。
+# 历史：2026-08-14 曾加 cmd/gw_watchdog.sh + self_heal_gateway 应对统一网关模式下
+# 飞牛周期性清空 entry 导致 404，改 cgi 模式后已无意义，2026-08-15 删除。
 
 case $1 in
 start)
     if [ -f "$PID_FILE" ]; then
         pid=$(cat "$PID_FILE" | tr -d '[:space:]')
         if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-            # 已在运行：仍执行网关自愈(幂等)，防止 entry 被清空后下次网关重启导致 404。
-            self_heal_gateway
-            launch_watchdog
             echo "应用已在运行 (PID: $pid)" > "${TRIM_TEMP_LOGFILE}"
             exit 0
         fi
@@ -111,21 +44,16 @@ start)
     modprobe nct6775 2>/dev/null || true
     modprobe it87 2>/dev/null || true
     cd "$APP_DIR"
-    # 统一网关模式：监听 Unix Socket（飞牛网关校验登录态后转发），不再暴露裸 TCP 端口。
-    # socket 建在应用根目录 APP_ROOT/app.sock（飞牛网关按根目录解析 gatewaySocket=app.sock）。
+    # cgi 反代模式：app 监听 127.0.0.1:9800 + unix socket（双重监听，
+    # 9800 供 index.cgi 反代；socket 供本地 self_test/直连健康检）。
     rm -f "$APP_ROOT/app.sock" 2>/dev/null
     export NAS_DASH_GATEWAY=1
     export GATEWAY_PREFIX="/app/com.dashboard.nasdash"
     export APP_SOCKET="$APP_ROOT/app.sock"
-    # 启动 app 前先自愈网关入口：飞牛 start 超时报 10500 时会杀掉本进程，
-    # 若把自愈放在轮询 socket 之后可能来不及执行。网关惰性连上游，先修 DB+重载网关，
-    # 等下方 app 起来、socket 就绪后用户点击即可连上。
-    self_heal_gateway
     $PYTHON "$APP_DIR/app.py" > "$LOG_FILE" 2>&1 &
     echo $! > "$PID_FILE"
-    # 轮询等待 app.sock 真正建立再返回：飞牛 appcenter 会在 start 后探测 gateway socket，
-    # 若 socket 尚未就绪（app.py 导入 Flask/注册路由需数秒）会跳过网关入口创建 -> 404。
-    # 等到 socket 出现可让 appcenter 稳定探测到，从而正确注册 /app/{appname} 路由。
+    # 轮询等待 app.sock 真正建立再返回：保持与原统一网关模式相同的健康检时序，
+    # 飞牛 appcenter 启动探测依赖此信号，否则可能报 10500 启动失败。
     SOCK="$APP_ROOT/app.sock"
     for i in $(seq 1 30); do
         if [ -S "$SOCK" ]; then
@@ -134,10 +62,6 @@ start)
         sleep 0.5
     done
     if kill -0 "$(cat "$PID_FILE" | tr -d '[:space:]')" 2>/dev/null; then
-        # 应用已就绪：自愈网关入口(幂等，不阻断启动)。
-        self_heal_gateway
-        # 启动常驻看门狗(防 appcenter 在运行期回滚 gateway_socket)；已存在则跳过。
-        launch_watchdog
         exit 0
     else
         echo "应用启动失败，请查看日志: $LOG_FILE" > "${TRIM_TEMP_LOGFILE}"
