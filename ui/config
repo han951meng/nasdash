@@ -5,10 +5,9 @@
             "desc": "飞牛OS 硬件监控面板",
             "icon": "images/icon-{0}.png",
             "type": "iframe",
-            "protocol": "",
-            "gatewayPrefix": "/app/com.dashboard.nasdash",
-            "gatewaySocket": "app.sock",
-            "url": "/app/com.dashboard.nasdash/",
+            "protocol": "http",
+            "port": "",
+            "url": "/cgi/ThirdParty/com.dashboard.nasdash/index.cgi/",
             "allUsers": true
         }
     }
