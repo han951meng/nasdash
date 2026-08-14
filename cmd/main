@@ -15,6 +15,21 @@ fi
 PYTHON=$(which python3 2>/dev/null || echo "/usr/bin/python3")
 LOG_FILE="${TRIM_PKGVAR}/app.log"
 
+# 网关重启冷却(方案A, 2026-08-14): self_heal 与常驻看门狗共享同一冷却时间戳，
+# 避免"频繁 app 重启/飞牛清空 entry"导致反复重启整个飞牛统一网关(影响所有走网关的 app)。
+RESTART_COOLDOWN=1800
+RESTART_TS="${TRIM_PKGVAR:-/var/apps/com.dashboard.nasdash/var}/gw_restart_ts"
+gateway_restart_allowed() {
+    local now ts
+    now=$(date +%s)
+    ts=$(cat "$RESTART_TS" 2>/dev/null | tr -d '[:space:]')
+    if [ -n "$ts" ] && [ "$((now - ts))" -lt "$RESTART_COOLDOWN" ]; then
+        return 1
+    fi
+    echo "$now" > "$RESTART_TS"
+    return 0
+}
+
 # 飞牛统一网关的上游 socket 路径登记在 PostgreSQL trim_sac.entry 表(gateway_socket 字段)。
 # nasdash 该记录早期(ui/config 尚未配好 gatewaySocket 时)建立，之后每次重装走 UPDATE 分支，
 # appcenter 不再重算该字段 -> gateway_socket 长期为空 -> 网关收到登录态请求后找不到上游 -> 404。
@@ -39,9 +54,14 @@ self_heal_gateway() {
     sudo -u postgres "$PSQL_BIN" -d trim_sac -c \
         "UPDATE entry SET gateway_socket='$SOCK_TARGET', gateway_prefix='$PREFIX' \
          WHERE app_name='com.dashboard.nasdash';" >> "$HEAL_LOG" 2>&1
-    echo "$(date '+%F %T') gateway entry fixed (was empty/recreated), restarting trim_http_cgi" >> "$HEAL_LOG"
-    systemctl restart trim_http_cgi >> "$HEAL_LOG" 2>&1 || \
-        echo "$(date '+%F %T') WARN: systemctl restart trim_http_cgi failed" >> "$HEAL_LOG"
+    echo "$(date '+%F %T') gateway entry fixed (was empty/recreated)" >> "$HEAL_LOG"
+    if gateway_restart_allowed; then
+        echo "$(date '+%F %T') cooldown passed, restarting trim_http_cgi" >> "$HEAL_LOG"
+        systemctl restart trim_http_cgi >> "$HEAL_LOG" 2>&1 || \
+            echo "$(date '+%F %T') WARN: systemctl restart trim_http_cgi failed" >> "$HEAL_LOG"
+    else
+        echo "$(date '+%F %T') WARN: gateway restart suppressed (cooldown <${RESTART_COOLDOWN}s since last), will retry on next cycle / app restart" >> "$HEAL_LOG"
+    fi
     return 0
 }
 
