@@ -618,6 +618,7 @@
       <button class="tab active" onclick="switchTab('detect',this)"><img src="{{ ICON_DETECT_DATA }}" class="ic" alt="硬件配置检测"> 硬件配置检测</button>
       <div class="sb-group">资源监控</div>
       <button class="tab" onclick="switchTab('system',this)"><img src="{{ ICON_SYSTEM_DATA }}" class="ic" alt="系统资源"> 系统资源</button>
+      <button class="tab" onclick="switchTab('temps',this)"><svg class="ico ic" viewBox="0 0 24 24"><use href="#i-thermo"/></svg> 温度监控</button>
       <button class="tab" onclick="switchTab('sys-hist',this)"><img src="{{ ICON_HISTORY_DATA }}" class="ic" alt="历史趋势"> 历史趋势</button>
       <div class="sb-group">存储</div>
       <button class="tab" onclick="switchTab('disks',this)"><img src="{{ ICON_HDD_DATA }}" class="ic" alt="硬盘"> 硬盘 SMART</button>
@@ -645,6 +646,7 @@
     <div id="detect" class="panel active"><div class="sk-card"><div class="skeleton sk-line" style="width:42%"></div><div class="skeleton sk-line" style="width:88%"></div><div class="skeleton sk-line" style="width:64%"></div></div></div>
     <div id="disks" class="panel"><div class="sk-card"><div class="skeleton sk-line" style="width:46%"></div><div class="skeleton sk-line" style="width:90%"></div><div class="skeleton sk-line" style="width:70%"></div></div></div>
     <div id="system" class="panel"><div class="sk-card"><div class="skeleton sk-line" style="width:40%"></div><div class="skeleton sk-line" style="width:86%"></div><div class="skeleton sk-line" style="width:62%"></div></div></div>
+    <div id="temps" class="panel"><div class="sk-card"><div class="skeleton sk-line" style="width:44%"></div><div class="skeleton sk-line" style="width:88%"></div><div class="skeleton sk-line" style="width:68%"></div></div></div>
     <div id="sys-hist" class="panel"><div class="sk-card"><div class="skeleton sk-line" style="width:50%"></div><div class="skeleton sk-line" style="width:84%"></div><div class="skeleton sk-line" style="width:66%"></div></div></div>
     <div id="fan" class="panel"><div class="sk-card"><div class="skeleton sk-line" style="width:38%"></div><div class="skeleton sk-line" style="width:80%"></div><div class="skeleton sk-line" style="width:56%"></div></div></div>
     <div id="storage" class="panel"><div class="sk-card"><div class="skeleton sk-line" style="width:44%"></div><div class="skeleton sk-line" style="width:88%"></div><div class="skeleton sk-line" style="width:68%"></div></div></div>
@@ -827,7 +829,7 @@ function renderAbout(){
 // 当前处于激活状态的板块 id（无独立状态变量，直接从 DOM 读取，最鲁棒）
 function currentTab(){ var p=document.querySelector('.panel.active'); return p?p.id:'detect'; }
 // 按板块拉取 → 合并进全局 DATA → 只重渲该板块，避免每次都全量 /api/all
-var PANEL_ENDPOINT={system:'/api/system', fan:'/api/system', raid:'/api/raid', disks:'/api/disks', storage:'/api/storage', docker:'/api/docker'};
+var PANEL_ENDPOINT={system:'/api/system', temps:'/api/system', fan:'/api/system', raid:'/api/raid', disks:'/api/disks', storage:'/api/storage', docker:'/api/docker'};
 // ===================== 增量更新（避免整块 innerHTML 重建导致闪烁/滚动归位/交互态丢失）=====================
 // 原理：若新旧 DOM 结构一致，只 patch 变化的文本节点与属性；结构变了（如盘位增减、容器增减）才整块重建。
 function _sigChildren(node){
@@ -911,6 +913,7 @@ function renderPanel(id){
   if(id==='raid'){ smartUpdate(document.getElementById('raid'), renderRaid(DATA.raid, DATA.disks)); }
   else if(id==='disks'){ smartUpdate(document.getElementById('disks'), renderDisks(DATA.disks)); }
   else if(id==='system'){ smartUpdate(document.getElementById('system'), renderSystem(DATA.system)); }
+  else if(id==='temps'){ smartUpdate(document.getElementById('temps'), renderTemps(DATA.system)); }
   else if(id==='storage'){ smartUpdate(document.getElementById('storage'), renderStorage(DATA.storage)); }
   else if(id==='docker'){ smartUpdate(document.getElementById('docker'), renderDocker(DATA.docker)); }
   else if(id==='fan'){
@@ -957,6 +960,7 @@ var ICON_SYSTEM     = '<img src="{{ ICON_SYSTEM_DATA }}" class="ic" alt="系统�
 var ICON_HISTORY    = '<img src="{{ ICON_HISTORY_DATA }}" class="ic" alt="历史趋势">';
 var ICON_RAID       = '<img src="{{ ICON_RAID_DATA }}" class="ic" alt="阵列卡">';
 var ICON_HDD        = '<img src="{{ ICON_HDD_DATA }}" class="ic" alt="硬盘 SMART">';
+var ICON_TEMPS      = '<svg class="ico ic" viewBox="0 0 24 24"><use href="#i-thermo"/></svg>';
 var ICON_STORAGE    = '<img src="{{ ICON_STORAGE_DATA }}" class="ic" alt="存储卷">';
 var ICON_FAN        = '<img src="{{ ICON_FAN_DATA }}" class="ic" alt="风扇控制">';
 var ICON_DOCKER     = '<img src="{{ ICON_DOCKER_DATA }}" class="ic" alt="Docker">';
@@ -1482,17 +1486,6 @@ function renderSystem(s){
   let memPct = s.memory.percent;
   let memColor = memPct>85?'var(--red)':memPct>70?'var(--orange)':'var(--green)';
   let sens = s.sensors || {};
-  let tempsHtml = (sens.temps||[]).filter(t=>{
-    let _n=(t.name||'').toLowerCase();
-    // 仅保留：主板 / 南桥(PCH 芯片组) / CPU 整体(封装)；过滤掉每个 CPU 核心、T_Sensor、VRM 等细分探头
-    if(_n.includes('主板')||_n.includes('acpi')||_n.includes('pch')||_n.includes('芯片组')) return true;
-    if(_n.includes('cpu') && !_n.includes('核心') && !_n.includes('ccd')) return true;
-    return false;
-  }).map(t=>{
-    let col = t.crit&&t.value>=t.crit ? 'var(--red)' : t.max&&t.value>=t.max ? 'var(--orange)' : 'inherit';
-    let extra = t.crit ? ` (上限${t.max||'-'}°C/临界${t.crit}°C)` : t.max ? ` (上限${t.max}°C)` : '';
-    return `<div class="kv"><span class="k">${t.name}</span><span class="v" style="color:${col}">${t.value}°C${extra}</span></div>`;
-  }).join('');
   let fansHtml = (sens.fans||[]).map(f=>{
     let stopped = f.stopped || f.rpm < 1;
     let color = stopped ? 'var(--red)' : 'inherit';
@@ -1556,10 +1549,6 @@ function renderSystem(s){
       <div style="margin-top:8px"><div class="progress"><div class="progress-fill" style="width:${memPct}%;background:${memColor}">${memPct}%</div></div></div>
     </div>
     <div class="card">
-      <h3>温度传感器</h3>
-      ${tempsHtml||'<div class="loading">无数据</div>'}
-    </div>
-    <div class="card">
       <h3>风扇转速</h3>
       ${fansHtml||'<div class="loading">无数据</div>'}
     </div>
@@ -1570,6 +1559,59 @@ function renderSystem(s){
     <div class="card">
       <h3 title="磁盘的读写速度，数字越大说明盘越忙">磁盘 I/O</h3>
       ${diskHtml||'<div class="loading">采样中…</div>'}
+    </div>
+  </div>`;
+}
+
+// ===== 温度监控独立页面（关键温度阈值 + 主板测点温度墙）=====
+function renderTemps(s){
+  let sens = (s&&s.sensors) || {};
+  // 关键温度阈值列表：主板 / 南桥(PCH 芯片组) / CPU 整体(封装)；过滤掉每个 CPU 核心、T_Sensor、VRM 等细分探头
+  let tempsHtml = (sens.temps||[]).filter(t=>{
+    let _n=(t.name||'').toLowerCase();
+    if(_n.includes('主板')||_n.includes('acpi')||_n.includes('pch')||_n.includes('芯片组')) return true;
+    if(_n.includes('cpu') && !_n.includes('核心') && !_n.includes('ccd')) return true;
+    return false;
+  }).map(t=>{
+    let col = t.crit&&t.value>=t.crit ? 'var(--red)' : t.max&&t.value>=t.max ? 'var(--orange)' : 'inherit';
+    let extra = t.crit ? ` (上限${t.max||'-'}°C/临界${t.crit}°C)` : t.max ? ` (上限${t.max}°C)` : '';
+    return `<div class="kv"><span class="k">${esc(t.name)}</span><span class="v" style="color:${col}">${t.value}°C${extra}</span></div>`;
+  }).join('');
+  // 主板测点全览墙（过滤无效 0°C / 负温）
+  let tempEntries = (sens.temps||[]).filter(t=>typeof t.value==='number'&&t.value>0&&t.value<150);
+  let wall = tempEntries.length?`<div class="temp-wall">${tempEntries.map(t=>{let raw=t.raw||'';let tip=raw?raw+'（原始测点名）':'';return `<div class="temp-chip" title="${esc(tip)}"><span class="tc-name">${esc(t.name)}</span><span class="tc-val" style="color:${tempColor(t.value,85)}">${t.value}°C</span></div>`;}).join('')}</div>`:'<div class="loading">未检测到温度测点</div>';
+  // 温度汇总：最高、平均、偏高/告警数量（与系统资源页的 CPU/内存解耦，避免重复）
+  let maxTemp = null, avgTemp = null, warnCount = 0, critCount = 0;
+  if(tempEntries.length){
+    let sum = 0;
+    tempEntries.forEach(t=>{
+      sum += t.value;
+      if(t.crit && t.value >= t.crit) critCount++;
+      else if(t.max && t.value >= t.max) warnCount++;
+      else if(t.value >= 85) warnCount++;
+      if(maxTemp===null || t.value > maxTemp) maxTemp = t.value;
+    });
+    avgTemp = Math.round(sum / tempEntries.length * 10) / 10;
+  }
+  let statusText = critCount ? `${critCount} 个临界` : warnCount ? `${warnCount} 个偏高` : '全部正常';
+  let statusOk = !critCount && !warnCount;
+  return `
+  ${panelHero({icon:ICON_TEMPS,title:'温度监控',sub:'主板 / CPU / 芯片组 温度与阈值',badge:{ok:statusOk,text:statusText},stats:[
+    {v:(s.cpu_temp!=null?s.cpu_temp+'°C':'N/A'),k:'CPU 温度'},
+    {v:(maxTemp!=null?maxTemp+'°C':'—'),k:'最高温度'},
+    {v:(avgTemp!=null?avgTemp+'°C':'—'),k:'平均温度'},
+    {v:(tempEntries.length||'—'),k:'温度测点'}
+  ]})}
+  <div class="sys-grid">
+    <div class="card">
+      <h3>温度传感器</h3>
+      ${tempsHtml||'<div class="loading">无数据</div>'}
+      <div style="margin-top:8px;font-size:12px;color:var(--muted)">颜色：绿正常 · 橙偏高 · 红危险。阈值取自主板传感器。</div>
+    </div>
+    <div class="card" style="grid-column:1/-1">
+      <h3 title="硬件能承受的温度上限，超过会降频保护">温度墙</h3>
+      ${wall}
+      <div style="margin-top:8px;font-size:12px;color:var(--muted)">主板传感器测点全览（已过滤无效 0°C / 负温）；鼠标悬停可查看原始英文名。颜色：绿正常 · 橙偏高 · 红危险</div>
     </div>
   </div>`;
 }
@@ -2907,13 +2949,6 @@ function renderDetect(D){
       return rows;
     }).join('<div class="gpu-sep"></div>'):'<div class="loading">未检测到核显 / 独显，或 BIOS 已禁用</div>'}
   </div>`;
-  let tempEntries = (s.sensors && s.sensors.temps || []).filter(t=>typeof t.value==='number'&&t.value>0&&t.value<150);
-  let tempWallCard = `
-  <div class="card" style="grid-column:1/-1">
-    <h3 title="硬件能承受的温度上限，超过会降频保护">温度墙</h3>
-    ${tempEntries.length?`<div class="temp-wall">${tempEntries.map(t=>{let raw=t.raw||'';let tip=raw?raw+'（原始测点名）':'';return `<div class="temp-chip" title="${esc(tip)}"><span class="tc-name">${esc(t.name)}</span><span class="tc-val" style="color:${tempColor(t.value,85)}">${t.value}°C</span></div>`;}).join('')}</div>`:'<div class="loading">未检测到温度测点</div>'}
-    <div style="margin-top:8px;font-size:12px;color:var(--muted)">主板传感器测点全览（已过滤无效 0°C / 负温）；鼠标悬停可查看原始英文名。颜色：绿正常 · 橙偏高 · 红危险</div>
-  </div>`;
   let sysConfig = `
   <div class="detect-cards">
     ${sysInfoCard}
@@ -2977,7 +3012,6 @@ function renderDetect(D){
     </div>
     ${gpuCard}
     ${memCard}
-    ${tempWallCard}
     ${netCard}
   </div>`;
   // 阵列卡 & 磁盘
@@ -3414,6 +3448,7 @@ function renderAll(isCache){
   smartUpdate(document.getElementById('raid'), renderRaid(DATA.raid, DATA.disks));
   smartUpdate(document.getElementById('disks'), renderDisks(DATA.disks));
   smartUpdate(document.getElementById('system'), renderSystem(DATA.system));
+  smartUpdate(document.getElementById('temps'), renderTemps(DATA.system));
   let _fa=document.activeElement;
   let _fanBusy = _fa && (_fa.classList.contains('fan-slider') || _fa.classList.contains('fan-custom-input'));
   if(!_fanBusy){
