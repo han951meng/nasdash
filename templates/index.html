@@ -117,14 +117,14 @@
   @keyframes modalIn{from{opacity:0;transform:translateY(-8px) scale(.98)}to{opacity:1;transform:translateY(0) scale(1)}}
   .modal-title{font-size:16px;font-weight:600;color:var(--text-1)}
   .modal-body{font-size:14px;color:var(--text-1);line-height:1.7;white-space:pre-line}
-  .modal-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:6px}
+  .modal-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:6px;flex-wrap:wrap}
   .modal-overlay .btn{min-width:72px}
-  .modal-box.modal-wide{max-width:820px;width:100%}
+  .modal-box.modal-wide{max-width:min(820px, calc(100vw - 32px));width:100%}
   .logstat{margin-bottom:10px;font-size:13px;color:var(--text-1)}
   .logstat b{font-size:13px;margin:0 2px}
   .logstat b.danger{color:#e0394a}
   .logstat b.warn{color:#c47b00}
-  .log-list{border:1px solid var(--c-border);border-radius:8px;max-height:480px;overflow:auto;background:var(--c-fill-2)}
+  .log-list{border:1px solid var(--c-border);border-radius:8px;max-height:min(480px, 58vh);overflow:auto;background:var(--c-fill-2)}
   .log-line{font-family:Consolas,Menlo,monospace;font-size:12px;padding:5px 12px;border-bottom:1px solid var(--c-border);white-space:pre-wrap;word-break:break-all;line-height:1.55;color:var(--text-1)}
   .log-line:last-child{border-bottom:none}
   .log-line .lt{color:var(--muted);margin-right:8px;font-size:11px}
@@ -3437,20 +3437,25 @@ async function showRunLog(){
   var closeBtn=document.createElement('button');
   closeBtn.className='btn'; closeBtn.textContent='关闭';
   closeBtn.onclick=cleanup;
-  var copyBtn=document.createElement('button');
-  copyBtn.className='btn btn-primary'; copyBtn.textContent='复制全部日志';
-  copyBtn.onclick=function(){
-    var txt=copyBtn.getAttribute('data-txt')||'';
-    if(!txt){ toast('暂无日志可复制'); return; }
-    if(navigator.clipboard&&navigator.clipboard.writeText){
-      navigator.clipboard.writeText(txt).then(function(){ toast('已复制到剪贴板'); });
-    } else {
-      var ta=document.createElement('textarea'); ta.value=txt; document.body.appendChild(ta); ta.select();
-      try{ document.execCommand('copy'); toast('已复制到剪贴板'); }catch(e){ alert(txt); }
-      ta.remove();
-    }
-  };
-  actionsEl.appendChild(copyBtn);
+  // 复制按钮先不建：依赖解析结果（nE/nW），等日志拉到后再按需生成
+  var copyAllBtn=null;
+  function makeCopyBtn(label, getTxt, primary){
+    var b=document.createElement('button');
+    b.className='btn'+(primary?' btn-primary':'');
+    b.textContent=label;
+    b.onclick=function(){
+      var txt=getTxt();
+      if(!txt){ toast('没有可复制的'+label.replace('复制','')); return; }
+      if(navigator.clipboard&&navigator.clipboard.writeText){
+        navigator.clipboard.writeText(txt).then(function(){ toast('已复制'+label.replace('复制','')); });
+      } else {
+        var ta=document.createElement('textarea'); ta.value=txt; document.body.appendChild(ta); ta.select();
+        try{ document.execCommand('copy'); toast('已复制'+label.replace('复制','')); }catch(e){ alert(txt); }
+        ta.remove();
+      }
+    };
+    return b;
+  }
   actionsEl.appendChild(closeBtn);
   // 拉日志（从健康报告 JSON 取 log_tail，避免重复后端实现）
   var logText='';
@@ -3462,10 +3467,10 @@ async function showRunLog(){
     bodyEl.innerHTML='<div class="log-empty">加载日志失败：'+e+'</div>';
     return;
   }
-  copyBtn.setAttribute('data-txt', logText);
   // 前端解析分级（与后端 _parse_log_entries 同规则）
   var lines=(logText||'').split('\n');
   var entries=[];
+  var errLines=[], warnLines=[];
   for(var i=0;i<lines.length;i++){
     var s=lines[i].replace(/^\s+|\s+$/g,'');
     if(!s) continue;
@@ -3475,8 +3480,8 @@ async function showRunLog(){
     var low=txt.toLowerCase();
     var lvl='INFO';
     if(low.indexOf('traceback')>=0||low.indexOf('error')>=0||low.indexOf('exception')>=0||
-       low.indexOf('failed')>=0||txt.indexOf('失败')>=0||txt.indexOf('错误')>=0) lvl='ERROR';
-    else if(low.indexOf('warn')>=0||low.indexOf('warning')>=0||txt.indexOf('警告')>=0) lvl='WARN';
+       low.indexOf('failed')>=0||txt.indexOf('失败')>=0||txt.indexOf('错误')>=0){ lvl='ERROR'; errLines.push(s); }
+    else if(low.indexOf('warn')>=0||low.indexOf('warning')>=0||txt.indexOf('警告')>=0){ lvl='WARN'; warnLines.push(s); }
     entries.push({ts:ts, lvl:lvl, txt:txt});
   }
   var nE=0,nW=0;
@@ -3485,6 +3490,11 @@ async function showRunLog(){
     bodyEl.innerHTML='<div class="log-empty">（暂无运行日志）</div>';
     return;
   }
+  // 按需生成复制按钮：错误/警告日志只在存在对应级别时出现
+  if(nE>0){ actionsEl.insertBefore(makeCopyBtn('复制错误日志', function(){ return errLines.join('\n'); }, false), closeBtn); }
+  if(nW>0){ actionsEl.insertBefore(makeCopyBtn('复制警告日志', function(){ return warnLines.join('\n'); }, false), closeBtn); }
+  copyAllBtn=makeCopyBtn('复制全部日志', function(){ return logText; }, true);
+  actionsEl.insertBefore(copyAllBtn, closeBtn);
   // 错误/警告置顶
   entries.sort(function(a,b){
     var order={ERROR:0, WARN:1, INFO:2};
