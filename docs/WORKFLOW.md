@@ -1,6 +1,6 @@
 # nasdash 开发 / 发版工作流
 
-基于 `v1.8.8` 基线。所有修改一律从干净基线出发，绝不用旧包 / 旧图标当母版。
+基于 `v2.0.1` 基线。所有修改一律从干净基线出发，绝不用旧包 / 旧图标当母版。
 
 ## Step 0 · 明确需求（先想清楚再动手）
 
@@ -21,14 +21,44 @@
 
 ```bash
 git fetch
-git checkout v1.8.8        # 或 git pull 到最新 main（HEAD 即 1.8.8 发版 commit）
-grep '^version' manifest   # 确认 version = 1.8.8
+git checkout v2.0.1        # 或 git pull 到最新 main（HEAD 即 v2.0.1 发版 commit）
+grep '^version' manifest   # 确认 version = 2.0.1
 ```
 
 ## Step 2 · 编码 / 改图标
 
 - 改 `app.py` / `ui` / `config` / `vendor`。
 - 改图标**只改 `scripts/generate_icon.py`**（1024 母版下采样），重跑生成 4 个 256×256 文件，不要另起炉灶、不要按官方做真 64×64。
+
+## 前端架构约定（图标 / 主题 / CPU）
+
+> v2.0 视觉焕新后沉淀下来的约定。写新页面 / 加新功能前先过一遍，避免又退回 emoji + 写死色值的老路。
+
+### 图标：统一 SVG 线框（对齐飞牛 file-tools 风格）
+
+- **单一数据源**：所有图标定义在 `templates/index.html` 的 `ICONS` 对象里（`key: '<path .../>'`，`viewBox="0 0 24 24"`、`fill:none`、描边用 `currentColor`、不写死颜色）。
+- **雪碧图自动生成**：一段 IIFE 在运行时把每个 key 注入成 `<symbol id="i-<key>">` 挂到 `document.head`；静态 HTML 与 JS 模板字符串共用同一份定义，明暗自动跟随。
+- **两种引用方式**：
+  - JS 模板里：`iconSvg('key')` → 返回 `<svg class="ico"><use href="#i-key"/></svg>`。
+  - 静态 HTML 里：直接写 `<svg class="ico" viewBox="0 0 24 24"><use href="#i-key"/></svg>`。
+- **新增图标**：在 `ICONS` 里加一行 `key:'<lucide 风格 path>'`（`stroke` 为主、不填色）即生效，无需改别处。**不要再引入 emoji**——已用 unicode 范围正则兜底校验，emoji 混入会卡 CI。
+- `.ico` 默认 16px、`stroke-width:2`、垂直对齐 `-3px`；按钮内 `.icon-btn .ico` 为 15px；需要别的尺寸用 `iconSvg('key','extra-cls')` 传额外 class 或在 `.ico` 基础上加 class。
+
+### 主题：三档模式 + 跟随飞牛系统明暗
+
+- **三档**：`light` / `dark` / `auto`（自动跟随飞牛系统明暗）。`auto` **绝不用**浏览器 `prefers-color-scheme`（fnOS webview 不暴露该接口，会恒浅），而是读飞牛写入的 `localStorage.fnos-theme-mode`（dark/light）。
+- **真值只看 `data-theme`**：`document.documentElement.dataset.theme` 是页面真实明暗。JS 判断当前明暗统一用 `currentIsDark()`（只读 `data-theme`），不要自己再算一遍——否则会和页面显示对不上。
+- **关键函数**（均在 `templates/index.html`）：
+  - `getThemeMode()`：读模式（light/dark/auto）。
+  - `fnosThemeMode()`：取飞牛系统明暗（优先级：自身 URL 参数 `?fnos-theme-mode=` → 父框架 URL 参数 → `localStorage`），取不到返回 null。
+  - `resolvedDark()`：`auto` 分支用 `fnosThemeMode()`，仍保留 `matchMedia` 作兜底；`applyTheme()` 按模式落 `data-theme`。
+  - `cycleTheme()`：单按钮循环 浅 → 深 → 自动。
+- **实时跟随**：飞牛切主题时会更新 `localStorage.fnos-theme-mode` 并触发 `storage` 事件；前端在 `auto` 下监听该事件即时 `applyTheme()`。所以**改主题只动变量、不写死色值**——新增组件颜色一律走 Token（`--primary` / `--text-1` / …），详见 `docs/ui-2.0-design-spec.md`。
+- **CSS 写法**：`[data-theme="dark"]` 覆盖同名 Token；`<head>` 内防闪脚本在页面渲染前先读 localStorage 设好 `data-theme`，避免浅↔深闪白。
+
+### 真实 CPU 使用率
+
+- `app.py` 的 `get_cpu_usage()` 读 `/proc/stat` 聚合行，与模块级 `_LAST_CPU_STAT` 快照算 idle 差值返回百分比；跨请求保存快照、无阻塞 sleep。首次调用无基准返回 `None`（前端显示「—」），**不要用 load average 冒充使用率**。前端系统资源页用该值。
 
 ## Step 3 · 本地自测（不上真机，早暴露问题）
 

@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <script>
-  (function(){try{var t=localStorage.getItem('nasdash_theme');if(t==='dark'||(!t&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)){document.documentElement.setAttribute('data-theme','dark');}}catch(e){}})();
+  (function(){try{var t=localStorage.getItem('nasdash_theme');var dark;if(t==='dark'){dark=true;}else if(t==='light'){dark=false;}else{var fn=null;try{var f=localStorage.getItem('fnos-theme-mode');if(f==='dark'||f==='light')fn=f;}catch(e){}if(!fn){try{var p=new URLSearchParams(location.search).get('fnos-theme-mode');if(p==='dark'||p==='light')fn=p;}catch(e){}}if(!fn){try{if(window.parent&&window.parent!==window){var pp=new URLSearchParams(window.parent.location.search).get('fnos-theme-mode');if(pp==='dark'||pp==='light')fn=pp;}}catch(e){}}dark=(fn==='dark')?true:((fn==='light')?false:(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches));}document.documentElement.setAttribute('data-theme',dark?'dark':'light');}catch(e){}})();
 </script>
 <title>飞牛 NAS 硬件监控</title>
 <style>
@@ -83,8 +83,11 @@
   .header{display:none} /* 桌面去掉置顶栏；汉堡按钮仅在移动端显示 */
   .hd-time{color:var(--text-3);font-size:12px;margin-right:2px}
   .hd-sep{width:1px;height:16px;background:var(--border);margin:0 2px}
+  .ico{width:16px;height:16px;flex:none;vertical-align:-3px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+  .icon-btn .ico{width:15px;height:15px;vertical-align:-2px}
   .icon-btn{width:30px;height:30px;padding:0;display:inline-flex;align-items:center;justify-content:center;border:1px solid transparent;background:transparent;border-radius:var(--r-md);cursor:pointer;font-size:14px;color:var(--text-2);transition:.15s;line-height:1}
   .icon-btn:hover{background:var(--c-fill-1);color:var(--text-1)}
+  .icon-btn.themeToggle.is-auto{border-color:var(--c-primary);color:var(--c-primary)}
   .container{max-width:1600px;margin:0 auto;padding:18px 20px;display:flex;gap:16px;align-items:flex-start}
   .sidebar{width:208px;flex:0 0 208px;background:var(--card);border:1px solid var(--border);box-shadow:var(--c-shadow);border-radius:var(--r-md);padding:10px 8px;position:sticky;top:18px;will-change:transform;max-height:calc(100vh - 36px);overflow-y:auto;overscroll-behavior:contain}
   /* 滚动条：占位常驻（不抖），thumb 永远真透明（完全看不见，无论滚不滚） */
@@ -171,7 +174,9 @@
   .pill.gray{background:var(--fill);color:var(--text-3)}
   .pill.red{background:rgba(245,63,63,.12);color:var(--danger)}
   .pill.green{background:rgba(0,180,42,.12);color:var(--success)}
-  .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start}
+  .split-col{display:flex;flex-direction:column;gap:14px}
+  .disk-scroll{overflow:auto;padding-right:4px}
   .grid-auto{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px}
   .sys-grid{display:flex;flex-wrap:wrap;gap:14px;align-items:stretch}
   .sys-grid .card{flex:1 1 280px;min-width:280px;max-width:100%;box-sizing:border-box;display:flex;flex-direction:column}
@@ -196,8 +201,8 @@
   .hs-v small{font-size:12px;font-weight:400;opacity:.7;margin-left:2px}
   .hs-k{font-size:12px;color:#646a73;margin-top:3px}
   .hs-uptime .hs-v{white-space:normal;word-break:break-all;font-size:16px;line-height:1.25}
-  .hs.bad .hs-v{color:#E5484D}
-  .hs.warn .hs-v{color:#B45309}
+  .hs.bad .hs-v{color:#E5484D;background:rgba(229,72,77,.12);padding:1px 8px;border-radius:6px;display:inline-block}
+  .hs.warn .hs-v{color:#B45309;background:rgba(180,83,9,.12);padding:1px 8px;border-radius:6px;display:inline-block}
   /* 暗色主题：hero 用和页面卡片一致的深色卡，只留一条飞牛蓝左边条做标识，不再用高饱和蓝渐变 */
   [data-theme="dark"] .hero{background:var(--c-card);border:1px solid var(--c-border);box-shadow:var(--c-shadow);border-left:3px solid var(--c-primary);color:var(--c-text-0)}
   [data-theme="dark"] .hero::after{display:none}
@@ -210,11 +215,12 @@
   [data-theme="dark"] .hero-ctrls .icon-btn{color:var(--c-text-0);border-color:var(--c-border)}
   [data-theme="dark"] .hero-ctrls .icon-btn:hover{background:var(--c-fill-2);color:var(--c-text-0)}
   [data-theme="dark"] .hero-switch{color:var(--c-text-0)}
-  [data-theme="dark"] .hs{background:var(--c-fill-2);border-color:transparent}
+  [data-theme="dark"] .hs{background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.09);box-shadow:0 1px 2px rgba(0,0,0,.22)}
+  [data-theme="dark"] .hero-head{border-bottom:1px solid rgba(255,255,255,.07);padding-bottom:14px;margin-bottom:0}
   [data-theme="dark"] .hs-v{color:var(--c-text-0)}
   [data-theme="dark"] .hs-k{color:var(--c-text-1)}
-  [data-theme="dark"] .hs.bad .hs-v{color:#FECACA}
-  [data-theme="dark"] .hs.warn .hs-v{color:#FDE68A}
+  [data-theme="dark"] .hs.bad .hs-v{color:#FCA5A5;background:rgba(248,113,113,.16);padding:1px 8px;border-radius:6px;display:inline-block}
+  [data-theme="dark"] .hs.warn .hs-v{color:#FCD34D;background:rgba(245,158,11,.16);padding:1px 8px;border-radius:6px;display:inline-block}
   [data-theme="dark"] .tab.active{background:var(--c-primary-bg);color:var(--c-primary);box-shadow:var(--c-shadow);border-left:3px solid var(--c-primary)}
   .hero-action{display:inline-flex;align-items:center;gap:8px;flex-wrap:nowrap;justify-content:flex-end}
   .hero-action .btn-mini{background:rgba(117,191,255,.14);border-color:transparent;color:#2a6fd6}
@@ -274,6 +280,7 @@
   .disk-group-title:first-child{margin-top:0}
 .b-sas{background:#1e40af;color:#fff}
 .b-sata{background:#15803d;color:#fff}
+  .ch-tag{font-size:11px;color:var(--muted);border:1px solid var(--border);border-radius:6px;padding:1px 6px;margin-left:4px;white-space:nowrap;cursor:help}
 .btn-mini.disabled{opacity:.5;cursor:not-allowed;pointer-events:none}
 .disk-test-section{margin-top:12px;padding-top:12px;border-top:1px dashed var(--border)}
 .disk-test-title{font-size:12px;font-weight:600;color:var(--text-3);margin-bottom:8px;display:flex;align-items:center;gap:6px}
@@ -371,6 +378,12 @@
   .nic-detail .kv:first-of-type{border-top:none;padding-top:0}
   .fan-label-state{font-size:12px;color:var(--green)}
   .volt-badge{display:inline-block;font-size:11px;font-weight:600;padding:1px 7px;border-radius:10px;background:var(--bg);color:var(--muted);border:1px solid var(--border);margin-left:4px}
+  .volt-pro{margin-top:10px;border-top:1px dashed var(--border);padding-top:8px}
+  .volt-pro>summary{cursor:pointer;font-size:12px;color:var(--muted);list-style:none;user-select:none}
+  .volt-pro>summary::-webkit-details-marker{display:none}
+  .volt-pro>summary::before{content:'▸ '}
+  .volt-pro[open]>summary::before{content:'▾ '}
+  .volt-pro>summary:hover{color:var(--text-1)}
   .fan-rpm{font-size:26px;font-weight:700;color:var(--blue);line-height:1.1}
   .fan-rpm small{font-size:12px;color:var(--muted);font-weight:400;margin-left:4px}
   .fan-hw-note{margin-top:8px;padding:6px 10px;border-radius:7px;background:rgba(245,158,11,.10);border:1px solid rgba(245,158,11,.35);font-size:12px;line-height:1.5;display:none;align-items:center;flex-wrap:wrap;gap:8px}
@@ -581,7 +594,7 @@
   [data-theme="dark"] .disk-group-title{color:var(--text-3)}
   [data-theme="dark"] .disk-card.bad{background:rgba(247,105,101,.08)}
   [data-theme="dark"] .disk-card.warn{background:rgba(255,154,46,.08)}
-  [data-theme="dark"] .b-sas,[data-theme="dark"] .b-sata{background:var(--fill);color:var(--text-2);border:1px solid var(--border)}
+  [data-theme="dark"] .b-sas,[data-theme="dark"] .b-sata,[data-theme="dark"] .b-nvme{background:var(--fill);color:var(--text-2);border:1px solid var(--border)}
   [data-theme="dark"] .fan-hw-toggle{border-color:var(--border)}
   [data-theme="dark"] .update-banner,[data-theme="dark"] .alert-banner{filter:brightness(.92)}
   [data-theme="dark"] .temp-bar,[data-theme="dark"] .progress{background:var(--border)}
@@ -595,7 +608,7 @@
 </head>
 <body>
 <div class="header">
-  <button class="btn menu-toggle" id="menuToggle" onclick="toggleSidebar()">☰ 模块</button>
+  <button class="btn menu-toggle" id="menuToggle" onclick="toggleSidebar()"><svg class="ico" viewBox="0 0 24 24"><use href="#i-menu"/></svg> 模块</button>
 </div>
 
 <div class="container">
@@ -619,15 +632,15 @@
   </aside>
   <main class="content">
     <div id="updateBanner" class="update-banner">
-      <div>🔔 <span id="updateText"></span></div>
+      <div><svg class="ico" viewBox="0 0 24 24"><use href="#i-bell"/></svg> <span id="updateText"></span></div>
       <div style="display:flex;gap:12px;align-items:center">
         <a id="updateLink" href="https://github.com/han951meng/nasdash/releases" target="_blank" rel="noopener">前往下载 →</a>
-        <button class="ub-close" onclick="dismissUpdate()">✕</button>
+        <button class="ub-close" onclick="dismissUpdate()"><svg class="ico" viewBox="0 0 24 24"><use href="#i-x"/></svg></button>
       </div>
     </div>
     <div id="alertBanner" class="alert-banner">
-      <div style="flex:1">⚠️ <span id="alertText"></span><ul class="ab-list" id="alertList"></ul></div>
-      <button class="ab-close" onclick="dismissAlerts()">✕</button>
+      <div style="flex:1"><svg class="ico" viewBox="0 0 24 24"><use href="#i-alert"/></svg> <span id="alertText"></span><ul class="ab-list" id="alertList"></ul></div>
+      <button class="ab-close" onclick="dismissAlerts()"><svg class="ico" viewBox="0 0 24 24"><use href="#i-x"/></svg></button>
     </div>
     <div id="detect" class="panel active"><div class="sk-card"><div class="skeleton sk-line" style="width:42%"></div><div class="skeleton sk-line" style="width:88%"></div><div class="skeleton sk-line" style="width:64%"></div></div></div>
     <div id="disks" class="panel"><div class="sk-card"><div class="skeleton sk-line" style="width:46%"></div><div class="skeleton sk-line" style="width:90%"></div><div class="skeleton sk-line" style="width:70%"></div></div></div>
@@ -644,23 +657,114 @@
 <div class="nav-overlay" id="navOverlay" onclick="closeSidebar()"></div>
 
 <script>
-// 2.0 明暗主题切换
-function toggleTheme(){
-  var d=document.documentElement;
-  var dark=d.getAttribute('data-theme')==='dark';
-  d.setAttribute('data-theme',dark?'light':'dark');
-  try{localStorage.setItem('nasdash_theme',dark?'light':'dark');}catch(e){}
+// 2.0 明暗主题切换：明 / 暗 / 自动（跟随系统），单按钮循环切换
+function getThemeMode(){
+  try{var t=localStorage.getItem('nasdash_theme');if(t==='light'||t==='dark'||t==='auto')return t;}catch(e){}
+  return 'auto'; // 默认跟随系统，向后兼容旧版“无设置即跟随系统”
+}
+// 读取飞牛系统当前明暗：飞牛把主题写在 localStorage 的 fnos-theme-mode（dark/light），
+// 也会通过 iframe URL 参数 ?fnos-theme-mode=...（自己或父框架）传递；拿不到返回 null
+function fnosThemeMode(){
+  try{ var f=localStorage.getItem('fnos-theme-mode'); if(f==='dark'||f==='light') return f; }catch(e){}
+  try{ var p=new URLSearchParams(location.search).get('fnos-theme-mode'); if(p==='dark'||p==='light') return p; }catch(e){}
+  try{ if(window.parent&&window.parent!==window){ var pp=new URLSearchParams(window.parent.location.search).get('fnos-theme-mode'); if(pp==='dark'||pp==='light') return pp; } }catch(e){}
+  return null;
+}
+// 计算“目标”明暗：auto 时优先跟随飞牛系统明暗（fnos-theme-mode），拿不到再退回浏览器系统偏好
+function resolvedDark(){
+  var m=getThemeMode();
+  if(m==='dark') return true;
+  if(m==='light') return false;
+  var fn=fnosThemeMode();
+  if(fn==='dark') return true;
+  if(fn==='light') return false;
+  return window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches;
+}
+// 页面此刻真实生效的明暗（只读 data-theme），保证“当前颜色”与页面完全一致，不会自相矛盾
+function currentIsDark(){
+  return document.documentElement.getAttribute('data-theme')==='dark';
+}
+function applyTheme(){
+  var dark=resolvedDark();
+  document.documentElement.setAttribute('data-theme',dark?'dark':'light');
   updateThemeBtn();
 }
-function isThemeDark(){ return document.documentElement.getAttribute('data-theme')==='dark'; }
-function updateThemeBtn(){
-  var dark=isThemeDark();
-  document.querySelectorAll('.themeToggle').forEach(b=>{
-    b.textContent=dark?'☀️':'🌙';
-    b.title=dark?'切换到浅色':'切换到深色';
-  });
+function setThemeMode(m){
+  try{localStorage.setItem('nasdash_theme',m);}catch(e){}
+  applyTheme();
 }
-document.addEventListener('DOMContentLoaded',updateThemeBtn);
+function cycleTheme(){
+  var order=['light','dark','auto'];
+  var i=order.indexOf(getThemeMode());
+  if(i<0) i=0;
+  setThemeMode(order[(i+1)%order.length]);
+}
+// 内联 SVG 线框图标（跟随飞牛风格：stroke + currentColor，明暗自动适配）
+// 单一数据源 ICONS，运行时生成 <symbol> 雪碧图，静态 HTML 与 JS 模板统一用 <use href="#i-xxx"> 引用
+var ICONS = {
+  sun:'<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="M4.93 4.93l1.41 1.41"/><path d="M17.66 17.66l1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="M6.34 17.66l-1.41 1.41"/><path d="M19.07 4.93l-1.41 1.41"/>',
+  moon:'<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>',
+  contrast:'<circle cx="12" cy="12" r="10"/><path d="M12 18a6 6 0 0 0 0-12v12Z"/>',
+  refresh:'<path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/>',
+  bell:'<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',
+  alert:'<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+  bulb:'<path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5"/><path d="M9 18h6"/><path d="M10 22h4"/>',
+  plug:'<path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/>',
+  thermo:'<path d="M14 4v10.54a4 4 0 1 1-4 0V4a2 2 0 0 1 4 0Z"/>',
+  gear:'<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
+  wifi:'<path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.2 19.1 19.1"/><path d="M12 12h.01"/>',
+  save:'<path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M17 21v-7H7v7"/><path d="M7 3v4h8"/>',
+  report:'<rect width="8" height="4" x="8" y="2" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/>',
+  send:'<path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4Z"/>',
+  mail:'<rect width="20" height="16" x="2" y="4" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/>',
+  upload:'<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/>',
+  check:'<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>',
+  x:'<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  menu:'<path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/>',
+  file:'<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>',
+  search:'<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+  clipboard:'<rect width="8" height="4" x="8" y="2" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>',
+  pulse:'<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
+  power:'<path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.77.04"/>'
+};
+// 生成雪碧图（symbol），供静态 HTML 与 JS 共用，单一数据源避免重复
+(function(){
+  var defs='<svg style="position:absolute;width:0;height:0;overflow:hidden" aria-hidden="true"><defs>';
+  for(var k in ICONS){ if(Object.prototype.hasOwnProperty.call(ICONS,k)){ defs+='<symbol id="i-'+k+'" viewBox="0 0 24 24">'+ICONS[k]+'</symbol>'; } }
+  defs+='</defs></svg>';
+  document.head.insertAdjacentHTML('beforeend', defs);
+})();
+function iconSvg(name, cls){
+  return '<svg class="ico'+(cls?' '+cls:'')+'" viewBox="0 0 24 24" aria-hidden="true"><use href="#i-'+name+'"/></svg>';
+}
+// 自动模式用专属图标（contrast 半明半暗，代表“跟随系统随时切换”），与手动浅/深区分开；当前真实深/浅只写在 title 里
+function themeIcon(){
+  var m=getThemeMode();
+  if(m==='auto') return iconSvg('contrast');
+  return m==='dark'?iconSvg('moon'):iconSvg('sun');
+}
+function themeTitle(){
+  var m=getThemeMode();
+  if(m==='auto') return '主题：跟随系统（当前'+(currentIsDark()?'深色':'浅色')+'）· 点击切换';
+  return '主题：'+(m==='dark'?'深色':'浅色')+' · 点击切换';
+}
+function updateThemeBtn(){
+  var icon=themeIcon(), title=themeTitle();
+  document.querySelectorAll('.themeToggle').forEach(function(b){ b.innerHTML=icon; b.title=title; b.classList.toggle('is-auto',getThemeMode()==='auto'); });
+}
+// 自动模式实时跟随：① 浏览器系统偏好变化；② 飞牛系统明暗变化（飞牛切换时更新 localStorage 的 fnos-theme-mode 并触发 storage 事件）
+(function(){
+  try{
+    var mq=window.matchMedia('(prefers-color-scheme: dark)');
+    var mqHandler=function(){ if(getThemeMode()==='auto') applyTheme(); };
+    if(mq.addEventListener) mq.addEventListener('change',mqHandler); else if(mq.addListener) mq.addListener(mqHandler);
+  }catch(e){}
+  try{
+    window.addEventListener('storage',function(e){ if(e.key==='fnos-theme-mode' && getThemeMode()==='auto') applyTheme(); });
+  }catch(e){}
+})();
+// 初始化时先按当前模式对齐一次 data-theme，再刷新按钮（修正任何初始偏差）
+document.addEventListener('DOMContentLoaded',applyTheme);
 // 统一网关适配：页面位于 /app/{appname} 路径下时，自动为所有绝对根路径 fetch 补上前缀；
 // 本地 TCP 模式（根路径）下前缀为空，行为完全不变。无需逐个改 fetch 调用。
 (function(){
@@ -711,10 +815,10 @@ function renderAbout(){
   + '<div class="detect-cards">'
     + '<div class="card"><h3>版本信息</h3>'
       + '<div class="kv"><span class="k">fnOS 版本</span><span class="v">'+fnosText+'</span></div>'
-      + '<div class="kv"><span class="k">运行内核</span><span class="v">'+esc(kernel)+'</span></div>'
+      + '<div class="kv"><span class="k" title="系统最核心的程序版本，相当于手机底层的操作系统">运行内核</span><span class="v">'+esc(kernel)+'</span></div>'
     + '</div>'
     + '<div class="card"><h3>项目</h3>'
-      + '<div class="kv"><span class="k">开源仓库</span><span class="v"><a href="https://github.com/han951meng/nasdash" target="_blank" rel="noopener">github.com/han951meng/nasdash</a></span></div>'
+      + '<div class="kv"><span class="k">项目主页</span><span class="v"><a href="https://github.com/han951meng/nasdash" target="_blank" rel="noopener">github.com/han951meng/nasdash</a></span></div>'
       + '<div class="kv"><span class="k">论坛地址</span><span class="v"><a href="https://club.fnnas.com/forum.php?mod=viewthread&tid=67060" target="_blank" rel="noopener">club.fnnas.com 讨论帖</a></span></div>'
       + '<div class="kv"><span class="k">检查更新</span><span class="v"><button class="btn-mini" onclick="checkUpdate(true)">检查新版本</button></span></div>'
     + '</div>'
@@ -833,14 +937,15 @@ function setAutoRefresh(on){
   try{ localStorage.setItem('nasdash_autorefresh', autoRefreshEnabled ? '1':'0'); }catch(e){}
 }
 function heroControls(){
-  var dark=isThemeDark();
+  var icon=themeIcon();
+  var title=themeTitle();
   return '<div class="hero-ctrls">'
     + '<span class="lastUpdate hd-time">加载中…</span>'
     + '<span class="spin spinner" style="display:none"></span>'
     + '<label class="switch" title="自动刷新"><input type="checkbox" class="autoRefresh" onchange="setAutoRefresh(this.checked)"'+(autoRefreshEnabled?' checked':'')+'><span class="slider"></span>自动刷新</label>'
-    + '<button class="icon-btn" onclick="loadData()" title="立即刷新">🔄</button>'
-    + '<button class="icon-btn checkUpdateBtn" onclick="checkUpdate(true)" title="检查更新">🔔</button>'
-    + '<button class="icon-btn themeToggle" onclick="toggleTheme()" title="'+(dark?'切换到浅色':'切换到深色')+'">'+(dark?'☀️':'🌙')+'</button>'
+    + '<button class="icon-btn" onclick="loadData()" title="立即刷新">'+iconSvg('refresh')+'</button>'
+    + '<button class="icon-btn checkUpdateBtn" onclick="checkUpdate(true)" title="检查更新">'+iconSvg('bell')+'</button>'
+    + '<button class="icon-btn themeToggle" onclick="cycleTheme()" title="'+title+'">'+icon+'</button>'
     + '</div>';
 }
 
@@ -922,8 +1027,8 @@ function renderRaid(r, disks){
       <div class="card">
         <h3>控制器 (HBA 直通)</h3>
         <div class="kv"><span class="k">型号</span><span class="v">${r.model}</span></div>
-        <div class="kv"><span class="k">模式</span><span class="v"><span class="badge b-info">IT 直通</span></span></div>
-        <div class="kv"><span class="k">状态</span><span class="v" style="color:var(--green)">✓ 正常工作</span></div>
+        <div class="kv"><span class="k">模式</span><span class="v"><span class="badge b-info" title="直通模式：硬盘直接交给系统管理，不做任何阵列">IT 直通</span></span></div>
+        <div class="kv"><span class="k">状态</span><span class="v" style="color:var(--green)"><svg class="ico" viewBox="0 0 24 24"><use href="#i-check"/></svg> 正常工作</span></div>
         ${r.controller_temp != null ? `<div class="kv"><span class="k">芯片温度</span><span class="v" style="color:${tempColor(r.controller_temp,85)};font-weight:600">${r.controller_temp}°C</span></div>` : ''}
       </div>
       <div class="card span-2">
@@ -940,7 +1045,7 @@ function renderRaid(r, disks){
   let ct = r.controller_temp;
   let ctStr = ct != null ? ct + '°C' : 'N/A';
   let ctCol = tempColor(ct, 85);
-  let drives = r.drives.map(d=>`<tr><td>${d.slot}</td><td>${d.brand||'-'}</td><td>${d.model}${d.feature?` <span class="badge b-info">${d.feature}</span>`:''}</td><td>${d.intf} ${d.media}</td><td>${d.size}${d.size_note?`<br><span style="font-size:11px;color:var(--muted)">${d.size_note}</span>`:''}</td><td><span class="badge ${d.state==='JBOD'||d.state==='Onln'?'b-ok':'b-warn'}">${d.state}${d.sp==='D'?' · 已停转':''}</span></td><td>${d.rpm||'-'}</td></tr>`).join('');
+  let drives = r.drives.map(d=>{ var fclean=diskFeatureClean(d.feature,d.dual_actuator); return `<tr><td>${d.slot}</td><td>${d.brand||'-'}</td><td>${d.model}${fclean?` <span class="badge b-info">${esc(fclean)}</span>`:''}</td><td>${d.intf} ${d.media}</td><td>${d.size}${d.size_note?`<br><span style="font-size:11px;color:var(--muted)">${d.size_note}</span>`:''}</td><td><span class="badge ${d.state==='JBOD'||d.state==='Onln'?'b-ok':'b-warn'}">${d.state}${d.sp==='D'?' · 已停转':''}</span></td><td>${d.rpm||'-'}</td></tr>`;}).join('');
   return `
   ${panelHero({icon:ICON_RAID,title:'阵列卡',sub:'MegaRAID (IR) 控制器与物理盘',badge:{ok:true,text:'阵列卡正常'},stats:[
     {v:'MegaRAID',k:'模式'},
@@ -951,24 +1056,24 @@ function renderRaid(r, disks){
     <div class="card">
       <h3>阵列卡信息</h3>
       <div class="kv"><span class="k">型号</span><span class="v">${r.model}</span></div>
-      <div class="kv"><span class="k">模式</span><span class="v"><span class="badge b-info">MegaRAID (IR)</span></span></div>
-      <div class="kv"><span class="k">状态</span><span class="v" style="color:var(--green)">✓ 正常工作</span></div>
+      <div class="kv"><span class="k">模式</span><span class="v"><span class="badge b-info" title="阵列模式：由这张卡把多块硬盘统一管理成 RAID">MegaRAID (IR)</span></span></div>
+      <div class="kv"><span class="k">状态</span><span class="v" style="color:var(--green)"><svg class="ico" viewBox="0 0 24 24"><use href="#i-check"/></svg> 正常工作</span></div>
       <div class="kv"><span class="k">序列号</span><span class="v">${r.serial}</span></div>
-      <div class="kv"><span class="k">SAS 地址</span><span class="v">${r.sas_address}</span></div>
-      <div class="kv"><span class="k">PCI 地址</span><span class="v">${r.pci}</span></div>
+      <div class="kv"><span class="k" title="这块阵列卡在硬盘总线上的唯一编号">SAS 地址</span><span class="v">${r.sas_address}</span></div>
+      <div class="kv"><span class="k" title="阵列卡插在主板上哪个插槽的物理位置">PCI 地址</span><span class="v">${r.pci}</span></div>
       <div class="kv"><span class="k">芯片温度</span><span class="v" style="color:${ctCol};font-weight:600">${ctStr}</span></div>
     </div>
     <div class="card">
       <h3>固件版本</h3>
-      <div class="kv"><span class="k">FW Package</span><span class="v">${r.fw_package}</span></div>
-      <div class="kv"><span class="k">FW Version</span><span class="v">${r.fw_version}</span></div>
-      <div class="kv"><span class="k">BIOS</span><span class="v">${r.bios_version}</span></div>
+      <div class="kv"><span class="k" title="固件完整包版本（控制器的底层软件）">FW Package</span><span class="v">${r.fw_package}</span></div>
+      <div class="kv"><span class="k" title="固件的版本号">FW Version</span><span class="v">${r.fw_version}</span></div>
+      <div class="kv"><span class="k" title="主板最底层的启动程序版本">BIOS</span><span class="v">${r.bios_version}</span></div>
       <div class="kv"><span class="k">驱动</span><span class="v">${r.driver}</span></div>
     </div>
     <div class="card">
       <h3>缓存 / 电池</h3>
-      <div class="kv"><span class="k">CacheVault</span><span class="v">${r.cachevault}</span></div>
-      <div class="kv"><span class="k">JBOD 盘数</span><span class="v">${r.jbod_count}</span></div>
+      <div class="kv"><span class="k" title="阵列卡的掉电保护缓存，断电也能保住数据">CacheVault</span><span class="v">${r.cachevault}</span></div>
+      <div class="kv"><span class="k" title="直接透传给系统、不走阵列的硬盘数量">JBOD 盘数</span><span class="v">${r.jbod_count}</span></div>
     </div>
       <div class="card span-all">
       <h3>说明</h3>
@@ -984,7 +1089,7 @@ function renderRaid(r, disks){
 // 硬盘 SMART 页顶部说明卡：回答"会不会一直扫描/伤盘" + A/B 双档说明
 function diskInfoCard(){
   return '<div class="card disk-info-card">'
-    + '<h3>💡 SMART 读取会伤盘吗？</h3>'
+    + '<h3>'+iconSvg('bulb')+' 硬盘自检会伤盘吗？</h3>'
     + '<div class="note">'
       + '<p>平时 nasdash 只是<b class="safe">只读 SMART 属性</b>（读健康度、温度、通电时间等），<b>不会扫描盘面，也不会写入数据</b>，对硬盘没有额外磨损。刷新一次也就 1～2 秒，点刷新/自动刷新都不会让你的硬盘一直转或一直扫。</p>'
       + '<p>只有当你手动点下面每块盘里的<b>A 档</b>或<b>B 档</b>，才是真正的自检：</p>'
@@ -1044,7 +1149,7 @@ function renderDisks(disks){
         ${healthBadge}
       </div>
       <div class="kv"><span class="k" title="${esc(smartTip('型号'))}">型号</span><span class="v">${d.brand?d.brand+' ':''}${d.vendor?d.vendor+' ':''}${d.model}</span></div>
-      <div class="kv"><span class="k" title="${esc(smartTip('容量 / 类型'))}">容量 / 类型</span><span class="v">${d.size} · ${isNVMe?'NVMe':(isSAS?'SAS':'SATA')} · ${d.rota=='1'?'HDD':'SSD'}${d.feature?' · '+d.feature:''}</span></div>
+      <div class="kv"><span class="k" title="${esc(smartTip('容量 / 类型'))}">容量 / 类型</span><span class="v">${d.size} · ${isNVMe?'NVMe':(isSAS?'SAS':'SATA')} · ${d.rota=='1'?'HDD':'SSD'}${diskFeatureClean(d.feature,d.dual_actuator)?' · '+esc(diskFeatureClean(d.feature,d.dual_actuator)):''}</span></div>
       <div class="kv"><span class="k" title="${esc(smartTip('转速'))}">转速</span><span class="v">${d.rpm||(d.rota=='1'||isSAS?'—':'固态(SSD)')}</span></div>
       <div class="kv"><span class="k" title="${esc(smartTip('序列号'))}">序列号</span><span class="v" style="font-size:12px">${d.serial}</span></div>
       <div style="margin-top:8px" title="${esc(smartTip('温度'))}"><span style="font-size:13px;color:var(--muted)">温度 ${tempStr}</span><div class="temp-bar"><div class="temp-fill" style="width:${tempPct}%;background:${tempColor(d.temp,trip)}"></div></div></div>
@@ -1080,7 +1185,7 @@ function renderDiskTest(d){
       }
     }
     return '<div class="disk-test-section">'
-      +'<div class="disk-test-title">🩺 硬盘自检</div>'
+      +'<div class="disk-test-title">'+iconSvg('pulse')+'硬盘自检</div>'
       +'<div class="disk-test-msg">'+esc(job.message)+' · 已运行 <span id="dt-elapsed-'+esc(d.dev)+'">'+fmtSec(elapsedNow)+'</span>'+etaHtml+'</div>'
       +prog
       +'<div class="disk-test-actions"><button class="btn-mini" onclick="abortDiskTest(\''+esc(d.dev)+'\')">中止</button><span class="disk-test-msg" id="dt-state-'+esc(d.dev)+'"></span></div>'
@@ -1093,7 +1198,7 @@ function renderDiskTest(d){
       result = ' · 读错误 '+job.result.read_errors+' / 写错误 '+job.result.write_errors+' / 可纠正 '+job.result.corrected;
     }
     return '<div class="disk-test-section">'
-      +'<div class="disk-test-title">🩺 硬盘自检 · '+(job.state==='done'?'完成':(job.state==='error'?'失败':'中止'))+'</div>'
+      +'<div class="disk-test-title">'+iconSvg('pulse')+'硬盘自检 · '+(job.state==='done'?'完成':(job.state==='error'?'失败':'中止'))+'</div>'
       +'<div class="disk-test-msg '+cls+'">'+esc(job.message)+result+'</div>'
       +'<div class="disk-test-actions"><button class="btn-mini" onclick="clearDiskTest(\''+esc(d.dev)+'\')">清除</button></div>'
     +'</div>';
@@ -1104,7 +1209,7 @@ function renderDiskTest(d){
   var modelArg = esc(d.model || '未知型号').replace(/'/g,"\\'");
   var bOnclick = d.standalone ? 'startDiskTest(\''+esc(d.dev)+'\',\'badblocks\',\''+modelArg+'\')' : '';
   return '<div class="disk-test-section">'
-    +'<div class="disk-test-title">🩺 硬盘自检</div>'
+    +'<div class="disk-test-title">'+iconSvg('pulse')+'硬盘自检</div>'
     +'<div class="disk-test-btns">'
       +'<button class="btn-mini" onclick="startDiskTest(\''+esc(d.dev)+'\',\'long\',\''+modelArg+'\')">A：SMART 长自检</button>'
       +'<button class="'+bClass+'"'+(bTitle?' title="'+esc(bTitle)+'"':'')+' onclick="'+bOnclick+'"'+(bDisabled?' disabled':'')+'>B：坏块慢扫（破坏性）</button>'
@@ -1213,6 +1318,107 @@ function appConfirm(opts){
   });
 }
 function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+// 双磁臂硬盘：把“同一序列号被系统拆成多个设备”的盘合并成一块显示（纯前端，后端数据不变，自检不受影响）
+function parseSizeToB(s){
+  if(!s) return 0;
+  var m = String(s).match(/([\d.]+)\s*([TGM])B?/i);
+  if(!m) return 0;
+  var v = parseFloat(m[1]); var u = m[2].toUpperCase();
+  return u==='T'? v*1e12 : u==='G'? v*1e9 : v*1e6;
+}
+function fmtBToSize(b){
+  if(b>=1e12) return (b/1e12).toFixed(1)+'T';
+  if(b>=1e9)  return Math.round(b/1e9)+'G';
+  if(b>=1e6)  return Math.round(b/1e6)+'M';
+  return '?';
+}
+function mergeDualActuator(list){
+  if(!Array.isArray(list)) return list||[];
+  var byKey = {}, out = [];
+  list.forEach(function(d){
+    var sn = (d.serial||'').trim().toUpperCase();
+    if(!sn){ out.push(d); return; }            // 序列号为空绝不参与合并，避免误并
+    var key = sn+'|'+(d.model||'')+'|'+(d.type||'').toUpperCase();
+    (byKey[key] = byKey[key]||[]).push(d);
+  });
+  Object.keys(byKey).forEach(function(key){
+    var arr = byKey[key];
+    if(arr.length>1){
+      var first = arr[0];
+      var devs = arr.map(function(x){return x.dev;});
+      var totalB = arr.reduce(function(s,x){return s+parseSizeToB(x.size);},0);
+      var validTemps = arr.map(function(x){return x.temp;}).filter(function(x){return x!=null;});
+      var merged = Object.assign({}, first);
+      merged.dev = devs.join(' + ');
+      merged.arms = devs;
+      merged.dual_actuator = true;
+      merged.size = fmtBToSize(totalB);
+      merged.health_ok = arr.every(function(x){return x.health_ok;});
+      merged.health = arr.some(function(x){return !x.health_ok;}) ? '异常' : (first.health||'OK');
+      merged.temp = validTemps.length ? Math.max.apply(null, validTemps) : null;
+      out.push(merged);
+    } else {
+      out.push(arr[0]);
+    }
+  });
+  return out;
+}
+// 硬盘的特性标签清理：双磁臂已由专用 badge 展示，feature 里再出现“双磁臂(双执行器)”会造成重复
+function diskFeatureClean(feat, isDualActuator){
+  if(!feat) return '';
+  if(isDualActuator) return '';
+  return String(feat).replace(/双磁臂?\(双执行器\)|双执行器/g,'').trim();
+}
+// 传感器“电压”的中文友好名 + 解释（看不懂的给悬浮）
+function voltNameCn(name){
+  var n = (name||'').trim();
+  var map = {
+    'VCORE':   {cn:'CPU 核心电压', tip:'CPU 内部核心的工作电压，会随负载自动微调'},
+    'VCCIO':   {cn:'CPU IO 电压', tip:'CPU 输入输出接口的辅助电压'},
+    'VCCSA':   {cn:'CPU 系统代理电压', tip:'CPU 内部缓存/内存控制器的辅助电压'},
+    'VCCGT':   {cn:'核显电压', tip:'CPU 内置核显的工作电压'},
+    'VCCIN':   {cn:'CPU 输入电压', tip:'主板供电进入 CPU 前的总输入电压'},
+    'VCCSBA':  {cn:'CPU 系统总线电压', tip:'CPU 系统总线的辅助电压'},
+    'VTT':     {cn:'CPU 参考电压', tip:'CPU / 内存的基准参考电压'},
+    'VDDQ':    {cn:'内存电压', tip:'内存条（RAM）的主要工作电压'},
+    'VPP':     {cn:'内存辅助电压', tip:'内存的激活/辅助供电电压'},
+    'AVCC':    {cn:'模拟电路供电', tip:'主板上模拟电路的 3.3V 供电'},
+    'AVSB':    {cn:'模拟待机电压', tip:'关机后给模拟电路维持的待机电压'},
+    'VBAT':    {cn:'主板电池电压', tip:'主板上那颗纽扣电池的电量，没电会导致时间丢失、BIOS 设置复位'},
+    'VSB':     {cn:'待机电压', tip:'关机后仍然保持的待机供电'},
+    '3VSB':    {cn:'待机 3.3V', tip:'关机后仍然通电的那路 3.3V（用于开机唤醒等）'},
+    '5VSB':    {cn:'待机 5V', tip:'关机后仍然通电的那路 5V（用于开机唤醒、USB 充电等）'},
+    '3VCC':    {cn:'3.3V 主供电', tip:'主板上的 3.3V 供电电路'},
+    '5VCC':    {cn:'5V 主供电', tip:'主板上的 5V 供电电路（给 USB、部分硬盘等供电）'},
+    '12V':     {cn:'12V 主供电', tip:'主板上的 12V 供电电路（给 CPU、显卡、机箱风扇等大件供电）'},
+    '+3.3V':   {cn:'3.3V 主供电', tip:'主板上的 3.3V 供电电路'},
+    '+5V':     {cn:'5V 主供电', tip:'主板上的 5V 供电电路（给 USB、部分硬盘等供电）'},
+    '+12V':    {cn:'12V 主供电', tip:'主板上的 12V 供电电路（给 CPU、显卡、机箱风扇等大件供电）'},
+    'VIN1':    {cn:'辅助电压 1', tip:'主板传感器芯片的第 1 路辅助电压输入，不同主板定义不同'},
+    'VIN2':    {cn:'辅助电压 2', tip:'主板传感器芯片的第 2 路辅助电压输入，不同主板定义不同'},
+    'VIN3':    {cn:'辅助电压 3', tip:'主板传感器芯片的第 3 路辅助电压输入，不同主板定义不同'},
+    'VIN4':    {cn:'辅助电压 4', tip:'主板传感器芯片的第 4 路辅助电压输入，不同主板定义不同'},
+    'VIN5':    {cn:'辅助电压 5', tip:'主板传感器芯片的第 5 路辅助电压输入，不同主板定义不同'},
+    'VIN6':    {cn:'辅助电压 6', tip:'主板传感器芯片的第 6 路辅助电压输入，不同主板定义不同'},
+    'VIN7':    {cn:'辅助电压 7', tip:'主板传感器芯片的第 7 路辅助电压输入，不同主板定义不同'},
+    'VIN8':    {cn:'辅助电压 8', tip:'主板传感器芯片的第 8 路辅助电压输入，不同主板定义不同'},
+    'VREF':    {cn:'参考电压', tip:'电路用的基准参考电压'}
+  };
+  // 常见主板传感器芯片（如 nct6797）原始通道 in0~in15：按最普遍的主板接线给出友好名
+  var inMap = {
+    'IN0':'CPU 核心电压', 'IN1':'辅助电压 1',       'IN2':'模拟电路供电',  'IN3':'3.3V 主供电',
+    'IN4':'12V 主供电',   'IN5':'辅助电压 5',       'IN6':'辅助电压 6',    'IN7':'待机 3.3V',
+    'IN8':'主板电池电压', 'IN9':'CPU 参考电压',     'IN10':'CPU 系统代理电压','IN11':'CPU IO 电压',
+    'IN12':'核显电压',    'IN13':'CPU 输入电压',    'IN14':'内存电压',     'IN15':'内存辅助电压'
+  };
+  var up = n.toUpperCase().replace(/\s+/g,'').replace(/_LSB|_MSB$/,'');
+  if(map[up]) return map[up];
+  if(inMap[up]) return {cn:inMap[up], tip:'主板传感器芯片的原始电压通道 '+n+'，不同主板含义可能略有差异'};
+  // 纯 inN / vinN 兜底
+  var m = up.match(/^(IN|VIN)(\d+)$/);
+  if(m) return {cn:'辅助电压 '+m[2], tip:'主板传感器芯片的原始电压通道 '+n+'，不同主板定义不同，只要数值在合理范围即可'};
+  return {cn:n, tip:''};
+}
 function smartTip(label){
   var tips={
     '型号':'硬盘的品牌与完整型号名称',
@@ -1293,28 +1499,54 @@ function renderSystem(s){
     let rpmStr = stopped ? '0 RPM (停转)' : f.rpm + ' RPM';
     let _fpi = fanPillInfo(f);
     let modeStr = _fpi.txt ? ` <span class="pill ${_fpi.cls}">${_fpi.txt}</span>` : '';
-    let voltBadge = f.voltage ? ` <span class="volt-badge">${esc(f.voltage)}</span>` : '';
+    let voltBadge = f.voltage ? ` <span class="volt-badge" title="这台风扇的供电规格：${esc(f.voltage)} 是它吃电的电压标准（12V 最常见于机箱风扇，5V 常见于小风扇）。这只是个标注，不影响转速显示">${esc(f.voltage)}</span>` : '';
     let pwmStr = (f.pwm!=null) ? ` · PWM ${f.pwm}%` : '';
     let fanName = esc(f.label || f.name);
     return `<div class="kv"><span class="k">${fanName}${voltBadge}${modeStr}</span><span class="v" style="color:${color}">${rpmStr}${pwmStr}</span></div>`;
   }).join('');
-  let voltsHtml = (sens.voltages||[]).map(v=>`<div class="kv"><span class="k">${v.name}</span><span class="v">${v.value} V</span></div>`).join('');
+  // 电压：关键几路常显并带正常/异常状态；其余收进可折叠的“专业电压”
+  var KEY_VOLTS = {'12V 主供电':1,'5V 主供电':1,'3.3V 主供电':1,'主板电池电压':1};
+  function voltStatus(name, value){
+    var up=(name||'').toUpperCase().replace(/\s+/g,'');
+    var v=parseFloat(value);
+    if(isNaN(v)) return {cls:'',txt:''};
+    if(up==='VBAT'||up==='主板电池电压'){ return v<2.5?{cls:'b-warn',txt:'电池偏低'}:{cls:'b-ok',txt:'正常'}; }
+    if(up==='+12V'||up==='12V 主供电'||up==='12V'){ return (v<10||v>13.8)?{cls:'b-warn',txt:'偏离较大'}:{cls:'b-ok',txt:'正常'}; }
+    if(up==='+5V'||up==='5V 主供电'||up==='5V'){ return (v<4.5||v>5.5)?{cls:'b-warn',txt:'偏离较大'}:{cls:'b-ok',txt:'正常'}; }
+    if(up==='+3.3V'||up==='3.3V 主供电'||up==='3VCC'||up==='3.3V'){ return (v<3.0||v>3.6)?{cls:'b-warn',txt:'偏离较大'}:{cls:'b-ok',txt:'正常'}; }
+    return {cls:'',txt:''};
+  }
+  let allVols = (sens.voltages||[]).map(v=>{let vc=voltNameCn(v.name); return {raw:v, cn:vc.cn, tip:vc.tip, isKey:!!KEY_VOLTS[vc.cn]};});
+  let voltRow = x=>{ let st=voltStatus(x.raw.name, x.raw.value); let badge=st.cls?` <span class="badge ${st.cls}" style="font-size:11px;margin-left:4px">${st.txt}</span>`:''; return `<div class="kv"><span class="k" title="${esc(x.tip)}">${esc(x.cn)}</span><span class="v">${x.raw.value} V${badge}</span></div>`; };
+  let keyVols = allVols.filter(x=>x.isKey).map(voltRow).join('');
+  let proVols = allVols.filter(x=>!x.isKey);
+  let proHtml = proVols.length ? `<details class="volt-pro"><summary>专业电压（其余 ${proVols.length} 项，一般不用看）</summary>${proVols.map(voltRow).join('')}</details>` : '';
+  let voltsHtml = (keyVols || '<div class="loading">无数据</div>') + proHtml;
   let diskHtml = fmtDiskRows(DATA.diskio);
   let loadColor = (l)=>parseFloat(l)>s.cpu_threads?'var(--red)':parseFloat(l)>s.cpu_threads*0.7?'var(--orange)':'var(--green)';
+  let loadText = (l)=>{
+    let t = s.cpu_threads || 1; let v = parseFloat(l)||0;
+    if(v <= t*0.7) return '当前很轻松，CPU 基本在闲着';
+    if(v <= t) return '还算顺畅，CPU 在干活但不吃力';
+    if(v <= t*2) return '有点忙了，机器可能会变慢';
+    return '太忙了！任务排队，建议查查谁在占资源';
+  };
   return `
   ${panelHero({icon:ICON_SYSTEM,title:'系统资源',sub:'CPU / 内存 / 传感器实时状态',stats:[
     {v:(s.cpu_temp!=null?s.cpu_temp+'°C':'N/A'),k:'CPU 温度'},
+    {v:(s.cpu_usage!=null?s.cpu_usage+'%':'—'),k:'CPU 使用率'},
     {v:memPct+'%',k:'内存占用'},
-    {v:(s.load&&s.load[0]!=null?s.load[0]:'N/A'),k:'1分钟负载'},
+    {v:(s.load&&s.load[0]!=null?s.load[0]:'N/A'),k:'现在忙不忙'},
     {v:(s.uptime?String(s.uptime).replace(/\s+/g,''):'—'),k:'已运行'}
   ]})}
   <div class="sys-grid">
     <div class="card">
-      <h3>负载</h3>
-      <div class="kv"><span class="k">1 分钟</span><span class="v" style="color:${loadColor(s.load[0])}">${s.load[0]}</span></div>
-      <div class="kv"><span class="k">5 分钟</span><span class="v" style="color:${loadColor(s.load[1])}">${s.load[1]}</span></div>
-      <div class="kv"><span class="k">15 分钟</span><span class="v" style="color:${loadColor(s.load[2])}">${s.load[2]}</span></div>
-      <div style="font-size:12px;color:var(--muted);margin-top:6px">阈值：> ${s.cpu_threads} 为过载</div>
+      <h3>系统忙不忙</h3>
+      <div class="kv"><span class="k">现在</span><span class="v" style="color:${loadColor(s.load[0])}">${s.load[0]}</span></div>
+      <div class="kv"><span class="k">近 5 分钟</span><span class="v" style="color:${loadColor(s.load[1])}">${s.load[1]}</span></div>
+      <div class="kv"><span class="k">近 15 分钟</span><span class="v" style="color:${loadColor(s.load[2])}">${s.load[2]}</span></div>
+      <div style="font-size:12px;color:var(--muted);margin-top:6px">参考线：> ${s.cpu_threads} 就该留意（活儿多到 CPU 忙不过来）</div>
+      <div style="font-size:12px;margin-top:4px;color:${loadColor(s.load[0])}">${loadText(s.load[0])}</div>
     </div>
     <div class="card">
       <h3>内存使用</h3>
@@ -1332,11 +1564,11 @@ function renderSystem(s){
       ${fansHtml||'<div class="loading">无数据</div>'}
     </div>
     <div class="card">
-      <h3>电压</h3>
+      <h3 title="主板各路供电电路的电压（如 3.3V、CPU 核心电压、主板电池）。只要数值在正常范围内、没报警，就不用管">电压</h3>
       ${voltsHtml||'<div class="loading">无数据</div>'}
     </div>
     <div class="card">
-      <h3>磁盘 I/O</h3>
+      <h3 title="磁盘的读写速度，数字越大说明盘越忙">磁盘 I/O</h3>
       ${diskHtml||'<div class="loading">采样中…</div>'}
     </div>
   </div>`;
@@ -1444,7 +1676,7 @@ function renderFanControl(){
         <button class="fan-hw-toggle" id="${id}-hwtoggle" type="button" onclick="toggleFanHwNote('${id}')">说明 ▾</button>
         <div class="fan-hw-detail" id="${id}-hwdetail" style="display:none"></div>
       </div>
-      ${f.pwm_mode==='dc'?`<div class="fan-dc-note">🔌 此接口当前是 <b>DC（电压）调速</b>：调速靠改供电电压，低档位比 PWM 更容易转不动或直接停转。若风扇低速时抖动、启动不了，把最低转速调高一些，或切回 PWM 调速。</div>`:''}
+      ${f.pwm_mode==='dc'?`<div class="fan-dc-note">${iconSvg('plug')} 此接口当前是 <b>DC（电压）调速</b>：调速靠改供电电压，低档位比 PWM 更容易转不动或直接停转。若风扇低速时抖动、启动不了，把最低转速调高一些，或切回 PWM 调速。</div>`:''}
       <div class="fan-speed-bar"><div class="fan-speed-fill" id="${id}-bar" style="width:${pct}%"></div></div>
       <div class="fan-pct-line">
         <span>当前 <b id="${id}-cur">${pct}</b>%</span>
@@ -1491,7 +1723,7 @@ function renderFanControl(){
     {v:_avg?_avg+' RPM':'—',k:'平均转速'}
   ]});
   refreshFanControlState();
-  let _lock = FAN_CTRL_ENABLED ? '' : `<div class="fan-lock-banner">⚠️ 风扇接管已关闭：nasdash 不再根据温度自动调速。若飞牛自带风扇服务已配置好，会由它接管；否则保持当前转速。开启上方「接管风扇控制」才能用下方调速。</div>`;
+  let _lock = FAN_CTRL_ENABLED ? '' : `<div class="fan-lock-banner">${iconSvg('alert')} 风扇接管已关闭：nasdash 不再根据温度自动调速。若飞牛自带风扇服务已配置好，会由它接管；否则保持当前转速。开启上方「接管风扇控制」才能用下方调速。</div>`;
   return _fanHero + `<div class="fan-page${FAN_CTRL_ENABLED?'':' fan-locked'}">
     ${_lock}
     ${renderSleepLinkPanel()}
@@ -1501,7 +1733,7 @@ function renderFanControl(){
       ${hideToggle}
       <span class="fan-global-state" id="fan-global-state"></span>
     </div>
-    <div class="fan-rule-tip">💡 每张卡片 3 个按钮选控速方案：<b>线性温控</b>（开转/全速 直线）、<b>曲线温控</b>（≥2 节点分段插值）、<b>手动固定</b>（拖滑块）。3 选 1 即生效、互不影响，徽标实时显示当前跑的是哪个。</div>
+    <div class="fan-rule-tip">${iconSvg('bulb')} 每张卡片 3 个按钮选控速方案：<b>线性温控</b>（开转/全速 直线）、<b>曲线温控</b>（≥2 节点分段插值）、<b>手动固定</b>（拖滑块）。3 选 1 即生效、互不影响，徽标实时显示当前跑的是哪个。</div>
     <div class="fan-grid">${gridInner}</div>
     <div class="card fcs-card" id="fcs-panel"><div class="fcs-head"><b>系统风扇服务（pwm-fancontrol）</b><span class="pill gray">读取中…</span></div><p class="fcs-desc">正在检测飞牛自带风扇服务…</p></div>
   </div>`;
@@ -1525,7 +1757,7 @@ function applyFanLockVisual(){
       if(!banner && page){
         banner=document.createElement('div');
         banner.className='fan-lock-banner';
-        banner.textContent='⚠️ 风扇接管已关闭：nasdash 不再根据温度自动调速。若飞牛自带风扇服务已配置好，会由它接管；否则保持当前转速。开启上方「接管风扇控制」才能用下方调速。';
+        banner.innerHTML=iconSvg('alert')+' 风扇接管已关闭：nasdash 不再根据温度自动调速。若飞牛自带风扇服务已配置好，会由它接管；否则保持当前转速。开启上方「接管风扇控制」才能用下方调速。';
         // 必须挂到 .fan-page 下（渲染时 ${_lock} 就是 .fan-page 的第一个子节点）。
         // 早期写成 fp.insertBefore(banner, .fan-grid)——.fan-grid 不是 #fan 的直接子节点，必抛 NotFoundError。
         page.insertBefore(banner, page.firstChild);
@@ -1628,7 +1860,7 @@ function updateFanFloorNote(id, f){
     el.style.display='flex';
     // 摘要：固定文案，不写实时 rpm，避免硬件在「0 ↔ 下限」间抖时这行字跟着闪
     var sum=document.getElementById(id+'-hwsum');
-    if(sum) sum.textContent='⚠️ 已下发 0%，但此风扇仍在转（硬件最低转速保护，软件停不下来）';
+    if(sum) sum.innerHTML=iconSvg('alert')+' 已下发 0%，但此风扇仍在转（硬件最低转速保护，软件停不下来）';
     var d=document.getElementById(id+'-hwdetail');
     if(d){
       d.style.display = FAN_HW_EXPANDED[id] ? 'block' : 'none';
@@ -1721,7 +1953,7 @@ async function setFanMode(hwmon, idx, mode){
 function renderSleepLinkPanel(){
   return '<div class="card sleep-panel" id="sleep-link-panel">'
     +'<div class="sleep-panel-head" onclick="toggleSleepPanel()">'
-      +'<span>💤 硬盘休眠联动（监控盘休眠/空闲时自动停转受控风扇）</span>'
+      +'<span>'+iconSvg('power')+'硬盘休眠联动（监控盘休眠/空闲时自动停转受控风扇）</span>'
       +'<span class="sleep-panel-toggle" id="sleep-panel-toggle">▸</span>'
     +'</div>'
     +'<div class="sleep-panel-body" id="sleep-panel-body" style="display:none">'
@@ -1766,7 +1998,7 @@ async function saveSleepLink(){
     var body={sleep_stop:sleep, idle_minutes:idle};
     var r=await fetch('/api/fan/disk_temp',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     var j=await r.json();
-    if(st){ st.textContent=j.ok?'已保存 ✓':'失败：'+(j.error||''); st.className=j.ok?'dt-save-state ok':'dt-save-state'; }
+    if(st){ st.innerHTML=j.ok?iconSvg('check')+' 已保存':'失败：'+(j.error||''); st.className=j.ok?'dt-save-state ok':'dt-save-state'; }
   }catch(e){ if(st){ st.textContent='请求失败'; st.className='dt-save-state'; } }
 }
 // ===== 当前温度概览（CPU/主板/各硬盘实时温度）=====
@@ -1790,7 +2022,7 @@ function _renderTempChip(name, val, opts){
 }
 function renderTempOverview(){
   return '<div class="card temp-overview" id="temp-overview">'
-    +'<div class="temp-overview-head">🌡️ 当前温度 <span class="temp-updated" id="temp-updated"></span></div>'
+    +'<div class="temp-overview-head">'+iconSvg('thermo')+' 当前温度 <span class="temp-updated" id="temp-updated"></span></div>'
     +'<div class="temp-row" id="temp-row"></div>'
   +'</div>';
 }
@@ -1926,7 +2158,7 @@ function fanRuleCurveBody(f, id){
       +'<button class="btn-mini" onclick="saveFanRule(\''+f.hwmon+'\','+f.idx+',\'curve\')">保存为曲线</button>'
       +'<span class="fan-rule-state" id="'+id+'-curve_rstate"></span>'
     +'</div>'
-    +'<div class="fan-rule-hint">💡 至少设 2 个曲线节点（推荐 ≥3 个）。设完后点「保存为曲线」即激活曲线温控。</div>'
+    +'<div class="fan-rule-hint">'+iconSvg('bulb')+' 至少设 2 个曲线节点（推荐 ≥3 个）。设完后点「保存为曲线」即激活曲线温控。</div>'
   +'</div>';
 }
 // 向后兼容：保留 fanRuleSection 名（旧代码可能引用过）
@@ -1986,7 +2218,7 @@ async function saveFanRule(hwmon, idx, activeMode){
   try{
     var r=await fetch('/api/fan/rules',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body4)});
     var j=await r.json();
-    if(st){ st.textContent=j.ok?'已保存 ✓':('失败：'+(j.error||'')); st.className=j.ok?'fan-rule-state ok':'fan-rule-state'; }
+    if(st){ st.innerHTML=j.ok?iconSvg('check')+' 已保存':('失败：'+(j.error||'')); st.className=j.ok?'fan-rule-state ok':'fan-rule-state'; }
     if(j.ok){
       // 同步缓存中该风扇的 active_mode（避免刷新前徽标/按钮高亮错位）
       if(DATA && DATA.system && DATA.system.sensors && DATA.system.sensors.fans && body4.rule){
@@ -2249,7 +2481,7 @@ async function saveFanLabel(hwmon, idx){
     cur[k]=e;
     let r2=await fetch('/api/fan/labels',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cur)});
     let j=await r2.json();
-    if(st) st.textContent=j.ok?'已保存 ✓':'失败';
+    if(st) st.innerHTML=j.ok?iconSvg('check')+' 已保存':'失败';
     if(j.ok){ loadData(); }
   }catch(e){ if(st) st.textContent='请求失败'; }
 }
@@ -2364,7 +2596,7 @@ function renderCurvePoints(prefix){
       +'<td class="curve-pt-num">'+(i+1)+'</td>'
       +'<td><label class="curve-pt-input"><input type="number" class="cp-temp" data-i="'+i+'" value="'+p[0]+'" min="20" max="95" step="1"><span class="unit">°C</span></label></td>'
       +'<td><label class="curve-pt-input"><input type="number" class="cp-pwm" data-i="'+i+'" value="'+p[1]+'" min="0" max="100" step="1"><span class="unit">%</span></label></td>'
-      +'<td style="text-align:right"><button class="curve-pt-del" type="button" title="删除该节点" onclick="removeCurvePoint(\''+prefix+'\','+i+')">✕</button></td>'
+      +'<td style="text-align:right"><button class="curve-pt-del" type="button" title="删除该节点" onclick="removeCurvePoint(\''+prefix+'\','+i+')"><svg class="ico" viewBox="0 0 24 24"><use href="#i-x"/></svg></button></td>'
     +'</tr>';
   }).join('');
   box.innerHTML = '<table class="curve-pt-table">'
@@ -2482,8 +2714,9 @@ function renderDetect(D){
   let fanStr = fans.length===0 ? 'N/A' : (fanOk?'正常':'异常');
   let raidOk = r.mode==='mega'||r.mode==='hba';
   let raidStr = r.mode==='mega' ? '正常' : r.mode==='hba' ? '正常' : (r.mode==='mega_error'?'读取失败':'未配置');
-  let sasDisks = disks.filter(d=>(d.type||'').toUpperCase()==='SAS');
-  let sataDisks = disks.filter(d=>{let t=(d.type||'').toUpperCase(); return t==='SATA'||t==='ATA';});
+  let mergedDisks = mergeDualActuator(disks);
+  let sasDisks = mergedDisks.filter(d=>(d.type||'').toUpperCase()==='SAS');
+  let sataDisks = mergedDisks.filter(d=>{let t=(d.type||'').toUpperCase(); return t==='SATA'||t==='ATA';});
   let sasHealthy = sasDisks.filter(d=>d.health_ok).length;
   let sataHealthy = sataDisks.filter(d=>d.health_ok).length;
   let dockerStr = (dk.running||0)+' 运行中';
@@ -2515,7 +2748,8 @@ function renderDetect(D){
     </div>
   </div>`;
   // 系统配置
-  let cpuPct = s.cpu_threads ? Math.min(Math.round(parseFloat((s.load&&s.load[0])||0)/s.cpu_threads*100),100) : 0;
+  let cpuPct = (s.cpu_usage!=null) ? s.cpu_usage : (s.cpu_threads ? Math.min(Math.round(parseFloat((s.load&&s.load[0])||0)/s.cpu_threads*100),100) : 0);
+  let ci = s.cpu_info || {};
   let memMods = (s.memory_modules && s.memory_modules.modules) || [];
   let memModRows = memMods.length ? memMods.map(m=>{
     let stBadge = m.installed ? '<span class="badge b-ok">已用</span>' : '<span class="badge b-warn">空</span>';
@@ -2565,7 +2799,7 @@ function renderDetect(D){
     <div class="kv"><span class="k">品牌</span><span class="v">${(s.board&&s.board.manufacturer)||'-'}</span></div>
     <div class="kv"><span class="k">型号</span><span class="v">${(s.board&&s.board.product)||'-'}</span></div>
     <div class="kv"><span class="k">版本</span><span class="v">${(s.board&&s.board.version)||'-'}</span></div>
-    <div class="kv"><span class="k">BIOS</span><span class="v">${(s.board&&s.board.bios_vendor)||'-'} ${(s.board&&s.board.bios_version)||''} (${(s.board&&s.board.bios_date)||''})</span></div>
+    <div class="kv"><span class="k" title="主板最底层的启动程序版本">BIOS</span><span class="v">${(s.board&&s.board.bios_vendor)||'-'} ${(s.board&&s.board.bios_version)||''} (${(s.board&&s.board.bios_date)||''})</span></div>
     <div class="kv"><span class="k">芯片组</span><span class="v">${(s.board&&s.board.chipset)||'未知'}</span></div>
     ` : `
     <div class="kv"><span class="k">芯片组</span><span class="v">${(s.board&&s.board.chipset)||'未知'}</span></div>
@@ -2575,11 +2809,11 @@ function renderDetect(D){
   let sysInfoCard = `
   <div class="card">
     <h3>系统信息</h3>
-    <div class="kv"><span class="k">主机名</span><span class="v">${s.hostname||'-'}</span></div>
+    <div class="kv"><span class="k">设备名称</span><span class="v">${s.hostname||'-'}</span></div>
     <div class="kv"><span class="k">系统</span><span class="v">${s.os||'-'}</span></div>
-    <div class="kv"><span class="k">内核</span><span class="v">${s.kernel||'-'}</span></div>
+    <div class="kv"><span class="k" title="系统最核心的程序版本，相当于手机底层的操作系统">内核</span><span class="v">${s.kernel||'-'}</span></div>
     <div class="kv"><span class="k">运行时间</span><span class="v">${s.uptime||'-'}</span></div>
-    <div class="kv"><span class="k">交换分区</span><span class="v">${(s.swap&&s.swap.used)?(s.swap.used+' / '+s.swap.total):'-'}</span></div>
+    <div class="kv"><span class="k">虚拟内存</span><span class="v">${(s.swap&&s.swap.used)?(s.swap.used+' / '+s.swap.total):'-'}</span></div>
   </div>`;
   let _nics = (s.nics||[]).filter(n=>{
     let nm=(n.name||'').toLowerCase();
@@ -2604,9 +2838,9 @@ function renderDetect(D){
       let tx=(n.tx_rate!=null)?fmtSpeed(n.tx_rate):'—';
       return `<div class="nic-detail" id="nic-detail-${i}" style="${i===0?'':'display:none'}">
         <div class="nic-ifname">${esc(n.name)}</div>
-        <div class="kv"><span class="k">IPv4 地址</span><span class="v">${esc(n.ip||'无 IP')}</span></div>
-        <div class="kv"><span class="k">IPv6 地址</span><span class="v">${esc(ipv6)}</span></div>
-        <div class="kv"><span class="k">MAC 地址</span><span class="v">${esc(n.mac||'-')}</span></div>
+        <div class="kv"><span class="k" title="设备在当前局域网里的网络门牌号">IPv4 地址</span><span class="v">${esc(n.ip||'无 IP')}</span></div>
+        <div class="kv"><span class="k" title="新一代网络地址，部分网络环境才用得到">IPv6 地址</span><span class="v">${esc(ipv6)}</span></div>
+        <div class="kv"><span class="k" title="网卡出厂自带的唯一物理编号，相当于网卡的身份证">MAC 地址</span><span class="v">${esc(n.mac||'-')}</span></div>
         <div class="kv"><span class="k">网络配置</span><span class="v">${esc(cfg)}</span></div>
         ${hw?`<div class="kv"><span class="k">硬件信息</span><span class="v">${esc(hw)}</span></div>`:''}
         <div class="kv"><span class="k">状态</span><span class="v" style="color:${sc}">${esc(st)}</span></div>
@@ -2676,23 +2910,72 @@ function renderDetect(D){
   let tempEntries = (s.sensors && s.sensors.temps || []).filter(t=>typeof t.value==='number'&&t.value>0&&t.value<150);
   let tempWallCard = `
   <div class="card" style="grid-column:1/-1">
-    <h3>温度墙</h3>
+    <h3 title="硬件能承受的温度上限，超过会降频保护">温度墙</h3>
     ${tempEntries.length?`<div class="temp-wall">${tempEntries.map(t=>{let raw=t.raw||'';let tip=raw?raw+'（原始测点名）':'';return `<div class="temp-chip" title="${esc(tip)}"><span class="tc-name">${esc(t.name)}</span><span class="tc-val" style="color:${tempColor(t.value,85)}">${t.value}°C</span></div>`;}).join('')}</div>`:'<div class="loading">未检测到温度测点</div>'}
     <div style="margin-top:8px;font-size:12px;color:var(--muted)">主板传感器测点全览（已过滤无效 0°C / 负温）；鼠标悬停可查看原始英文名。颜色：绿正常 · 橙偏高 · 红危险</div>
   </div>`;
   let sysConfig = `
   <div class="detect-cards">
+    ${sysInfoCard}
+    ${boardCard}
     <div class="card">
       <h3>处理器</h3>
       <div class="kv"><span class="k">型号</span><span class="v">${s.cpu_model||'-'}</span></div>
       <div class="kv"><span class="k">核心/线程</span><span class="v">${s.cpu_cores||0}核 / ${s.cpu_threads||0}线程</span></div>
-      <div class="kv"><span class="k">频率</span><span class="v">${s.cpu_freq!=null?Math.round(parseFloat(s.cpu_freq))+' MHz':'N/A'}</span></div>
+      ${(()=>{
+        let cur = ci.current_freq_mhz!=null ? Math.round(ci.current_freq_mhz)+' MHz' : null;
+        let min = ci.min_freq_mhz!=null ? Math.round(ci.min_freq_mhz)+' MHz' : null;
+        let max = ci.max_freq_mhz!=null ? Math.round(ci.max_freq_mhz)+' MHz' : null;
+        let txt = '';
+        if(cur) txt += '当前 '+cur;
+        if(min && max) txt += (txt?' · ':'')+'范围 '+min+' - '+max;
+        else if(max) txt += (txt?' · ':'')+max;
+        else if(s.cpu_freq!=null) txt = Math.round(parseFloat(s.cpu_freq))+' MHz';
+        return `<div class="kv"><span class="k">频率</span><span class="v">${txt||'N/A'}</span></div>`;
+      })()}
       <div class="kv"><span class="k">CPU 温度</span><span class="v" style="color:${tempColor(s.cpu_temp,100)}">${s.cpu_temp!=null?s.cpu_temp+'°C':'N/A'}</span></div>
-      <div class="kv"><span class="k">负载占用</span><span class="v">${cpuPct}%</span></div>
+      <div class="kv"><span class="k">CPU 使用率</span><span class="v">${cpuPct}%</span></div>
+      ${(()=>{
+        let det = '';
+        det += gpuRow('架构', ci.arch);
+        det += gpuRow('厂商', ci.vendor);
+        det += gpuRow('插槽数', ci.sockets!=null?ci.sockets+' 个':null);
+        det += gpuRow('每插槽核心', ci.cores_per_socket!=null?ci.cores_per_socket+' 核':null);
+        det += gpuRow('每核心线程', ci.threads_per_core!=null?ci.threads_per_core+' 线程':null);
+        det += gpuRow('当前频率', ci.current_freq_mhz!=null?Math.round(ci.current_freq_mhz)+' MHz':null);
+        let freqRange = '';
+        if(ci.min_freq_mhz!=null && ci.max_freq_mhz!=null) freqRange = Math.round(ci.min_freq_mhz)+' - '+Math.round(ci.max_freq_mhz)+' MHz';
+        else if(ci.max_freq_mhz!=null) freqRange = Math.round(ci.max_freq_mhz)+' MHz';
+        det += gpuRow('频率范围', freqRange||null);
+        det += gpuRow('BogoMIPS', ci.bogomips!=null?ci.bogomips.toFixed(2):null);
+        if(ci.family!=null || ci.model_id!=null || ci.stepping!=null){
+          let spec = [ci.family!=null?('Family '+ci.family):'', ci.model_id!=null?('Model '+ci.model_id):'', ci.stepping!=null?('Stepping '+ci.stepping):''].filter(Boolean).join(' / ');
+          det += gpuRow('型号规格', spec);
+        }
+        det += gpuRow('虚拟化', ci.virtualization, ci.virtualization==null?'未检测到硬件虚拟化支持':null);
+        if(ci.l1d || ci.l1i || ci.l2 || ci.l3){
+          det += gpuRow('L1 数据缓存', ci.l1d||null);
+          det += gpuRow('L1 指令缓存', ci.l1i||null);
+          det += gpuRow('L2 缓存', ci.l2||null);
+          det += gpuRow('L3 缓存', ci.l3||null);
+        }
+        det += gpuRow('地址宽度', ci.address_sizes||null);
+        det += gpuRow('字节序', ci.byte_order||null);
+        det += gpuRow('NUMA 节点', ci.numa_nodes!=null?ci.numa_nodes+' 个':null);
+        if(ci.features){
+          let feats = [];
+          if(ci.features.lm) feats.push('64-bit');
+          if(ci.features.ht) feats.push('超线程');
+          if(ci.features.aes) feats.push('AES-NI');
+          if(ci.features.avx512) feats.push('AVX-512');
+          else if(ci.features.avx2) feats.push('AVX2');
+          else if(ci.features.avx) feats.push('AVX');
+          det += gpuRow('指令集特性', feats.length?feats.join(' · '):'—');
+        }
+        return `<details class="gpu-detail"><summary>更多参数</summary><div class="detail-body">${det}</div></details>`;
+      })()}
     </div>
     ${gpuCard}
-    ${boardCard}
-    ${sysInfoCard}
     ${memCard}
     ${tempWallCard}
     ${netCard}
@@ -2702,26 +2985,26 @@ function renderDetect(D){
   if(r.mode==='mega'){
     raidCardsHtml = `
     <div class="card">
-      <h3>RAID 控制器</h3>
+      <h3 title="管理多块硬盘组成阵列的硬件卡">RAID 控制器</h3>
       <div class="kv"><span class="k">型号</span><span class="v">${r.model}</span></div>
-      <div class="kv"><span class="k">模式</span><span class="v"><span class="badge b-info">MegaRAID (IR)</span></span></div>
-      <div class="kv"><span class="k">状态</span><span class="v" style="color:var(--green)">✓ 正常</span></div>
+      <div class="kv"><span class="k">模式</span><span class="v"><span class="badge b-info" title="阵列模式：由这张卡把多块硬盘统一管理成 RAID">MegaRAID (IR)</span></span></div>
+      <div class="kv"><span class="k">状态</span><span class="v" style="color:var(--green)"><svg class="ico" viewBox="0 0 24 24"><use href="#i-check"/></svg> 正常</span></div>
       <div class="kv"><span class="k">序列号</span><span class="v">${r.serial||'-'}</span></div>
-      <div class="kv"><span class="k">SAS 地址</span><span class="v">${r.sas_address||'-'}</span></div>
-      <div class="kv"><span class="k">PCI 地址</span><span class="v">${r.pci||'-'}</span></div>
+      <div class="kv"><span class="k" title="这块阵列卡在硬盘总线上的唯一编号">SAS 地址</span><span class="v">${r.sas_address||'-'}</span></div>
+      <div class="kv"><span class="k" title="阵列卡插在主板上哪个插槽的物理位置">PCI 地址</span><span class="v">${r.pci||'-'}</span></div>
       <div class="kv"><span class="k">芯片温度</span><span class="v" style="color:${tempColor(r.controller_temp,85)}">${r.controller_temp!=null?r.controller_temp+'°C':'N/A'}</span></div>
     </div>
     <div class="card">
       <h3>固件版本</h3>
-      <div class="kv"><span class="k">FW Package</span><span class="v">${r.fw_package||'-'}</span></div>
-      <div class="kv"><span class="k">FW Version</span><span class="v">${r.fw_version||'-'}</span></div>
-      <div class="kv"><span class="k">BIOS</span><span class="v">${r.bios_version||'-'}</span></div>
+      <div class="kv"><span class="k" title="固件完整包版本（控制器的底层软件）">FW Package</span><span class="v">${r.fw_package||'-'}</span></div>
+      <div class="kv"><span class="k" title="固件的版本号">FW Version</span><span class="v">${r.fw_version||'-'}</span></div>
+      <div class="kv"><span class="k" title="主板最底层的启动程序版本">BIOS</span><span class="v">${r.bios_version||'-'}</span></div>
       <div class="kv"><span class="k">驱动</span><span class="v">${r.driver||'-'}</span></div>
     </div>
     <div class="card">
       <h3>缓存 / 电池</h3>
-      <div class="kv"><span class="k">CacheVault</span><span class="v">${r.cachevault||'-'}</span></div>
-      <div class="kv"><span class="k">JBOD 盘数</span><span class="v">${r.jbod_count||0}</span></div>
+      <div class="kv"><span class="k" title="阵列卡的掉电保护缓存，断电也能保住数据">CacheVault</span><span class="v">${r.cachevault||'-'}</span></div>
+      <div class="kv"><span class="k" title="直接透传给系统、不走阵列的硬盘数量">JBOD 盘数</span><span class="v">${r.jbod_count||0}</span></div>
       <div class="kv"><span class="k">物理盘</span><span class="v">${r.drives?r.drives.length:0} 块</span></div>
     </div>`;
   } else if(r.mode==='hba'){
@@ -2729,38 +3012,57 @@ function renderDetect(D){
     <div class="card">
       <h3>控制器 (HBA 直通)</h3>
       <div class="kv"><span class="k">型号</span><span class="v">${r.model}</span></div>
-      <div class="kv"><span class="k">模式</span><span class="v"><span class="badge b-info">IT 直通</span></span></div>
-      <div class="kv"><span class="k">状态</span><span class="v" style="color:var(--green)">✓ 正常工作</span></div>
+      <div class="kv"><span class="k">模式</span><span class="v"><span class="badge b-info" title="直通模式：硬盘直接交给系统管理，不做任何阵列">IT 直通</span></span></div>
+      <div class="kv"><span class="k">状态</span><span class="v" style="color:var(--green)"><svg class="ico" viewBox="0 0 24 24"><use href="#i-check"/></svg> 正常工作</span></div>
       ${r.controller_temp!=null?`<div class="kv"><span class="k">芯片温度</span><span class="v" style="color:${tempColor(r.controller_temp,85)};font-weight:600">${r.controller_temp}°C</span></div>`:''}
       <div class="kv"><span class="k">说明</span><span class="v" style="font-size:12px">${r.note||''}</span></div>
     </div>`;
   } else {
     raidCardsHtml = `<div class="card"><h3>阵列卡</h3><div class="loading">${r.note||'未检测到阵列卡'}</div></div>`;
   }
+  function chTip(ch){
+    if(!ch) return '';
+    if(ch.indexOf('阵列卡')>=0) return '这块硬盘由阵列卡统一管理，不是直接插在主板上';
+    if(ch.indexOf('M.2')>=0) return '直接插在主板的 M.2 插槽（系统盘常见）';
+    if(ch.indexOf('SATA')>=0) return '直接插在主板的 SATA 接口';
+    if(ch.indexOf('SAS')>=0) return '直接插在主板的 SAS 接口';
+    return '硬盘的连接通道';
+  }
   let diskItem = d => {
     let t = (d.type||'').toUpperCase();
     let isSas = t==='SAS';
-    let typeBadge = `<span class="badge ${isSas?'b-sas':'b-sata'}">${isSas?'SAS':'SATA'}</span>`;
+    let isNvme = t==='NVME';
+    let typeBadge = `<span class="badge ${isSas?'b-sas':isNvme?'b-nvme':'b-sata'}">${isSas?'SAS':isNvme?'NVMe':'SATA'}</span>`;
+    let daBadge = d.dual_actuator ? ` <span class="badge b-info" title="同一块物理硬盘有 ${d.arms?d.arms.length:2} 个独立磁臂，被系统识别成多个设备，实际是一块盘">双磁臂</span>` : '';
+    // 双磁臂已由上方 badge 标识，避免再显示 d.feature 里的“双磁臂(双执行器)”造成重复
+    let feat = diskFeatureClean(d.feature, d.dual_actuator);
+    let featBadge = feat ? ` <span class="badge b-info">${esc(feat)}</span>` : '';
+    let ch = d.channel||'';
+    let chBadge = ch ? ` <span class="ch-tag" title="${esc(chTip(ch))}">${esc(ch)}</span>` : '';
     return `<div class="disk-mini">
-      <span>${typeBadge} ${d.dev} · ${d.brand?d.brand+' ':''}${d.vendor?d.vendor+' ':''}${d.model}${d.feature?` <span class="badge b-info">${d.feature}</span>`:''}</span>
+      <span>${typeBadge}${daBadge} ${d.dev} · ${d.brand?d.brand+' ':''}${d.vendor?d.vendor+' ':''}${d.model}${chBadge}${featBadge}</span>
       <span><span style="color:${tempColor(d.temp,d.temp_trip||60)};font-weight:600">${d.temp!=null?d.temp+'°C':'N/A'}</span> · <span class="badge ${d.health_ok?'b-ok':'b-bad'}">${d.health}</span></span>
     </div>`;
   };
   // 复用上方状态栏已声明的 sasDisks/sataDisks（同 filter 逻辑），避免 let 重复声明致 JS 解析崩溃
-  sasDisks = disks.filter(d=>(d.type||'').toUpperCase()==='SAS');
-  sataDisks = disks.filter(d=>{let t=(d.type||'').toUpperCase(); return t==='SATA'||t==='ATA';});
-  let otherDisks = disks.filter(d=>{let t=(d.type||'').toUpperCase(); return t!=='SAS'&&t!=='SATA'&&t!=='ATA';});
+  sasDisks = mergedDisks.filter(d=>(d.type||'').toUpperCase()==='SAS');
+  sataDisks = mergedDisks.filter(d=>{let t=(d.type||'').toUpperCase(); return t==='SATA'||t==='ATA';});
+  let nvmeDisks = mergedDisks.filter(d=>(d.type||'').toUpperCase()==='NVME');
+  let otherDisks = mergedDisks.filter(d=>{let t=(d.type||'').toUpperCase(); return t!=='SAS'&&t!=='SATA'&&t!=='ATA'&&t!=='NVME';});
   let diskMini = '';
+  if(nvmeDisks.length) diskMini += `<div class="disk-group-title">NVMe 硬盘 (${nvmeDisks.length})</div>` + nvmeDisks.map(diskItem).join('');
   if(sasDisks.length) diskMini += `<div class="disk-group-title">SAS 硬盘 (${sasDisks.length})</div>` + sasDisks.map(diskItem).join('');
   if(sataDisks.length) diskMini += `<div class="disk-group-title">SATA 硬盘 (${sataDisks.length})</div>` + sataDisks.map(diskItem).join('');
   if(otherDisks.length) diskMini += `<div class="disk-group-title">其他硬盘 (${otherDisks.length})</div>` + otherDisks.map(diskItem).join('');
   if(!disks.length) diskMini = '<div class="loading">未检测到硬盘</div>';
   let raidDisk = `
-  <div class="detect-cards">
-    ${raidCardsHtml}
-    <div class="card">
-      <h3>磁盘健康 (SMART)</h3>
-      ${diskMini}
+  <div class="grid-2 raid-disk-split">
+    <div class="split-col">${raidCardsHtml}</div>
+    <div class="split-col disk-scroll">
+      <div class="card">
+        <h3>物理硬盘信息</h3>
+        ${diskMini}
+      </div>
     </div>
   </div>`;
   // 存储卷、Docker 容器列表均已移至左侧独立标签页，硬件配置检测仅保留概览状态栏
@@ -2806,13 +3108,13 @@ function renderDocker(dk){
 // ===================== 控制与自动化 =====================
 let AUTOMATION_INITED=false, autoTimer=null, lastAlerts=[];
 function renderAutomation(){
-  return panelHero({icon:ICON_AUTOMATION,title:'控制与自动化',sub:'温度 / 硬盘健康告警、外部通知与一键健康报告',action:'<button class="btn-mini" onclick="exportReport(\'html\')">📄 导出健康报告</button>'}) + `
+  return panelHero({icon:ICON_AUTOMATION,title:'控制与自动化',sub:'温度 / 硬盘健康告警、外部通知与一键健康报告',action:'<button class="btn-mini" onclick="exportReport(\'html\')"><svg class="ico" viewBox="0 0 24 24"><use href="#i-file"/></svg> 导出健康报告</button>'}) + `
   <div class="auto-card">
-    <h3>🔍 活动告警 <span class="badge b-info">每 15 秒刷新</span></h3>
+    <h3><svg class="ico" viewBox="0 0 24 24"><use href="#i-search"/></svg> 活动告警 <span class="badge b-info">每 15 秒刷新</span></h3>
     <ul class="auto-alerts" id="auto-alert-list"><li class="ok">加载中…</li></ul>
   </div>
   <div class="auto-card">
-    <h3>⚙️ 告警规则</h3>
+    <h3><svg class="ico" viewBox="0 0 24 24"><use href="#i-gear"/></svg> 告警规则</h3>
     <label class="dt-toggle"><input type="checkbox" id="au-enabled"> 启用告警监控</label>
     <div class="auto-grid" style="margin:12px 0">
       <div class="auto-field"><label>CPU 最高温度</label><input type="number" id="au-cpu-max" min="40" max="100" value="85"><span class="unit">°C</span></div>
@@ -2824,10 +3126,10 @@ function renderAutomation(){
     <label class="dt-toggle"><input type="checkbox" id="au-disk-health"> 启用硬盘健康告警（SMART pre-fail / 异常）</label>
   </div>
   <div class="auto-card">
-    <h3>📡 通知渠道</h3>
+    <h3><svg class="ico" viewBox="0 0 24 24"><use href="#i-wifi"/></svg> 通知渠道</h3>
     <label class="dt-toggle" style="margin-bottom:12px"><input type="checkbox" id="au-ch-system" checked> 面板内提示（始终记录到应用通知日志）</label>
     <div class="chan">
-      <h4>✈️ Telegram</h4>
+      <h4><svg class="ico" viewBox="0 0 24 24"><use href="#i-send"/></svg> Telegram</h4>
       <label class="dt-toggle"><input type="checkbox" id="au-tg-en"> 启用</label>
       <div class="chan-grid">
         <div class="auto-field"><label>Bot Token</label><input type="text" id="au-tg-token" placeholder="123456:ABCdef..."></div>
@@ -2835,12 +3137,12 @@ function renderAutomation(){
       </div>
     </div>
     <div class="chan">
-      <h4>🔔 Bark</h4>
+      <h4><svg class="ico" viewBox="0 0 24 24"><use href="#i-bell"/></svg> Bark</h4>
       <label class="dt-toggle"><input type="checkbox" id="au-bark-en"> 启用</label>
       <div class="chan-grid"><div class="auto-field"><label>推送地址</label><input type="text" id="au-bark-url" placeholder="https://api.day.app/你的Key"></div></div>
     </div>
     <div class="chan">
-      <h4>📧 邮件 (SMTP)</h4>
+      <h4><svg class="ico" viewBox="0 0 24 24"><use href="#i-mail"/></svg> 邮件 (SMTP)</h4>
       <label class="dt-toggle"><input type="checkbox" id="au-em-en"> 启用</label>
       <div class="chan-grid">
         <div class="auto-field"><label>SMTP 服务器</label><input type="text" id="au-em-host" placeholder="smtp.qq.com"></div>
@@ -2851,18 +3153,18 @@ function renderAutomation(){
       </div>
     </div>
     <div class="auto-actions">
-      <button class="btn-mini" onclick="saveAutomationConfig()">💾 保存配置</button>
-      <button class="btn-mini" onclick="testNotify()">📤 发送测试通知</button>
+      <button class="btn-mini" onclick="saveAutomationConfig()"><svg class="ico" viewBox="0 0 24 24"><use href="#i-save"/></svg> 保存配置</button>
+      <button class="btn-mini" onclick="testNotify()"><svg class="ico" viewBox="0 0 24 24"><use href="#i-upload"/></svg> 发送测试通知</button>
       <span id="au-save-state" class="dt-save-state"></span>
     </div>
   </div>
   <div class="auto-card">
-    <h3>📊 一键健康报告</h3>
+    <h3><svg class="ico" viewBox="0 0 24 24"><use href="#i-report"/></svg> 一键健康报告</h3>
     <div style="font-size:13px;color:var(--muted);margin-bottom:12px">汇总全部硬件状态与活动告警，导出供排查留档。JSON 可直接查看，HTML 为排版报告。<b>遇到风扇/传感器异常</b>时，点「复制诊断信息」一键复制设备原生态（含每台风扇通道的 hwmon::idx、pwm_enable 原始值、温控规则命中情况），直接贴给开发者最快定位。</div>
     <div class="auto-actions">
       <button class="btn-mini" onclick="exportReport('json')">导出 JSON</button>
       <button class="btn-mini" onclick="exportReport('html')">导出 HTML 报告</button>
-      <button class="btn-mini" onclick="copyDiagnostics()">📋 复制诊断信息</button>
+      <button class="btn-mini" onclick="copyDiagnostics()"><svg class="ico" viewBox="0 0 24 24"><use href="#i-clipboard"/></svg> 复制诊断信息</button>
     </div>
   </div>`;
 }
@@ -2902,7 +3204,7 @@ function fillAutomationConfig(c){
 function renderAutomationAlerts(alerts){
   var ul=document.getElementById('auto-alert-list');
   if(!ul) return;
-  if(!alerts||!alerts.length){ ul.innerHTML='<li class="ok">✓ 当前无活动告警</li>'; return; }
+  if(!alerts||!alerts.length){ ul.innerHTML='<li class="ok">'+iconSvg('check')+'当前无活动告警</li>'; return; }
   ul.innerHTML=alerts.map(function(a){
     return '<li class="'+(a.level==='danger'?'danger':'warn')+'"><b>'+esc(a.title)+'</b> — '+esc(a.detail)+'</li>';
   }).join('');
@@ -3022,7 +3324,7 @@ async function saveAutomationConfig(){
   try{
     var r=await fetch('/api/alerts/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)});
     var j=await r.json();
-    if(st){ st.textContent=j.ok?'已保存 ✓':'失败：'+(j.error||''); st.className=j.ok?'dt-save-state ok':'dt-save-state'; }
+    if(st){ st.innerHTML=j.ok?iconSvg('check')+' 已保存':'失败：'+(j.error||''); st.className=j.ok?'dt-save-state ok':'dt-save-state'; }
   }catch(e){ if(st){ st.textContent='请求失败'; st.className='dt-save-state'; } }
 }
 async function testNotify(){
@@ -3086,6 +3388,21 @@ function showAlerts(alerts){
 }
 function dismissAlerts(){ alertsDismissed=true; var b=document.getElementById('alertBanner'); if(b) b.classList.remove('show'); }
 
+let _diskRO=null;
+function syncDiskScroll(){
+  var split=document.querySelector('.raid-disk-split'); if(!split) return;
+  var cols=split.querySelectorAll(':scope > .split-col'); if(cols.length<2) return;
+  var left=cols[0];
+  var right=split.querySelector(':scope > .split-col.disk-scroll'); if(!right) return;
+  var single=getComputedStyle(split).gridTemplateColumns.split(' ').length===1;
+  if(_diskRO){ _diskRO.disconnect(); _diskRO=null; }
+  if(single){ right.style.maxHeight=''; return; }
+  var apply=function(){ right.style.maxHeight=left.offsetHeight+'px'; };
+  apply();
+  _diskRO=new ResizeObserver(apply); _diskRO.observe(left);
+}
+window.addEventListener('resize', syncDiskScroll);
+
 function renderAll(isCache){
   if(!DATA) return;
   if(DATA.error){
@@ -3093,6 +3410,7 @@ function renderAll(isCache){
     return;
   }
   document.getElementById('detect').innerHTML = renderDetect(DATA);
+  syncDiskScroll();
   smartUpdate(document.getElementById('raid'), renderRaid(DATA.raid, DATA.disks));
   smartUpdate(document.getElementById('disks'), renderDisks(DATA.disks));
   smartUpdate(document.getElementById('system'), renderSystem(DATA.system));
@@ -3270,7 +3588,7 @@ async function checkUpdate(force){
     }
   }finally{
     if(force){
-      document.querySelectorAll('.checkUpdateBtn').forEach(btn=>{ btn.disabled = false; btn.textContent = '🔔'; btn.title = '检查更新'; });
+      document.querySelectorAll('.checkUpdateBtn').forEach(btn=>{ btn.disabled = false; btn.innerHTML = iconSvg('bell'); btn.title = '检查更新'; });
     }
   }
 }

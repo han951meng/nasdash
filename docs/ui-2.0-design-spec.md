@@ -199,6 +199,7 @@
 - 变量分两套：`[data-theme="light"]`（默认）和 `[data-theme="dark"]` 覆盖同名 Token。
 - 切换：JS 只切 `document.documentElement.dataset.theme` + 写 `localStorage`，**所有颜色自动跟随**，不会有"漏掉 3 处绿色"的坑。
 - `<head>` 内联防闪脚本：页面加载前读 localStorage 设好主题，避免浅→深闪白。
+- **三档模式**：`light` / `dark` / `auto`。`auto` 跟随飞牛系统明暗（读 `localStorage.fnos-theme-mode`，**不是**浏览器 `prefers-color-scheme`，fnOS webview 不暴露后者），飞牛切换主题时经 `storage` 事件实时跟随。前端关键函数（`getThemeMode` / `fnosThemeMode` / `resolvedDark` / `cycleTheme` / `currentIsDark`）与雪碧图图标机制见 `docs/WORKFLOW.md`「前端架构约定」。
 
 ---
 

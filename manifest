@@ -19,4 +19,4 @@ service_port          = 9800
 checkport             = false
 disable_authorization_path = true
 changelog             = 2.0.1: 论坛反馈修复：温度传感器精简为仅显示主板/CPU/南桥三项；风扇控制去除调速方式与无反馈线异常显示；阵列卡独立页合并进硬件检测去重 2.0.0: 界面全面换新装（蓝紫渐变透明图标、飞牛原生配色对齐），新增硬盘 SMART 自检（A 档）、坏块慢扫（B 档）、风扇控制接管总开关
-checksum              = 19a2e0193ec8907d27f3019d6922b1bb
+checksum              = 40288a61866de79da6be4de6a8037760

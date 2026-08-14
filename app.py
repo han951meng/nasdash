@@ -396,6 +396,34 @@ def _ttl_cache(ttl):
 import threading as _threading
 import glob as _glob
 
+# ===================== 真实 CPU 使用率（跨请求保存 /proc/stat 快照，无阻塞采样）=====================
+_CPU_STAT_LOCK = _threading.Lock()
+_LAST_CPU_STAT = None   # (total, idle) 上一次 /proc/stat 聚合行
+
+def get_cpu_usage():
+    """真实 CPU 使用率（%）：读 /proc/stat 聚合行，与上次快照算 idle 差值。
+    返回 0-100 浮点，或 None（首次无基准）。不阻塞 sleep，每次请求立即返回。"""
+    global _LAST_CPU_STAT
+    line = read_file("/proc/stat", "")
+    m = re.match(r"^cpu\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)", line)
+    if not m:
+        return None
+    cols = list(map(int, m.groups()))
+    idle = cols[3] + cols[4]          # idle + iowait
+    total = sum(cols[:8])             # user..steal（不含 guest，已计入 user）
+    with _CPU_STAT_LOCK:
+        prev = _LAST_CPU_STAT
+        _LAST_CPU_STAT = (total, idle)
+    if prev is None:
+        return None
+    d_total = total - prev[0]
+    d_idle = idle - prev[1]
+    if d_total <= 0:
+        return 0.0
+    usage = (1.0 - d_idle / d_total) * 100.0
+    return max(0.0, min(100.0, round(usage, 1)))
+
+
 # 全局风扇目标状态：key=(hwmon, idx) -> {"mode":"manual"|"auto", "target":0-255}
 FAN_LOCK = _threading.Lock()
 FAN_TARGETS = {}
@@ -2972,13 +3000,17 @@ def _temp_name_zh(raw_name, chip_prefix=None):
     return raw_name
 
 
+@_ttl_cache(60)
 def get_system():
     d = {}
     d["hostname"] = socket.gethostname()
     d["kernel"] = platform.release()
     d["os"] = "Debian 12 (bookworm) / fnOS"
-    # CPU
+    # CPU（基础字段 + 详细字段）
     lscpu = run_cmd(["lscpu"], 5)
+    def lscpu_field(name):
+        m = re.search(rf"^{re.escape(name)}:\s*(.+)$", lscpu, re.MULTILINE)
+        return m.group(1).strip() if m else None
     m = re.search(r"Model name:\s*(.+)", lscpu)
     d["cpu_model"] = m.group(1).strip() if m else "?"
     m = re.search(r"CPU\(s\):\s*(\d+)", lscpu)
@@ -2987,6 +3019,64 @@ def get_system():
     d["cpu_cores"] = int(m.group(1)) if m else 0
     m = re.search(r"CPU max MHz:\s*([\d.]+)", lscpu)
     d["cpu_freq"] = m.group(1) if m else "?"
+
+    def _int(s, default=0):
+        try:
+            return int(s)
+        except Exception:
+            return default
+    def _float(s, default=None):
+        try:
+            return float(s)
+        except Exception:
+            return default
+
+    # 扩展 CPU 详情（架构/缓存/虚拟化等），供前端可收起面板使用
+    cpuinfo = read_file("/proc/cpuinfo", "")
+    first_core = {}
+    for line in cpuinfo.splitlines():
+        if ":" in line:
+            k, v = line.split(":", 1)
+            first_core[k.strip()] = v.strip()
+        if "processor" in line and len(first_core) > 5:
+            break
+    flags = first_core.get("flags", first_core.get("Features", "")).split()
+    virt = None
+    if "vmx" in flags:
+        virt = "Intel VT-x"
+    elif "svm" in flags:
+        virt = "AMD-V"
+    d["cpu_info"] = {
+        "model": d["cpu_model"],
+        "arch": lscpu_field("Architecture"),
+        "vendor": lscpu_field("Vendor ID"),
+        "family": lscpu_field("CPU family"),
+        "model_id": lscpu_field("Model"),
+        "stepping": lscpu_field("Stepping"),
+        "sockets": _int(lscpu_field("Socket(s)"), 1),
+        "cores_per_socket": _int(lscpu_field("Core(s) per socket"), d["cpu_cores"]),
+        "threads_per_core": _int(lscpu_field("Thread(s) per core"), 1),
+        "byte_order": lscpu_field("Byte Order"),
+        "address_sizes": lscpu_field("Address sizes"),
+        "numa_nodes": _int(lscpu_field("NUMA node(s)"), 1),
+        "min_freq_mhz": _float(lscpu_field("CPU min MHz")),
+        "max_freq_mhz": _float(lscpu_field("CPU max MHz")) or _float(d.get("cpu_freq")),
+        "current_freq_mhz": _float(first_core.get("cpu MHz")),
+        "bogomips": _float(first_core.get("BogoMIPS") or first_core.get("bogomips")),
+        "l1d": lscpu_field("L1d cache"),
+        "l1i": lscpu_field("L1i cache"),
+        "l2": lscpu_field("L2 cache"),
+        "l3": lscpu_field("L3 cache"),
+        "virtualization": virt,
+        "features": {
+            "lm": "lm" in flags,      # Long Mode / 64-bit
+            "ht": "ht" in flags,      # Hyper-Threading
+            "aes": "aes" in flags,
+            "avx": "avx" in flags,
+            "avx2": "avx2" in flags,
+            "avx512": any(f.startswith("avx512") for f in flags),
+        },
+    }
     # 负载
     la = read_file("/proc/loadavg").split()
     d["load"] = la[:3] if len(la) >= 3 else ["0","0","0"]
@@ -3864,6 +3954,7 @@ def fmt_kb(kb):
     return f"{kb} KB"
 
 # ===================== 采集：存储卷 =====================
+@_ttl_cache(60)
 def get_storage():
     d = {"raid_arrays": [], "volumes": [], "topology": ""}
     # mdadm RAID
@@ -4068,6 +4159,7 @@ def _split_netio(s):
     tx = _docker_size_to_bytes(parts[1]) if len(parts) >= 2 else None
     return (rx, tx)
 
+@_ttl_cache(60)
 def get_docker():
     """统计 Docker 容器数（运行中/总数），并自动探测每个容器真实监听端口与资源占用"""
     try:
@@ -4261,11 +4353,6 @@ def _md_inline(text):
         text = text.replace('\x00M%d\x00' % i, '<span class="hl-red">%s</span>' % _m)
     text = re.sub(r'`([^`]+?)`', r'<code>\1</code>', text)
     return text
-
-def _render_markdown(md):
-    """极简 markdown → HTML，覆盖手册用到的：标题/段落/列表/表格/引用/分隔线/粗体/行内代码。
-    保留旧接口（一次性返回整段），供非流式场景使用。"""
-    return '\n'.join(_render_markdown_stream(md))
 
 def _render_markdown_stream(md):
     """流式版：逐行/逐块 yield HTML 片段，配合 /manual 的 chunked 响应边传边显。"""
@@ -4558,6 +4645,33 @@ def get_realtime_metrics():
             "cpu_power_valid": _metrics_cur["cpu_power_valid"],
         }
 
+def _enrich_disk_channels(disks, raid):
+    """给每块盘标注通道来源：序列号命中阵列卡 storcli 盘 → 阵列卡通道；否则按接口标主板通道。"""
+    raid_sn = {}
+    if raid and isinstance(raid, dict) and raid.get("mode") == "mega":
+        for dv in raid.get("drives", []):
+            sn = (dv.get("sn") or "").strip().upper()
+            if sn:
+                raid_sn[sn] = dv.get("slot", "")
+    for d in disks:
+        sn = (d.get("serial") or "").strip().upper()
+        if sn and sn in raid_sn:
+            d["channel"] = f"阵列卡通道 c0:{raid_sn[sn]}"
+            d["channel_type"] = "raid"
+        else:
+            t = (d.get("type") or "").lower()
+            if t == "nvme":
+                d["channel"] = "主板 M.2"
+                d["channel_type"] = "mobo_nvme"
+            elif t == "sas":
+                d["channel"] = "主板 SAS 直连"
+                d["channel_type"] = "mobo_sas"
+            else:
+                d["channel"] = "主板 SATA 直连"
+                d["channel_type"] = "mobo_sata"
+    return disks
+
+
 @app.route("/api/all")
 def api_all():
     t0 = time.time()
@@ -4601,6 +4715,8 @@ def api_all():
                 "fnos_version": _fnos_version(),
             }
         try:
+            # 给每块盘标注通道来源（阵列卡 / 主板），供前端「物理硬盘信息」区分
+            result["disks"] = _enrich_disk_channels(result.get("disks", []) or [], result.get("raid") or {})
             rt = get_realtime_metrics()
             result["net"] = rt["net"]
             result["diskio"] = rt["disk"]
@@ -4642,6 +4758,10 @@ def api_system():
         except Exception:
             memory_modules = {"modules": [], "total_gb": 0, "slots": 0, "brand_summary": ""}
         system = {**get_system(), "board": board, "memory_modules": memory_modules}
+        try:
+            system["cpu_usage"] = get_cpu_usage()
+        except Exception:
+            system["cpu_usage"] = None
         return jsonify({"system": system, "time": _panel_time(), "elapsed": round(time.time() - t0, 2)})
     except Exception as e:
         return jsonify({"error": str(e), "time": _panel_time()})
@@ -4673,6 +4793,12 @@ def api_disks():
             ok, reason = _is_standalone_disk(d.get("dev"))
             d2["standalone"], d2["standalone_reason"] = ok, reason
             disks.append(d2)
+        # 标注通道来源（阵列卡 / 主板），供前端「物理硬盘信息」区分
+        try:
+            raid = get_raid_card()
+        except Exception:
+            raid = {}
+        disks = _enrich_disk_channels(disks, raid)
         return jsonify({"disks": disks, "time": _panel_time(), "elapsed": round(time.time() - t0, 2)})
     except Exception as e:
         return jsonify({"error": str(e), "time": _panel_time()})
