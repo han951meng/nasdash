@@ -14,11 +14,12 @@ desktop_applaunchname = com.dashboard.nasdash.main
 ctl_stop              = true
 ; 统一网关模式：声明 service_port=9800（仅 127.0.0.1 监听，不对外暴露），
 ; 飞牛 appcenter 会为本应用创建 gateway/sac 入口，网关/应用中心均可用此端口。
-; 统一网关的 gatewaySocket/gatewayPrefix 写在 ui/config（值为 target/app.sock，相对应用根目录
-; /var/apps/com.dashboard.nasdash 解析为 /var/apps/com.dashboard.nasdash/target/app.sock，
-; 与 app.py 实际监听的 socket 一致），应用中心据此创建并维持 gateway 入口。
+; ⚠ checkport 必须 = true：飞牛靠探测 service_port 判断应用就绪并维持 gateway 入口；
+;   checkport=false 会让飞牛跳过端口探测 -> 不注册/周期性清空 entry -> 网关转发 404。
+; 统一网关的 gatewaySocket 写 Socket【文件名】app.sock（对齐 file-tools/app-cleaner，
+;   非路径！飞牛按 TRIM_APPDEST 解析成 /vol1/@appcenter/{app}/app.sock，即 app.py 实际
+;   监听的 socket）；gatewayPrefix=/app/com.dashboard.nasdash。应用中心据此创建并维持入口。
 service_port          = 9800
-checkport             = false
-disable_authorization_path = true
-changelog             = 2.0.3: 网关自愈冷却从 180s 降至 60s(飞牛清空周期约 1min，60s 已足够防风暴)；启动时先 pkill 旧看门狗进程再启动新的(防止旧版 detached 进程阻塞新版代码生效，避免间歇性 404) 2.0.2: 温度监控独立页去重优化（移除与系统资源页重复的 CPU/内存指标，新增最高/平均温度、测点计数与状态徽章）；三档明暗主题跟随飞牛；SVG 线框图标对齐飞牛原生风格；真实 CPU 使用率采集 2.0.1: 论坛反馈修复：温度传感器精简为仅显示主板/CPU/南桥三项；风扇控制去除调速方式与无反馈线异常显示；阵列卡独立页合并进硬件检测去重 2.0.0: 界面全面换新装（蓝紫渐变透明图标、飞牛原生配色对齐），新增硬盘 SMART 自检（A 档）、坏块慢扫（B 档）、风扇控制接管总开关
-checksum              = 10f6de7dc918ef0f31212d3a14b1a9f0
+checkport             = true
+changelog             = 2.0.3: 修复应用中心打开 404(网关入口根因：gatewaySocket 改为 Socket 文件名 app.sock、manifest checkport 改为 true，对齐官方第三方应用注册方式)；网关自愈冷却降至 60s；启动时先 pkill 旧看门狗再启动新的 2.0.2: 温度监控独立页去重优化（移除与系统资源页重复的 CPU/内存指标，新增最高/平均温度、测点计数与状态徽章）；三档明暗主题跟随飞牛；SVG 线框图标对齐飞牛原生风格；真实 CPU 使用率采集 2.0.1: 论坛反馈修复：温度传感器精简为仅显示主板/CPU/南桥三项；风扇控制去除调速方式与无反馈线异常显示；阵列卡独立页合并进硬件检测去重 2.0.0: 界面全面换新装（蓝紫渐变透明图标、飞牛原生配色对齐），新增硬盘 SMART 自检（A 档）、坏块慢扫（B 档）、风扇控制接管总开关
+checksum              = d3018e96f13037d5fc25477972ac5ba8
