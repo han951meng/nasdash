@@ -15,9 +15,10 @@ fi
 PYTHON=$(which python3 2>/dev/null || echo "/usr/bin/python3")
 LOG_FILE="${TRIM_PKGVAR}/app.log"
 
-# 网关重启冷却(方案A, 2026-08-14): self_heal 与常驻看门狗共享同一冷却时间戳，
-# 避免"频繁 app 重启/飞牛清空 entry"导致反复重启整个飞牛统一网关(影响所有走网关的 app)。
-RESTART_COOLDOWN=1800
+# 网关重启冷却(2026-08-14 修正): self_heal 与常驻看门狗共享同一冷却时间戳，仅防重启风暴。
+# 根因是 ui/config 的 gatewaySocket 路径错(应为 target/app.sock)，已修正；此处冷却只需短到
+# 确保"飞牛清空 entry -> 看门狗补 DB -> 重启网关重载"的恢复链路不被阻断(180s 远小于清空周期)。
+RESTART_COOLDOWN=60   # 网关重启冷却: 60s 防重启风暴(飞牛清空周期~1min，60s 已足够)
 RESTART_TS="${TRIM_PKGVAR:-/var/apps/com.dashboard.nasdash/var}/gw_restart_ts"
 gateway_restart_allowed() {
     local now ts
@@ -71,8 +72,14 @@ launch_watchdog() {
     local WD="$APP_DIR/../cmd/gw_watchdog.sh"
     [ -x "$WD" ] || WD="/var/apps/com.dashboard.nasdash/cmd/gw_watchdog.sh"
     [ -f "$WD" ] || return 0
-    # 已存在运行中的看门狗进程则不重复启动(按进程名判断，比 pidfile 可靠，避免陈旧 pid 误判)
+    # 启动前先杀掉任何旧看门狗进程(可能来自上一版代码，detached 后 fnOS 管不到，
+    # admin 无权限杀 root 进程，必须在这里用 root 身份 pkill)。否则旧进程活着时
+    # 下面"按进程名判断是否已在运行"会返回 true，导致新版代码永远不被启动，
+    # 出现"装了修复版但跑的还是老逻辑"的间歇性 404。
+    pkill -9 -f "[g]w_watchdog.sh" 2>/dev/null
+    sleep 0.5  # 等旧进程彻底退出，避免 races
     if ps -ef 2>/dev/null | grep -q "[g]w_watchdog.sh"; then
+        echo "$(date '+%F %T') WARN: old gw_watchdog.sh still running after pkill, skipping" >> "${TRIM_PKGVAR:-/var/apps/com.dashboard.nasdash/var}/gateway_heal.log" 2>/dev/null
         return 0
     fi
     setsid bash "$WD" </dev/null >/dev/null 2>&1 &

@@ -1,6 +1,6 @@
 # nasdash
 
-**当前版本：v2.0.2** · [下载最新 fpk](https://github.com/han951meng/nasdash/releases/latest) · [📖 操作手册](docs/使用手册.md) · [💬 飞牛社区讨论帖](https://club.fnnas.com/forum.php?mod=viewthread&tid=67060)
+**当前版本：v2.0.3** · [下载最新 fpk](https://github.com/han951meng/nasdash/releases/latest) · [📖 操作手册](docs/使用手册.md) · [💬 飞牛社区讨论帖](https://club.fnnas.com/forum.php?mod=viewthread&tid=67060)
 
 飞牛OS（fnOS）NAS 硬件监控面板 —— FPK 应用包
 

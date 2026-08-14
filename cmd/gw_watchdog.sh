@@ -3,16 +3,17 @@ cd /  # 防止 uninstall 删除 APP_DIR 后本进程 cwd 指向已删目录，�
 # 常驻看门狗：每 120s 校验飞牛统一网关 entry 的 gateway_socket，
 # 若被 appcenter 重建/清空则自动补回。由 cmd/main 以 setsid 分离启动。
 #
-# 方案A优化(2026-08-14): 飞牛会周期性清空第三方 entry.gateway_socket，旧逻辑每次修复都
-# systemctl restart trim_http_cgi 重启整个飞牛统一网关(影响所有走网关的 app)。现加冷却限频:
-# 两次网关重启之间至少间隔 RESTART_COOLDOWN 秒，避免"飞牛频繁清空→频繁重启整网关"扰民。
-# 修 DB 不受冷却影响(随时补正确)，仅"重启网关使其重载"受限频保护。
+# 冷却说明(2026-08-14 修正): 飞牛会周期性清空第三方 entry.gateway_socket(根因是 ui/config 的
+# gatewaySocket 路径填错 -> 飞牛算出的 socket 不存在 -> 不肯填 entry -> 留空被清空；已修正为
+# target/app.sock)。看门狗发现 entry 被清空就补回 DB 并重启网关使其重载(否则网关仍用旧空
+# entry -> 404)。此处冷却仅防"修复后 fnOS 立刻又清空"导致的重启风暴，设 180s(略大于看门狗
+# 轮询 120s)即可：既能每次清空都恢复，又不会在单次清除里连撞重启。修 DB 不受冷却影响。
 SOCK_TARGET="/var/apps/com.dashboard.nasdash/target/app.sock"
 PREFIX="/app/com.dashboard.nasdash"
 PKGVAR="${TRIM_PKGVAR:-/var/apps/com.dashboard.nasdash/var}"
 HEAL_LOG="$PKGVAR/gateway_heal.log"
 RESTART_TS="$PKGVAR/gw_restart_ts"
-RESTART_COOLDOWN=1800   # 网关重启冷却: 两次重启至少间隔 1800s(30分钟)，抑制频繁重启整网关
+RESTART_COOLDOWN=60   # 网关重启冷却: 60s 防重启风暴(飞牛清空周期~1min，冷却略小于周期)
 PSQL_BIN="$(command -v psql 2>/dev/null || echo /usr/bin/psql)"
 [ -x "$PSQL_BIN" ] || exit 0
 mkdir -p "$PKGVAR" 2>/dev/null
