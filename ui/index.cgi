@@ -27,8 +27,14 @@ target_url="$target_url$target_path"
 if [ -n "$target_query" ]; then
     target_url="$target_url?$target_query"
 fi
-curl_args=(-s --include -X "$REQUEST_METHOD")
 
+curl_args=(-s --include -X "$REQUEST_METHOD")
+# 注入飞牛用户身份（飞牛已校验登录态，HTTP_X_TRIM_* 为可信身份，转成 header 供后端 require_admin 鉴权）
+if [ -n "$HTTP_X_TRIM_USERID" ]; then
+    curl_args+=(-H "X-Trim-Userid: $HTTP_X_TRIM_USERID")
+    curl_args+=(-H "X-Trim-Username: ${HTTP_X_TRIM_USERNAME:-}")
+    curl_args+=(-H "X-Trim-Isadmin: ${HTTP_X_TRIM_ISADMIN:-false}")
+fi
 if [ -n "$HTTP_COOKIE" ]; then
     curl_args+=(-H "Cookie: $HTTP_COOKIE")
 fi
