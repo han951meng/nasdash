@@ -5893,6 +5893,49 @@ def _dispatch_notifications(text, cfg):
         res["system"] = True
     return res
 
+def _read_app_log(max_lines=60):
+    """读取应用运行日志尾部（供健康报告排查 bug 用）。找不到返回 None。"""
+    candidates = [
+        os.environ.get("TRIM_PKGVAR", "") + "/app.log",
+        "/vol1/@appdata/com.dashboard.nasdash/app.log",
+        "/var/apps/com.dashboard.nasdash/var/app.log",
+    ]
+    for p in candidates:
+        if p and os.path.isfile(p):
+            try:
+                with open(p, "r", encoding="utf-8", errors="replace") as f:
+                    lines = f.readlines()[-max_lines:]
+                return "".join(lines)
+            except Exception:
+                pass
+    return None
+
+
+def _parse_log_entries(log_tail):
+    """把运行日志解析成 [(时间戳, 级别, 内容)]，级别按内容推断，便于报告分级展示。
+
+    ERROR：Traceback/Error/Exception/failed/失败/错误；WARN：warn/warning/警告；其余 INFO。
+    无时间戳的行原样保留（时间戳为空串）。
+    """
+    entries = []
+    for line in (log_tail or "").splitlines():
+        s = line.strip()
+        if not s:
+            continue
+        m = re.match(r"^(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2})[ ,]*(.*)$", s)
+        ts = m.group(1) if m else ""
+        text = (m.group(2) if m else s)
+        low = text.lower()
+        if any(k in low for k in ("traceback", "error", "exception", "failed", "失败", "错误")):
+            lvl = "ERROR"
+        elif any(k in low for k in ("warn", "warning", "警告")):
+            lvl = "WARN"
+        else:
+            lvl = "INFO"
+        entries.append((ts, lvl, text))
+    return entries
+
+
 def build_health_report():
     """汇总当前全部硬件状态 + 活动告警，生成健康报告快照。"""
     try:
@@ -5921,6 +5964,7 @@ def build_health_report():
         "uptime": system.get("uptime"),
         "raid": raid, "disks": disks, "system": system_full,
         "storage": storage, "docker": docker, "fans": fans, "alerts": alerts,
+        "log_tail": _read_app_log(),
     }
 
 def build_diagnostics():
@@ -6062,6 +6106,17 @@ def _render_report_html(rep):
     .alert-box ul{margin:0;padding-left:20px}
     .alert-box li{margin:3px 0}
     .ok{color:#1a7f37} .warn{color:#b45309} .danger{color:#c0392b}
+    .logstat{padding:9px 12px;border:1px solid #d4dce6;border-top:none;background:#f4f8fb;
+         font-size:12.5px;margin-bottom:4px}
+    .logstat b{font-size:13px}
+    .log-wrap{border:1px solid #d4dce6;border-top:none;margin-bottom:4px;max-height:380px;overflow:auto}
+    .log-line{font-family:Consolas,Menlo,monospace;font-size:11.5px;padding:4px 12px;
+         border-bottom:1px solid #eef1f5;white-space:pre-wrap;word-break:break-all;line-height:1.5}
+    .log-line:last-child{border-bottom:none}
+    .log-line .lt{color:#8a97a5;margin-right:8px}
+    .log-line.lv-err{background:#fdf0ef;color:#a93226}
+    .log-line.lv-warn{background:#fdf6ec;color:#9a6700}
+    .log-line.lv-info{color:#3d5167}
     .footer{color:#5a6b7b;font-size:12px;margin-top:26px;border-top:1px solid #d4dce6;padding-top:10px}
     @media print{body{padding:0}
       .cat,table.data th{print-color-adjust:exact;-webkit-print-color-adjust:exact}}
@@ -6110,6 +6165,29 @@ def _render_report_html(rep):
         alert_box = f"<div class='alert-box'><ul>{ar}</ul></div>"
     else:
         alert_box = "<div class='alert-box'><span class='ok'>无活动告警 ✓</span></div>"
+
+    # 运行日志（诊断）：解析分级，错误/警告优先展示，与上方告警呼应，便于看 bug
+    log_entries = _parse_log_entries(rep.get("log_tail"))
+    n_err = sum(1 for _, lvl, _ in log_entries if lvl == "ERROR")
+    n_warn = sum(1 for _, lvl, _ in log_entries if lvl == "WARN")
+    if log_entries:
+        log_rows_html = "".join(
+            f"<div class='log-line lv-{lvl.lower()}'><span class='lt'>{esc(ts)}</span>{esc(text)}</div>"
+            for ts, lvl, text in log_entries)
+        if n_err or n_warn:
+            stat = (f"运行日志共 {len(log_entries)} 行：<b class='danger'>错误 {n_err}</b> · "
+                    f"<b class='warn'>警告 {n_warn}</b> · 常规 {len(log_entries) - n_err - n_warn}"
+                    f"（下方按级别着色，错误/警告优先置顶展示）")
+            # 错误/警告行优先，常规行放最后
+            log_entries_sorted = sorted(log_entries, key=lambda e: 0 if e[1] == "ERROR" else (1 if e[1] == "WARN" else 2))
+            log_rows_html = "".join(
+                f"<div class='log-line lv-{lvl.lower()}'><span class='lt'>{esc(ts)}</span>{esc(text)}</div>"
+                for ts, lvl, text in log_entries_sorted)
+        else:
+            stat = f"运行日志共 {len(log_entries)} 行，最近日志无错误 ✓（常规信息）"
+        log_html = f"<div class='logstat'>{stat}</div><div class='log-wrap'>{log_rows_html}</div>"
+    else:
+        log_html = "<div class='empty'>（暂无运行日志）</div>"
 
     sys_rows = [
         ["CPU 型号", fmt(sys_.get("cpu_model"))],
@@ -6211,6 +6289,8 @@ def _render_report_html(rep):
         ])
         + cat("活动告警")
         + alert_box
+        + cat("运行日志（诊断）")
+        + log_html
         + cat("系统")
         + props(sys_rows)
         + cat("主板 / BIOS")
