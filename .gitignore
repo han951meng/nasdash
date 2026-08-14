@@ -29,3 +29,4 @@ sample_report.html
 
 # macOS 资源分叉文件（非源码，勿入库）
 .DS_Store
+nasdash-fnpack-*.fpk
