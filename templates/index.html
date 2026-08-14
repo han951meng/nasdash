@@ -131,6 +131,8 @@
   .b-ok{background:rgba(0,180,42,.12);color:#0A8C20}
   .b-warn{background:rgba(255,125,0,.12);color:#C85A00}
   .b-bad{background:rgba(245,63,63,.12);color:#C7392F}
+  .tag-sleep{display:inline-block;margin-left:6px;padding:1px 7px;border-radius:var(--r-sm);font-size:11px;font-weight:600;background:rgba(0,180,42,.12);color:#0A8C20;vertical-align:middle}
+  .disk-busy{display:block;font-size:11px;color:var(--text-3);margin-top:2px;font-weight:400}
   .b-info{background:var(--c-primary-bg);color:var(--primary)}
   .b-muted{background:var(--fill);color:var(--text-3)}
   .disk-card{position:relative}
@@ -1619,7 +1621,9 @@ function renderTemps(s){
 function fmtDiskRows(diskio){
   return (diskio||[]).map(d=>{
     let label = [d.brand, d.model, d.size].filter(Boolean).join(' · ') || '';
-    return `<div class="kv"><span class="k">${esc(d.device)}${label?'<br><small style="color:var(--muted)">'+esc(label)+'</small>':''}</span><span class="v" style="font-size:12px">读${fmtSpeed(d.read_rate)} / 写${fmtSpeed(d.write_rate)}</span></div>`;
+    let badge = (d.standby)?' <span class="tag-sleep">待机</span>':'';
+    let busy = (typeof d.busy==='number')?`<span class="disk-busy">占用 ${d.busy}%</span>`:'';
+    return `<div class="kv"><span class="k">${esc(d.device)}${badge}${label?'<br><small style="color:var(--muted)">'+esc(label)+'</small>':''}</span><span class="v" style="font-size:12px">读${fmtSpeed(d.read_rate)} / 写${fmtSpeed(d.write_rate)}${busy}</span></div>`;
   }).join('') || '<div class="loading">无数据</div>';
 }
 

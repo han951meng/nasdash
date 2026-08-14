@@ -4501,22 +4501,29 @@ def _read_net_bytes():
         pass
     return res
 
-def _read_disk_sectors():
-    """返回 {dev: (rd_sectors, wr_sectors)}，过滤分区(数字结尾)与 loop/ram"""
+def _read_disk_stats():
+    """返回 {dev: (rd_sectors, wr_sectors, io_ticks)}，过滤分区(数字结尾)与 loop/ram。
+    io_ticks = /proc/diskstats 第13列：设备累计花在 I/O 上的毫秒数；
+    两次采样差 / 采样间隔毫秒 = 该盘 busy 占用率(%)。"""
     res = {}
     try:
         with open("/proc/diskstats") as f:
             for line in f:
                 cols = line.split()
-                if len(cols) < 11:
+                if len(cols) < 13:
                     continue
                 dev = cols[2]
                 if dev.startswith(("loop", "ram")) or dev[-1].isdigit():
                     continue
-                res[dev] = (int(cols[5]), int(cols[9]))
+                res[dev] = (int(cols[5]), int(cols[9]), int(cols[12]))
     except Exception:
         pass
     return res
+
+# 每块盘最近一次有 I/O 的时刻，用于派生 standby（连续无 I/O 满阈值即视为待机）。
+# 与调速线程判定口径一致：基于 /proc/diskstats 扇区差，轻量且不唤醒休眠盘。
+_DISK_LAST_IO = {}
+_DISK_STANDBY_IDLE_MIN = 5   # 分钟；与风扇休眠 idle_minutes 默认值对齐
 
 def _read_rapl_energy():
     """读 CPU 封装能耗(微焦)，root 可读；返回 energy_uj 或 None。admin 无权限→None。"""
@@ -4600,19 +4607,32 @@ def metrics_collect_loop():
                 _metrics_prev["net"] = net_now
                 _metrics_cur["net"] = net_out
             # 磁盘 I/O
-            disk_now = _read_disk_sectors()
+            disk_now = _read_disk_stats()
             disk_out = []
             with _METRICS_LOCK:
                 prev = _metrics_prev["disk"]
-                for dev, (rd, wr) in disk_now.items():
-                    prd, pwr = prev.get(dev, (rd, wr))
+                for dev, (rd, wr, iot) in disk_now.items():
+                    prd, pwr, piot = prev.get(dev, (rd, wr, iot))
                     dt = 2.0
                     rd_rate = max(0.0, (rd - prd) * 512 / dt)
                     wr_rate = max(0.0, (wr - pwr) * 512 / dt)
+                    # busy%：io_ticks 两次采样差 / 间隔毫秒(dt*1000)，钳到 [0,100]
+                    busy = 0.0
+                    if iot >= piot and dt > 0:
+                        busy = max(0.0, min(100.0, (iot - piot) / (dt * 1000) * 100))
+                    # standby：连续无 I/O（扇区计数未变）满阈值即视为待机，不唤醒盘
+                    if rd != prd or wr != pwr:
+                        _DISK_LAST_IO[dev] = now
+                        standby = False
+                    else:
+                        last = _DISK_LAST_IO.get(dev)
+                        standby = last is not None and (now - last) >= _DISK_STANDBY_IDLE_MIN * 60
                     disk_out.append({
                         "device": dev,
                         "read_rate": round(rd_rate, 1),   # bytes/s，前端动态格式化为 B/s/KB/s/MB/s
                         "write_rate": round(wr_rate, 1),
+                        "busy": round(busy, 1),           # 占用率 %，对齐飞牛 disk[].busy
+                        "standby": bool(standby),         # 待机标志，对齐飞牛 disk[].standby（diskstats 轻量代理）
                     })
                 _metrics_prev["disk"] = disk_now
                 _metrics_cur["disk"] = disk_out
