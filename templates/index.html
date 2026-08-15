@@ -524,7 +524,12 @@
   .dt-live b{font-size:16px;color:var(--green)}
   .dt-toggle{display:inline-flex;align-items:center;gap:8px;font-size:14px;font-weight:500;cursor:pointer}
   .dt-toggle input{accent-color:var(--blue);flex-shrink:0}
-  .dt-toggle input[type=number]{width:74px;padding:4px 8px;font-size:14px;line-height:1.4;border:1px solid var(--border);border-radius:6px;background:#fff;color:var(--text)}
+  .dt-toggle .num-stepper{display:inline-flex;align-items:center;gap:2px;flex-shrink:0}
+  .dt-toggle .num-stepper input{width:44px;padding:4px 2px;font-size:14px;line-height:1.4;text-align:center;border:1px solid var(--border);border-radius:6px;background:#fff;color:var(--text);-moz-appearance:textfield;appearance:textfield}
+  .dt-toggle .num-stepper input::-webkit-inner-spin-button,.dt-toggle .num-stepper input::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
+  .dt-toggle .num-stepper .ns-btn{width:24px;height:26px;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:600;line-height:1;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);cursor:pointer;user-select:none;padding:0}
+  .dt-toggle .num-stepper .ns-btn:hover{border-color:var(--blue);color:var(--blue)}
+  .dt-toggle .num-stepper .ns-btn:active{transform:scale(.94)}
   /* 检测新版本横幅 */
   .update-banner{display:none;align-items:center;justify-content:space-between;gap:14px;background:linear-gradient(135deg,#ea580c,#f59e0b);color:#fff;padding:11px 18px;border-radius:10px;margin-bottom:16px;box-shadow:0 2px 10px rgba(234,88,12,.28);font-size:14px}
   .update-banner.show{display:flex}
@@ -594,7 +599,12 @@
   .auto-field .unit{font-size:11px;color:var(--muted)}
   .dt-toggle{display:flex;align-items:center;gap:8px;font-size:13px;margin:8px 0;cursor:pointer;color:var(--text)}
   .dt-toggle input[type=checkbox]{width:16px;height:16px;accent-color:var(--primary)}
-  .dt-toggle input[type=number]{width:74px;padding:4px 8px;font-size:14px;line-height:1.4;border:1px solid var(--border);border-radius:6px;background:#fff;color:var(--text);flex-shrink:0}
+  .dt-toggle .num-stepper{display:inline-flex;align-items:center;gap:2px;flex-shrink:0}
+  .dt-toggle .num-stepper input{width:44px;padding:4px 2px;font-size:14px;line-height:1.4;text-align:center;border:1px solid var(--border);border-radius:6px;background:#fff;color:var(--text);-moz-appearance:textfield;appearance:textfield}
+  .dt-toggle .num-stepper input::-webkit-inner-spin-button,.dt-toggle .num-stepper input::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
+  .dt-toggle .num-stepper .ns-btn{width:24px;height:26px;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:600;line-height:1;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);cursor:pointer;user-select:none;padding:0}
+  .dt-toggle .num-stepper .ns-btn:hover{border-color:var(--blue);color:var(--blue)}
+  .dt-toggle .num-stepper .ns-btn:active{transform:scale(.94)}
   .chan{background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:12px}
   .chan h4{margin:0 0 10px;font-size:13px;color:var(--text);display:flex;align-items:center;gap:8px}
   .chan-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}
@@ -2025,7 +2035,7 @@ function renderSleepLinkPanel(){
     +'</div>'
     +'<div class="sleep-panel-body" id="sleep-panel-body" style="display:none">'
       +'<label class="dt-toggle"><input type="checkbox" id="sl-sleep"> 监控盘全部休眠时停转风扇</label>'
-      +'<label class="dt-toggle">监控盘连续无读写满 <input type="text" inputmode="numeric" pattern="[0-9]*" id="sl-idle" maxlength="3" value="5" class="w52"> 分钟也停转风扇</label>'
+      +'<label class="dt-toggle">监控盘连续无读写满 <span class="num-stepper"><button type="button" class="ns-btn" onclick="stepIdle(-1)">−</button><input type="text" inputmode="numeric" pattern="[0-9]*" id="sl-idle" maxlength="3" value="5"><button type="button" class="ns-btn" onclick="stepIdle(1)">+</button></span> 分钟也停转风扇</label>'
       +'<div class="dt-actions"><button class="btn-mini" onclick="saveSleepLink()">保存</button><span class="dt-save-state" id="sl-state"></span></div>'
       +'<div class="dt-hint">选「硬盘温度」为温度源的风扇，会在监控盘全部休眠或连续空闲时自动停转。监控盘默认取全部硬盘；此联动仅控制「是否停转」，不影响温度曲线调速。</div>'
       +'<div class="dt-hint-title">硬盘已经休眠，风扇却还在转？按顺序对一下：</div>'
@@ -2055,6 +2065,14 @@ async function initSleepLink(){
     var sl=document.getElementById('sl-sleep'); if(sl) sl.checked=(c.sleep_stop!==false);
     var idle=document.getElementById('sl-idle'); if(idle) idle.value=(c.idle_minutes!=null?c.idle_minutes:5);
   }catch(e){}
+}
+function stepIdle(delta){
+  // +/- 步进按钮：读取当前值，夹在 1~120 之间
+  var el=document.getElementById('sl-idle'); if(!el) return;
+  var v=parseInt(el.value,10); if(isNaN(v)) v=5;
+  v=Math.min(120, Math.max(1, v+delta));
+  el.value=v;
+  el.dispatchEvent(new Event('input', {bubbles:true}));
 }
 async function saveSleepLink(){
   var st=document.getElementById('sl-state');
