@@ -1401,8 +1401,9 @@ function diskFeatureClean(feat, isDualActuator){
   return String(feat).replace(/双磁臂?\(双执行器\)|双执行器/g,'').trim();
 }
 // 传感器“电压”的中文友好名 + 解释（看不懂的给悬浮）
-function voltNameCn(name){
+function voltNameCn(name, value){
   var n = (name||'').trim();
+  var v = parseFloat(value);
   var map = {
     'VCORE':   {cn:'CPU 核心电压', tip:'CPU 内部核心的工作电压，会随负载自动微调'},
     'VCCIO':   {cn:'CPU IO 电压', tip:'CPU 输入输出接口的辅助电压'},
@@ -1435,14 +1436,20 @@ function voltNameCn(name){
     'VIN8':    {cn:'辅助电压 8', tip:'主板传感器芯片的第 8 路辅助电压输入，不同主板定义不同'},
     'VREF':    {cn:'参考电压', tip:'电路用的基准参考电压'}
   };
-  // 常见主板传感器芯片（如 nct6797）原始通道 in0~in15：不同主板 BIOS 接线差异巨大
-  // （如 MSI B360M MORTAR 的 NCT6797D in4 是 VTT 1V 级别而非 12V），硬编码必然误导用户。
-  // 改为统一提示「主板传感器电压 N（含义以主板手册为准）」，让用户按主板文档理解。
   var up = n.toUpperCase().replace(/\s+/g,'').replace(/_LSB|_MSB$/,'');
   if(map[up]) return map[up];
-  // in0~in15 / vin0~vin15 统一兜底：不再硬编码具体含义，避免误导
+  // 原始通道 in0~in15 / vin0~vin15：不同主板 BIOS 接线差异巨大（如 MSI B360M MORTAR 的
+  // NCT6797D in4 是 VTT 1V 级而非 12V），无法硬编码含义。改按【数值】推断类别，让用户有参考：
+  // 11.4~12.6=12V / 4.5~5.5=5V / 3.0~3.6=3.3V / 2.4~3.0=待机或电池 / 0.4~2.4=CPU 内存低压轨。
+  if(!isNaN(v)){
+    if(v>=10.5 && v<=13.8) return {cn:'12V 供电', tip:'按当前数值推断为 12V 供电轨（原始通道 '+n+'）。正常 11.4~12.6V，低于 10V 或高于 13.8V 需警惕电源/主板问题。'};
+    if(v>=4.2 && v<=5.8)   return {cn:'5V 供电', tip:'按当前数值推断为 5V 供电轨（原始通道 '+n+'）。正常 4.5~5.5V。'};
+    if(v>=3.0 && v<=3.6)   return {cn:'3.3V 供电', tip:'按当前数值推断为 3.3V 供电轨（原始通道 '+n+'）。正常 3.1~3.5V。'};
+    if(v>=2.4 && v<3.0)    return {cn:'待机/电池', tip:'按当前数值推断为待机或纽扣电池电压（原始通道 '+n+'）。纽扣电池低于 2.5V 会丢 BIOS 设置。'};
+    if(v>=0.4 && v<2.4)    return {cn:'CPU/内存低压轨', tip:'按当前数值推断为 CPU 核心/IO/内存等 1V 级低压轨（原始通道 '+n+'，如 VCCSA/VTT/VCCIO/VCORE）。这类电压会随负载微调，轻微波动正常。'};
+  }
   var m = up.match(/^(IN|VIN)(\d+)$/);
-  if(m) return {cn:'主板传感器电压 '+m[2]+'（以主板手册为准）', tip:'主板传感器芯片的原始电压通道 '+n+'。不同主板 BIOS 接线差异巨大，'+n+' 在你主板上具体监控哪个电压（如 12V/5V/3.3V/CPU 核心/VCCSA/VTT 等），请看主板手册或 BIOS Hardware Monitor 页对照。数值本身是传感器实时读数。'};
+  if(m) return {cn:'传感器电压 '+m[2], tip:'主板传感器芯片的原始电压通道 '+n+'。数值无法对应常见电源轨时请对照主板手册。'};
   return {cn:n, tip:''};
 }
 function smartTip(label){
@@ -1520,23 +1527,27 @@ function renderSystem(s){
     return `<div class="kv"><span class="k">${fanName}${voltBadge}${modeStr}</span><span class="v" style="color:${color}">${rpmStr}${pwmStr}</span></div>`;
   }).join('');
   // 电压：关键几路常显并带正常/异常状态；其余收进可折叠的“专业电压”
-  var KEY_VOLTS = {'12V 主供电':1,'5V 主供电':1,'3.3V 主供电':1,'主板电池电压':1};
+  var KEY_VOLTS = {'12V 主供电':1,'5V 主供电':1,'3.3V 主供电':1,'主板电池电压':1,'12V 供电':1,'5V 供电':1,'3.3V 供电':1,'待机/电池':1};
   function voltStatus(name, value){
     var up=(name||'').toUpperCase().replace(/\s+/g,'');
     var v=parseFloat(value);
     if(isNaN(v)) return {cls:'',txt:''};
     if(up==='VBAT'||up==='主板电池电压'){ return v<2.5?{cls:'b-warn',txt:'电池偏低'}:{cls:'b-ok',txt:'正常'}; }
-    if(up==='+12V'||up==='12V 主供电'||up==='12V'){ return (v<10||v>13.8)?{cls:'b-warn',txt:'偏离较大'}:{cls:'b-ok',txt:'正常'}; }
-    if(up==='+5V'||up==='5V 主供电'||up==='5V'){ return (v<4.5||v>5.5)?{cls:'b-warn',txt:'偏离较大'}:{cls:'b-ok',txt:'正常'}; }
-    if(up==='+3.3V'||up==='3.3V 主供电'||up==='3VCC'||up==='3.3V'){ return (v<3.0||v>3.6)?{cls:'b-warn',txt:'偏离较大'}:{cls:'b-ok',txt:'正常'}; }
+    if(up==='+12V'||up==='12V 主供电'||up==='12V'||up==='12V供电'){ return (v<10||v>13.8)?{cls:'b-warn',txt:'偏离较大'}:{cls:'b-ok',txt:'正常'}; }
+    if(up==='+5V'||up==='5V 主供电'||up==='5V'||up==='5V供电'){ return (v<4.5||v>5.5)?{cls:'b-warn',txt:'偏离较大'}:{cls:'b-ok',txt:'正常'}; }
+    if(up==='+3.3V'||up==='3.3V 主供电'||up==='3VCC'||up==='3.3V'||up==='3.3V供电'){ return (v<3.0||v>3.6)?{cls:'b-warn',txt:'偏离较大'}:{cls:'b-ok',txt:'正常'}; }
+    if(up==='待机/电池'){ return v<2.5?{cls:'b-warn',txt:'偏低'}:{cls:'b-ok',txt:'正常'}; }
     return {cls:'',txt:''};
   }
-  let allVols = (sens.voltages||[]).map(v=>{let vc=voltNameCn(v.name); return {raw:v, cn:vc.cn, tip:vc.tip, isKey:!!KEY_VOLTS[vc.cn]};});
+  let allVols = (sens.voltages||[]).map(v=>{let vc=voltNameCn(v.name, v.value); return {raw:v, cn:vc.cn, tip:vc.tip, isKey:!!KEY_VOLTS[vc.cn]};});
   let voltRow = x=>{ let st=voltStatus(x.raw.name, x.raw.value); let badge=st.cls?` <span class="badge ${st.cls}" style="font-size:11px;margin-left:4px">${st.txt}</span>`:''; return `<div class="kv"><span class="k" title="${esc(x.tip)}">${esc(x.cn)}</span><span class="v">${x.raw.value} V${badge}</span></div>`; };
   let keyVols = allVols.filter(x=>x.isKey).map(voltRow).join('');
   let proVols = allVols.filter(x=>!x.isKey);
-  let proHtml = proVols.length ? `<details class="volt-pro"><summary>专业电压（其余 ${proVols.length} 项，一般不用看）</summary>${proVols.map(voltRow).join('')}</details>` : '';
-  let voltsHtml = (keyVols || '<div class="loading">无数据</div>') + proHtml;
+  // 没有常规电压(12V/5V/3.3V/电池)时：不要显示误导性的「无数据」，而是默认展开
+  // 传感器原始通道区，并加说明——不同主板 NCT6797D 通道含义差异大，对照主板手册看。
+  let noKey = keyVols==='';
+  let proHtml = proVols.length ? `<details class="volt-pro"${noKey?' open':''}><summary>${noKey?'主板传感器原始电压（本主板未提供常规 12V/5V/3.3V 通道，对照主板手册看含义）：':'专业电压（其余 '+proVols.length+' 项，一般不用看）'}</summary>${proVols.map(voltRow).join('')}</details>` : '';
+  let voltsHtml = keyVols + proHtml;
   let diskHtml = fmtDiskRows(DATA.diskio);
   let loadColor = (l)=>parseFloat(l)>s.cpu_threads?'var(--red)':parseFloat(l)>s.cpu_threads*0.7?'var(--orange)':'var(--green)';
   let loadText = (l)=>{
