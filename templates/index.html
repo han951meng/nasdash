@@ -1541,21 +1541,33 @@ function renderSystem(s){
     return {cls:'',txt:''};
   }
   let allVols = (sens.voltages||[]).map(v=>{let vc=voltNameCn(v.name, v.value); return {raw:v, cn:vc.cn, tip:vc.tip, isKey:!!KEY_VOLTS[vc.cn]};});
-  // 每项都带上原始通道号（in4 等），避免「名字都一样分不清」；tip 悬浮给正常范围说明
-  let voltRow = x=>{
-    let st=voltStatus(x.raw.name, x.raw.value);
-    let badge=st.cls?` <span class="badge ${st.cls}" style="font-size:11px;margin-left:4px">${st.txt}</span>`:'';
-    let chan=(x.raw.name||'').replace(/_input$/,'');
-    let ktxt=chan?`${esc(chan)} · ${esc(x.cn)}` : esc(x.cn);
-    return `<div class="kv"><span class="k" title="${esc(x.tip)}">${ktxt}</span><span class="v">${x.raw.value} V${badge}</span></div>`;
-  };
-  let keyVols = allVols.filter(x=>x.isKey).map(voltRow).join('');
-  let proVols = allVols.filter(x=>!x.isKey);
-  // 没有常规电压(12V/5V/3.3V/电池)时：不要显示误导性的「无数据」，而是默认展开
-  // 传感器原始通道区，并加说明——不同主板 NCT6797D 通道含义差异大，对照主板手册看。
-  let noKey = keyVols==='';
-  let proHtml = proVols.length ? `<details class="volt-pro"${noKey?' open':''}><summary>${noKey?'主板传感器原始电压（本主板未提供常规 12V/5V/3.3V 通道，对照主板手册看含义）：':'专业电压（其余 '+proVols.length+' 项，一般不用看）'}</summary>${proVols.map(voltRow).join('')}</details>` : '';
-  let voltsHtml = keyVols + proHtml;
+  // 按类别分组合并：同类电压合并成一行「类别（N 路）值区间」，不再暴露 inN 硬件通道名，
+  // 普通用户只看"3.3V 供电（4 路）3.17~3.39V"就能懂；tip 悬浮给正常范围。
+  function voltGroups(items){
+    var g={};
+    items.forEach(x=>{ (g[x.cn]=g[x.cn]||[]).push(x); });
+    return Object.keys(g).map(function(cn){
+      var arr=g[cn];
+      var vals=arr.map(function(x){return parseFloat(x.raw.value);}).filter(function(v){return !isNaN(v);});
+      var vmin=vals.length?Math.min.apply(null,vals):null;
+      var vmax=vals.length?Math.max.apply(null,vals):null;
+      // 状态取这组里最差的（有偏离较大就显示偏离）
+      var worst={cls:'',txt:''};
+      arr.forEach(function(x){ var st=voltStatus(x.raw.name, x.raw.value); if(st.cls==='b-warn') worst=st; });
+      if(!worst.cls){ arr.forEach(function(x){ var st=voltStatus(x.raw.name, x.raw.value); if(st.cls==='b-ok'&&!worst.cls) worst=st; }); }
+      var n=arr.length;
+      var label = (n>1?cn+'（'+n+' 路）':cn);
+      var vtxt = vals.length? (n>1?(vmin===vmax?vmin+' V':vmin+'~'+vmax+' V'):(vmax+' V')) : '—';
+      var badge = worst.cls?` <span class="badge ${worst.cls}" style="font-size:11px;margin-left:4px">${worst.txt}</span>`:'';
+      return {cn:cn, n:n, tip:arr[0].tip, label:label, vtxt:vtxt, badge:badge};
+    });
+  }
+  let voltRow = g=>`<div class="kv"><span class="k" title="${esc(g.tip)}">${esc(g.label)}</span><span class="v">${g.vtxt}${g.badge}</span></div>`;
+  let gKey = voltGroups(allVols.filter(x=>x.isKey)).map(voltRow).join('');
+  let gPro = voltGroups(allVols.filter(x=>!x.isKey));
+  let noKey = gKey==='';
+  let proHtml = gPro.length ? `<details class="volt-pro"${noKey?' open':''}><summary>${noKey?'常规电压通道本主板未提供，以下为可参考的其余电压：':'其余电压（'+gPro.length+' 项，一般不用看）'}</summary>${gPro.map(voltRow).join('')}</details>` : '';
+  let voltsHtml = gKey + proHtml;
   let diskHtml = fmtDiskRows(DATA.diskio);
   let loadColor = (l)=>parseFloat(l)>s.cpu_threads?'var(--red)':parseFloat(l)>s.cpu_threads*0.7?'var(--orange)':'var(--green)';
   let loadText = (l)=>{
