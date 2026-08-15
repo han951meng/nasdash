@@ -1442,11 +1442,11 @@ function voltNameCn(name, value){
   // NCT6797D in4 是 VTT 1V 级而非 12V），无法硬编码含义。改按【数值】推断类别，让用户有参考：
   // 11.4~12.6=12V / 4.5~5.5=5V / 3.0~3.6=3.3V / 2.4~3.0=待机或电池 / 0.4~2.4=CPU 内存低压轨。
   if(!isNaN(v)){
-    if(v>=10.5 && v<=13.8) return {cn:'12V 供电', tip:'按当前数值推断为 12V 供电轨（原始通道 '+n+'）。正常 11.4~12.6V，低于 10V 或高于 13.8V 需警惕电源/主板问题。'};
-    if(v>=4.2 && v<=5.8)   return {cn:'5V 供电', tip:'按当前数值推断为 5V 供电轨（原始通道 '+n+'）。正常 4.5~5.5V。'};
-    if(v>=3.0 && v<=3.6)   return {cn:'3.3V 供电', tip:'按当前数值推断为 3.3V 供电轨（原始通道 '+n+'）。正常 3.1~3.5V。'};
-    if(v>=2.4 && v<3.0)    return {cn:'待机/电池', tip:'按当前数值推断为待机或纽扣电池电压（原始通道 '+n+'）。纽扣电池低于 2.5V 会丢 BIOS 设置。'};
-    if(v>=0.4 && v<2.4)    return {cn:'CPU/内存低压轨', tip:'按当前数值推断为 CPU 核心/IO/内存等 1V 级低压轨（原始通道 '+n+'，如 VCCSA/VTT/VCCIO/VCORE）。这类电压会随负载微调，轻微波动正常。'};
+    if(v>=10.5 && v<=13.8) return {cn:'12V 供电', tip:'按当前数值推断为 12V 供电轨（原始通道 '+n+'）。正常范围 11.4~12.6V；低于 10V 或高于 13.8V 提示电源或主板供电异常，建议检查电源/接口。'};
+    if(v>=4.2 && v<=5.8)   return {cn:'5V 供电', tip:'按当前数值推断为 5V 供电轨（原始通道 '+n+'）。正常范围 4.5~5.5V；偏低常见于电源老化/负载过重，偏高需警惕。'};
+    if(v>=3.0 && v<=3.6)   return {cn:'3.3V 供电', tip:'按当前数值推断为 3.3V 供电轨（原始通道 '+n+'）。正常范围 3.1~3.5V；本机 3.3V 附近的通道可能包括主供电/待机/纽扣电池（电池低于 2.5V 会丢 BIOS 设置）。'};
+    if(v>=2.4 && v<3.0)    return {cn:'待机/电池', tip:'按当前数值推断为待机或纽扣电池电压（原始通道 '+n+'）。正常约 3.0~3.3V，低于 2.5V 建议更换纽扣电池，否则会丢时间/BIOS 设置。'};
+    if(v>=0.4 && v<2.4)    return {cn:'CPU/内存低压轨', tip:'按当前数值推断为 CPU 核心/IO/内存等 1V 级低压轨（原始通道 '+n+'，可能是 VCCSA/VTT/VCCIO/VCORE 等）。正常范围 0.6~1.8V，随负载轻微波动属正常；异常低（<0.6V）或异常高（>1.8V）需关注。'};
   }
   var m = up.match(/^(IN|VIN)(\d+)$/);
   if(m) return {cn:'传感器电压 '+m[2], tip:'主板传感器芯片的原始电压通道 '+n+'。数值无法对应常见电源轨时请对照主板手册。'};
@@ -1537,10 +1537,18 @@ function renderSystem(s){
     if(up==='+5V'||up==='5V 主供电'||up==='5V'||up==='5V供电'){ return (v<4.5||v>5.5)?{cls:'b-warn',txt:'偏离较大'}:{cls:'b-ok',txt:'正常'}; }
     if(up==='+3.3V'||up==='3.3V 主供电'||up==='3VCC'||up==='3.3V'||up==='3.3V供电'){ return (v<3.0||v>3.6)?{cls:'b-warn',txt:'偏离较大'}:{cls:'b-ok',txt:'正常'}; }
     if(up==='待机/电池'){ return v<2.5?{cls:'b-warn',txt:'偏低'}:{cls:'b-ok',txt:'正常'}; }
+    if(up==='CPU/内存低压轨'){ return (v<0.6||v>1.8)?{cls:'b-warn',txt:'偏离较大'}:{cls:'b-ok',txt:'正常'}; }
     return {cls:'',txt:''};
   }
   let allVols = (sens.voltages||[]).map(v=>{let vc=voltNameCn(v.name, v.value); return {raw:v, cn:vc.cn, tip:vc.tip, isKey:!!KEY_VOLTS[vc.cn]};});
-  let voltRow = x=>{ let st=voltStatus(x.raw.name, x.raw.value); let badge=st.cls?` <span class="badge ${st.cls}" style="font-size:11px;margin-left:4px">${st.txt}</span>`:''; return `<div class="kv"><span class="k" title="${esc(x.tip)}">${esc(x.cn)}</span><span class="v">${x.raw.value} V${badge}</span></div>`; };
+  // 每项都带上原始通道号（in4 等），避免「名字都一样分不清」；tip 悬浮给正常范围说明
+  let voltRow = x=>{
+    let st=voltStatus(x.raw.name, x.raw.value);
+    let badge=st.cls?` <span class="badge ${st.cls}" style="font-size:11px;margin-left:4px">${st.txt}</span>`:'';
+    let chan=(x.raw.name||'').replace(/_input$/,'');
+    let ktxt=chan?`${esc(chan)} · ${esc(x.cn)}` : esc(x.cn);
+    return `<div class="kv"><span class="k" title="${esc(x.tip)}">${ktxt}</span><span class="v">${x.raw.value} V${badge}</span></div>`;
+  };
   let keyVols = allVols.filter(x=>x.isKey).map(voltRow).join('');
   let proVols = allVols.filter(x=>!x.isKey);
   // 没有常规电压(12V/5V/3.3V/电池)时：不要显示误导性的「无数据」，而是默认展开
