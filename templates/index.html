@@ -1435,19 +1435,14 @@ function voltNameCn(name){
     'VIN8':    {cn:'辅助电压 8', tip:'主板传感器芯片的第 8 路辅助电压输入，不同主板定义不同'},
     'VREF':    {cn:'参考电压', tip:'电路用的基准参考电压'}
   };
-  // 常见主板传感器芯片（如 nct6797）原始通道 in0~in15：按最普遍的主板接线给出友好名
-  var inMap = {
-    'IN0':'CPU 核心电压', 'IN1':'辅助电压 1',       'IN2':'模拟电路供电',  'IN3':'3.3V 主供电',
-    'IN4':'12V 主供电',   'IN5':'辅助电压 5',       'IN6':'辅助电压 6',    'IN7':'待机 3.3V',
-    'IN8':'主板电池电压', 'IN9':'CPU 参考电压',     'IN10':'CPU 系统代理电压','IN11':'CPU IO 电压',
-    'IN12':'核显电压',    'IN13':'CPU 输入电压',    'IN14':'内存电压',     'IN15':'内存辅助电压'
-  };
+  // 常见主板传感器芯片（如 nct6797）原始通道 in0~in15：不同主板 BIOS 接线差异巨大
+  // （如 MSI B360M MORTAR 的 NCT6797D in4 是 VTT 1V 级别而非 12V），硬编码必然误导用户。
+  // 改为统一提示「主板传感器电压 N（含义以主板手册为准）」，让用户按主板文档理解。
   var up = n.toUpperCase().replace(/\s+/g,'').replace(/_LSB|_MSB$/,'');
   if(map[up]) return map[up];
-  if(inMap[up]) return {cn:inMap[up], tip:'主板传感器芯片的原始电压通道 '+n+'，不同主板含义可能略有差异'};
-  // 纯 inN / vinN 兜底
+  // in0~in15 / vin0~vin15 统一兜底：不再硬编码具体含义，避免误导
   var m = up.match(/^(IN|VIN)(\d+)$/);
-  if(m) return {cn:'辅助电压 '+m[2], tip:'主板传感器芯片的原始电压通道 '+n+'，不同主板定义不同，只要数值在合理范围即可'};
+  if(m) return {cn:'主板传感器电压 '+m[2]+'（以主板手册为准）', tip:'主板传感器芯片的原始电压通道 '+n+'。不同主板 BIOS 接线差异巨大，'+n+' 在你主板上具体监控哪个电压（如 12V/5V/3.3V/CPU 核心/VCCSA/VTT 等），请看主板手册或 BIOS Hardware Monitor 页对照。数值本身是传感器实时读数。'};
   return {cn:n, tip:''};
 }
 function smartTip(label){
