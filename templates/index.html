@@ -1863,6 +1863,10 @@ function setFanControl(on){
 }
 function refreshFanPanel(){
   var fp=document.getElementById('fan'); if(!fp) return;
+  // 用户正在输入/操作表单控件时跳过重建：autoRefreshTick 每 30s 会进来，
+  // 若此时重建 innerHTML，正在输入的数字框会被换掉 -> 「框能点但输不进字」。
+  var ae=document.activeElement;
+  if(ae && (ae.tagName==='INPUT' || ae.tagName==='SELECT' || ae.tagName==='TEXTAREA')) return;
   fp.innerHTML=renderFanControl(); bindFanSliders(); loadFcsStatus();
 }
 var FAN_CTRL_SYNCING = false; // 同步请求在途，避免面板重绘时叠发多个请求
@@ -2021,7 +2025,7 @@ function renderSleepLinkPanel(){
     +'</div>'
     +'<div class="sleep-panel-body" id="sleep-panel-body" style="display:none">'
       +'<label class="dt-toggle"><input type="checkbox" id="sl-sleep"> 监控盘全部休眠时停转风扇</label>'
-      +'<label class="dt-toggle">监控盘连续无读写满 <input type="number" id="sl-idle" min="1" max="120" value="5" class="w52"> 分钟也停转风扇</label>'
+      +'<label class="dt-toggle">监控盘连续无读写满 <input type="text" inputmode="numeric" pattern="[0-9]*" id="sl-idle" maxlength="3" value="5" class="w52"> 分钟也停转风扇</label>'
       +'<div class="dt-actions"><button class="btn-mini" onclick="saveSleepLink()">保存</button><span class="dt-save-state" id="sl-state"></span></div>'
       +'<div class="dt-hint">选「硬盘温度」为温度源的风扇，会在监控盘全部休眠或连续空闲时自动停转。监控盘默认取全部硬盘；此联动仅控制「是否停转」，不影响温度曲线调速。</div>'
       +'<div class="dt-hint-title">硬盘已经休眠，风扇却还在转？按顺序对一下：</div>'
