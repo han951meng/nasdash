@@ -1577,15 +1577,29 @@ function renderSystem(s){
     if(v <= t*2) return '有点忙了，机器可能会变慢';
     return '太忙了！任务排队，建议查查谁在占资源';
   };
+  // 实时功耗（RAPL 真实测量）：可用时替换 hero 的「现在忙不忙」格子
+  let pw = (s.power && s.power.ok) ? s.power : null;
+  let pwTotal = pw ? pw.total : null;
+  let pwColor = (w)=> (w==null?'var(--muted)': w>40?'var(--red)': w>20?'var(--orange)':'var(--green)');
+  let pwTip = pw ? 'CPU+内存实时功耗（RAPL 硬件测量）。G5400 TDP 58W，日常通常 10~30W。' : '该设备不支持 RAPL 功耗测量（需 Intel CPU + powercap 内核支持）';
   return `
   ${panelHero({icon:ICON_SYSTEM,title:'系统资源',sub:'CPU / 内存 / 传感器实时状态',stats:[
     {v:(s.cpu_temp!=null?s.cpu_temp+'°C':'N/A'),k:'CPU 温度'},
     {v:(s.cpu_usage!=null?s.cpu_usage+'%':'—'),k:'CPU 使用率'},
     {v:memPct+'%',k:'内存占用'},
-    {v:(s.load&&s.load[0]!=null?s.load[0]:'N/A'),k:'现在忙不忙'},
+    {v:(pwTotal!=null?pwTotal+' W':'N/A'),k:'实时功耗'},
     {v:(s.uptime?String(s.uptime).replace(/\s+/g,''):'—'),k:'已运行'}
   ]})}
   <div class="sys-grid">
+    ${pw?`<div class="card">
+      <h3 title="${esc(pwTip)}">实时功耗 <span style="font-weight:400;font-size:12px;color:var(--muted)">(CPU+内存)</span></h3>
+      <div class="kv"><span class="k">总功耗</span><span class="v" style="color:${pwColor(pwTotal)};font-size:20px;font-weight:700">${pwTotal!=null?pwTotal+' W':'—'}</span></div>
+      <div class="kv"><span class="k">CPU 封装</span><span class="v">${pw.package!=null?pw.package+' W':'—'}</span></div>
+      ${pw.core!=null?`<div class="kv"><span class="k">CPU 核心</span><span class="v">${pw.core} W</span></div>`:''}
+      ${pw.uncore!=null?`<div class="kv"><span class="k">CPU 非核心</span><span class="v">${pw.uncore} W</span></div>`:''}
+      ${pw.dram!=null?`<div class="kv"><span class="k">内存</span><span class="v">${pw.dram} W</span></div>`:''}
+      <div style="font-size:12px;color:var(--muted);margin-top:6px">RAPL 硬件测量，含 CPU+内存；硬盘/主板/风扇等不计入。参考：G5400 TDP 58W。</div>
+    </div>`:''}
     <div class="card">
       <h3>系统忙不忙</h3>
       <div class="kv"><span class="k">现在</span><span class="v" style="color:${loadColor(s.load[0])}">${s.load[0]}</span></div>
@@ -2815,6 +2829,7 @@ function renderStorage(st){
 function renderDetect(D){
   if(!D) return '';
   let r = D.raid||{}, disks = D.disks||[], s = D.system||{}, st = D.storage||{}, dk = D.docker||{};
+  let pwColor = (w)=> (w==null?'var(--muted)': w>40?'var(--red)': w>20?'var(--orange)':'var(--green)');
   // 状态栏健康判定
   // 健康检查只看「可见 + 能读转速」的风扇：
   // - hidden（用户标记空口/不用的口）不参与判定；
@@ -3039,6 +3054,15 @@ function renderDetect(D){
       })()}
       <div class="kv"><span class="k">CPU 温度</span><span class="v" style="color:${tempColor(s.cpu_temp,100)}">${s.cpu_temp!=null?s.cpu_temp+'°C':'N/A'}</span></div>
       <div class="kv"><span class="k">CPU 使用率</span><span class="v">${cpuPct}%</span></div>
+      ${(()=>{
+        let pw=s.power;
+        if(!pw || !pw.ok) return '';
+        let rows=`<div class="kv"><span class="k">实时功耗</span><span class="v" style="color:${pwColor(pw.total)}">${pw.total!=null?pw.total+' W':'—'}</span></div>`;
+        if(pw.core!=null) rows+=`<div class="kv"><span class="k">核心</span><span class="v">${pw.core} W</span></div>`;
+        if(pw.uncore!=null) rows+=`<div class="kv"><span class="k">非核心</span><span class="v">${pw.uncore} W</span></div>`;
+        if(pw.dram!=null) rows+=`<div class="kv"><span class="k">内存</span><span class="v">${pw.dram} W</span></div>`;
+        return rows;
+      })()}
       ${(()=>{
         let det = '';
         det += gpuRow('架构', ci.arch);

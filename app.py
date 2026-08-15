@@ -3000,6 +3000,74 @@ def _temp_name_zh(raw_name, chip_prefix=None):
     return raw_name
 
 
+# ===================== RAPL 功耗 =====================
+# Intel RAPL（Running Average Power Limit）通过 MSR 提供 CPU 封装/核心/非核心/内存的真实功耗。
+# Linux 以 powercap 子系统暴露在 /sys/class/powercap/intel-rapl:*/ 下：
+#   energy_uj           当前能量计数（微焦耳，单调递增，到 max_energy_range_uj 回绕）
+#   两次采样差值 / 时间间隔 = 平均功耗（瓦）
+# 支持：Intel 全系（含 G5400 等低端）+ AMD zen2+。读不到返回 None（非 Intel / 内核未挂载）。
+_RAPL_BASE = "/sys/class/powercap"
+
+def _rapl_read_energy(domain_path):
+    """读某个域的 energy_uj（微焦耳）。文件缺失返回 None。"""
+    try:
+        with open(domain_path + "/energy_uj", "r") as f:
+            return int(f.read().strip())
+    except Exception:
+        return None
+
+def _rapl_energy_max(domain_path):
+    """该域能量计数器的回绕上限（微焦耳）。读不到给个安全默认。"""
+    try:
+        with open(domain_path + "/max_energy_range_uj", "r") as f:
+            return int(f.read().strip())
+    except Exception:
+        return 262143300000  # 默认 2^18 uj * 1e6，Intel 常见值
+
+def get_rapl_power():
+    """读取 CPU 封装/核心/非核心/内存实时功耗（瓦）。
+
+    返回 {"package": w, "core": w, "uncore": w, "dram": w, "ok": bool, "total": w}；
+    RAPL 不可用时返回 {"ok": False}。函数内两次读数差分（间隔 0.25s），
+    不依赖跨请求状态，因此可安全地放在 get_system 的 60s 缓存里也能出数。
+    """
+    import time as _t
+    base = _RAPL_BASE
+    if not os.path.isdir(os.path.join(base, "intel-rapl:0")):
+        return {"ok": False}
+    paths = {
+        "package": os.path.join(base, "intel-rapl:0"),
+        "core": os.path.join(base, "intel-rapl:0:0"),
+        "uncore": os.path.join(base, "intel-rapl:0:1"),
+        "dram": os.path.join(base, "intel-rapl:0:2"),
+    }
+    def sample():
+        out = {}
+        for k, p in paths.items():
+            e = _rapl_read_energy(p)
+            if e is not None:
+                out[k] = e
+        return out
+    e1 = sample()
+    if not e1:
+        return {"ok": False}
+    _t.sleep(0.25)
+    e2 = sample()
+    watts = {}
+    for k in ("package", "core", "uncore", "dram"):
+        if k in e1 and k in e2:
+            diff = e2[k] - e1[k]
+            if diff < 0:  # 计数器回绕
+                diff += _rapl_energy_max(paths[k])
+            watts[k] = round(diff / 0.25 / 1e6, 2)
+    if not watts:
+        return {"ok": False}
+    total = round(sum(watts.values()), 2)
+    watts["ok"] = True
+    watts["total"] = total
+    return watts
+
+
 @_ttl_cache(60)
 def get_system():
     d = {}
@@ -3080,6 +3148,11 @@ def get_system():
     # 负载
     la = read_file("/proc/loadavg").split()
     d["load"] = la[:3] if len(la) >= 3 else ["0","0","0"]
+    # 实时功耗（RAPL，Intel 真实测量；不可用则为 None）
+    try:
+        d["power"] = get_rapl_power()
+    except Exception:
+        d["power"] = {"ok": False}
     # uptime
     up = read_file("/proc/uptime").split()
     try:
