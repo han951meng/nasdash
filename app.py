@@ -396,32 +396,54 @@ def _ttl_cache(ttl):
 import threading as _threading
 import glob as _glob
 
-# ===================== 真实 CPU 使用率（跨请求保存 /proc/stat 快照，无阻塞采样）=====================
-_CPU_STAT_LOCK = _threading.Lock()
-_LAST_CPU_STAT = None   # (total, idle) 上一次 /proc/stat 聚合行
+# ===================== 真实 CPU 使用率（固定 1s 窗口 + 缓存，杜绝毫秒级窗口尖刺）=====================
+# 设计要点：
+#  - 后台 daemon 每 ~1s 计算一次真实值写进 _CPU_USAGE_CACHE（低延迟，请求直接读缓存）。
+#  - 若 daemon 异常超过 2s 未刷新（兜底），get_cpu_usage 就地做「真实睡眠 1s 的两次采样」，
+#    保证采样窗口永远是 ~1s，而不是被并发请求压成毫秒级 → 不再出现瞬时 100%/50%/0% 尖刺。
+#  - 并发请求在 1s 内共享同一份缓存值，不会各自开一个微小窗口导致数值乱跳。
+_CPU_USAGE_CACHE = {"v": None, "t": 0.0, "prev": None}   # v=最新使用率, t=写入时间, prev=上一次 /proc/stat(total,idle)
+_CPU_USAGE_LOCK = _threading.Lock()
 
-def get_cpu_usage():
-    """真实 CPU 使用率（%）：读 /proc/stat 聚合行，与上次快照算 idle 差值。
-    返回 0-100 浮点，或 None（首次无基准）。不阻塞 sleep，每次请求立即返回。"""
-    global _LAST_CPU_STAT
-    line = read_file("/proc/stat", "")
-    m = re.match(r"^cpu\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)", line)
-    if not m:
-        return None
-    cols = list(map(int, m.groups()))
+def _cpu_snap():
+    """读 /proc/stat 首行聚合，返回 (idle, total)。idle 含 iowait，total 含 user..steal。"""
+    parts = read_file("/proc/stat", "").split('\n', 1)[0].split()
+    cols = list(map(int, parts[1:]))
     idle = cols[3] + cols[4]          # idle + iowait
     total = sum(cols[:8])             # user..steal（不含 guest，已计入 user）
-    with _CPU_STAT_LOCK:
-        prev = _LAST_CPU_STAT
-        _LAST_CPU_STAT = (total, idle)
-    if prev is None:
+    return idle, total
+
+def _cpu_sample_1s():
+    """兜底采样：真实睡眠 1s 的两次 /proc/stat 读数，算 1s 窗口使用率。返回 0-100 浮点或 None。"""
+    try:
+        i1, t1 = _cpu_snap()
+        time.sleep(1.0)
+        i2, t2 = _cpu_snap()
+        d_total = t2 - t1
+        if d_total <= 0:
+            v = 0.0
+        else:
+            v = (1.0 - (i2 - i1) / d_total) * 100.0
+        v = max(0.0, min(100.0, round(v, 1)))
+        with _CPU_USAGE_LOCK:
+            _CPU_USAGE_CACHE["v"] = v
+            _CPU_USAGE_CACHE["t"] = time.time()
+        return v
+    except Exception:
         return None
-    d_total = total - prev[0]
-    d_idle = idle - prev[1]
-    if d_total <= 0:
-        return 0.0
-    usage = (1.0 - d_idle / d_total) * 100.0
-    return max(0.0, min(100.0, round(usage, 1)))
+
+def get_cpu_usage():
+    """真实 CPU 使用率（%）：优先返回后台 daemon 每 ~1s 刷新的缓存值（低延迟）；
+    若缓存 >2s 未更新（daemon 异常）则就地 1s 窗口采样兜底。永不返回毫秒级窗口的尖刺值。"""
+    try:
+        now = time.time()
+        with _CPU_USAGE_LOCK:
+            c = dict(_CPU_USAGE_CACHE)
+        if c["v"] is not None and (now - c["t"]) < 2.0:
+            return c["v"]
+        return _cpu_sample_1s()
+    except Exception:
+        return None
 
 
 # 全局风扇目标状态：key=(hwmon, idx) -> {"mode":"manual"|"auto", "target":0-255}
@@ -3069,6 +3091,146 @@ def get_rapl_power():
 
 
 @_ttl_cache(60)
+def get_network_nics():
+    """独立采集网卡列表（IP/MAC/速率/驱动/状态等），供 /api/network 轻量刷新，不进 get_system 的 60s 缓存。"""
+    def _nic_hw_info(name):
+        # 补充单张网卡的硬件信息：MTU / 双工 / 驱动 / 总线 / 厂商型号。
+        # 全部失败也不影响其它采集（OVS 桥等虚拟口拿不到就留空）。
+        info = {"mtu": "", "duplex": "", "driver": "", "bus_info": "", "model": ""}
+        mtu = read_file(f"/sys/class/net/{name}/mtu").strip()
+        if mtu.isdigit():
+            info["mtu"] = mtu
+        dup = read_file(f"/sys/class/net/{name}/duplex").strip()
+        if dup:
+            info["duplex"] = dup
+        try:
+            out = run_cmd(["ethtool", "-i", name], 3)
+            for line in out.splitlines():
+                if line.startswith("driver:"):
+                    info["driver"] = line.split(":", 1)[1].strip()
+                elif line.startswith("bus-info:"):
+                    info["bus_info"] = line.split(":", 1)[1].strip()
+        except Exception:
+            pass
+        # 总线是 PCI 地址时，用 lspci -nn 反查厂商型号（飞牛的「网卡硬件信息」）
+        if info["bus_info"] and re.match(r"^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.", info["bus_info"], re.I):
+            try:
+                out = run_cmd(["lspci", "-nn", "-s", info["bus_info"]], 3)
+                # 行末可能带「 (rev 10)」等后缀，故不锚定行尾；只抓「]: 」到「[厂商:设备]」之间的描述
+                mh = re.search(r"\]:\s*(.+?)\s*\[[0-9a-f]{4}:[0-9a-f]{4}\]", out, re.S)
+                if mh:
+                    info["model"] = mh.group(1).strip()
+            except Exception:
+                pass
+        return info
+
+    # 网卡（只显示物理网卡 / bond / 桥接端口，过滤 docker/虚拟网桥/容器/虚拟机等噪音接口）
+    link_out = run_cmd(["ip", "-o", "link", "show"], 5)
+    addr_out = run_cmd(["ip", "-o", "addr", "show"], 5)
+    # 先直接从 addr 输出解析「接口名 -> IP」映射：
+    # - ip -o link 对 veth/peer 接口会显示 name@ifN 后缀，而 ip -o addr 用原始名（也可能带 @ifN），
+    #   直接按行解析 addr 可绕开「按名回查整行」的匹配失败问题；
+    # - 不同版本/系统的 `ip -o addr show` 格式并不一致：有的接口名后带冒号，有的不带；
+    #   有的 inet 在接口名同行，有的 inet 在续行。用状态机维护当前接口名最稳；
+    # - 同一接口可能同时有 inet6/inet，这里优先取 IPv4。
+    ip4_map = {}
+    ip6_map = {}
+    cur_iface = None
+    for aline in addr_out.splitlines():
+        header = re.match(r"^\d+:\s+(\S+)", aline)
+        if header:
+            # 去掉末尾可能存在的冒号和 @ifN 后缀，与 link 解析出的 name 对齐
+            cur_iface = header.group(1).split("@")[0].rstrip(":")
+        if not cur_iface:
+            continue
+        im4 = re.search(r"\binet\s+(\S+)", aline)
+        if im4 and cur_iface not in ip4_map:
+            ip4_map[cur_iface] = im4.group(1).split("/")[0]
+        im6 = re.search(r"\binet6\s+(\S+)", aline)
+        if im6:
+            # 同一接口可能有多条 inet6（含 fe80 链路本地），用列表收集，优先全局地址
+            ip6_map.setdefault(cur_iface, []).append(im6.group(1).split("/")[0])
+    # 纯虚拟/容器/虚拟机接口不计入物理网卡列表，避免「无IP」噪音干扰查看
+    SKIP_NIC_PREFIX = ("lo", "docker", "br-", "veth", "ovs-system", "__tmp",
+                       "flannel", "cni", "tailscale", "ts", "wg", "safeline", "vnet", "virbr")
+    nics = []
+    for line in link_out.splitlines():
+        m = re.match(r"\d+:\s+(\S+?):\s+<([^>]*)>.*?state\s+(\w+).*?link/(\S+)\s+(\S+)", line)
+        if not m:
+            continue
+        name = m.group(1).split("@")[0]
+        if name == "lo" or name.startswith(SKIP_NIC_PREFIX):
+            continue
+        state = m.group(3)
+        mac = m.group(5)
+        speed = read_file(f"/sys/class/net/{name}/speed").strip()
+        if not speed.isdigit():
+            speed = ""
+        ip = ip4_map.get(name, "")
+        nics.append({"name": name, "state": state, "mac": mac, "speed": speed,
+                      "ip": ip, "ipv6": ""})
+    # 附加实时网速（来自采集 daemon 的 _metrics_cur，每 2s 刷新一次）
+    try:
+        with _METRICS_LOCK:
+            _net_rt = {n["name"]: n for n in _metrics_cur.get("net", [])}
+        for nic in nics:
+            rt = _net_rt.get(nic["name"])
+            if rt:
+                nic["rx_rate"] = rt.get("rx_rate", 0.0)
+                nic["tx_rate"] = rt.get("tx_rate", 0.0)
+    except Exception:
+        pass
+    # 补充每张网卡的硬件信息（MTU / 双工 / 驱动 / 总线 / 厂商型号）与 IPv6
+    for nic in nics:
+        nic.update(_nic_hw_info(nic["name"]))
+        v6 = ip6_map.get(nic["name"], [])
+        # 优先全局地址，没有全局地址再退而求其次显示链路本地
+        nic["ipv6"] = next((a for a in v6 if not a.lower().startswith("fe80:")), (v6[0] if v6 else ""))
+    # 去重：同一物理网卡与其 OVS 桥/虚拟端口常共享 MAC 地址，会被识别成两条记录
+    # （如 fnOS 的 eno1 与 eno1-ovs 共享 MAC；接 USB 网卡时也可能出现「物理口 + 桥」两条）。
+    # 按 MAC 归并最稳健——物理口名（不含 -ovs 后缀）作展示名，IP/速率/状态/实时流量各取所长，
+    # 最终页面只显示一条完整记录。纯虚拟接口（无 MAC 或唯一 MAC）保持独立。
+    by_mac = {}
+    _no_mac = []
+    for nic in nics:
+        mac = (nic.get("mac") or "").lower().strip()
+        if not mac:
+            _no_mac.append(nic)
+            continue
+        by_mac.setdefault(mac, []).append(nic)
+    merged_nics = []
+    for mac, grp in by_mac.items():
+        if len(grp) == 1:
+            merged_nics.append(grp[0])
+            continue
+        # 多条 → 合并：优先用物理口名（不含 -ovs）
+        phys = [n for n in grp if not n["name"].endswith("-ovs")] or grp
+        m = dict(phys[0])
+        for n in grp:
+            if not m.get("ip") and n.get("ip"):
+                m["ip"] = n["ip"]
+            if not m.get("speed") and n.get("speed"):
+                m["speed"] = n["speed"]
+            if n.get("state", "").upper() == "UP" and m.get("state", "").upper() != "UP":
+                m["state"] = n["state"]
+            if n.get("rx_rate") is not None:
+                m["rx_rate"] = n.get("rx_rate", 0.0)
+            if n.get("tx_rate") is not None:
+                m["tx_rate"] = n.get("tx_rate", 0.0)
+            for k in ("ipv6", "mtu", "duplex", "driver", "bus_info", "model"):
+                if not m.get(k) and n.get(k):
+                    m[k] = n[k]
+        # 显示名优先用 OVS 桥（与 fnOS 一致：真实 IP 配在桥上），硬件字段仍取自物理口
+        ovs = [n for n in grp if n["name"].endswith("-ovs")]
+        if ovs:
+            m["name"] = ovs[0]["name"]
+        # 实时流量轮询按「物理口名」匹配 /api/metrics（指标以物理口 eno1 上报，而非 eno1-ovs）
+        m["phy_name"] = phys[0]["name"].replace("-ovs", "") if phys[0]["name"].endswith("-ovs") else phys[0]["name"]
+        merged_nics.append(m)
+    merged_nics.extend(_no_mac)
+    nics = merged_nics
+    return nics
+
 def get_system():
     d = {}
     d["hostname"] = socket.gethostname()
@@ -3865,143 +4027,7 @@ def get_system():
             _g["name_arch"] = _sa
     d["gpus"] = gpus
 
-    def _nic_hw_info(name):
-        # 补充单张网卡的硬件信息：MTU / 双工 / 驱动 / 总线 / 厂商型号。
-        # 全部失败也不影响其它采集（OVS 桥等虚拟口拿不到就留空）。
-        info = {"mtu": "", "duplex": "", "driver": "", "bus_info": "", "model": ""}
-        mtu = read_file(f"/sys/class/net/{name}/mtu").strip()
-        if mtu.isdigit():
-            info["mtu"] = mtu
-        dup = read_file(f"/sys/class/net/{name}/duplex").strip()
-        if dup:
-            info["duplex"] = dup
-        try:
-            out = run_cmd(["ethtool", "-i", name], 3)
-            for line in out.splitlines():
-                if line.startswith("driver:"):
-                    info["driver"] = line.split(":", 1)[1].strip()
-                elif line.startswith("bus-info:"):
-                    info["bus_info"] = line.split(":", 1)[1].strip()
-        except Exception:
-            pass
-        # 总线是 PCI 地址时，用 lspci -nn 反查厂商型号（飞牛的「网卡硬件信息」）
-        if info["bus_info"] and re.match(r"^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.", info["bus_info"], re.I):
-            try:
-                out = run_cmd(["lspci", "-nn", "-s", info["bus_info"]], 3)
-                # 行末可能带「 (rev 10)」等后缀，故不锚定行尾；只抓「]: 」到「[厂商:设备]」之间的描述
-                mh = re.search(r"\]:\s*(.+?)\s*\[[0-9a-f]{4}:[0-9a-f]{4}\]", out, re.S)
-                if mh:
-                    info["model"] = mh.group(1).strip()
-            except Exception:
-                pass
-        return info
-
-    # 网卡（只显示物理网卡 / bond / 桥接端口，过滤 docker/虚拟网桥/容器/虚拟机等噪音接口）
-    link_out = run_cmd(["ip", "-o", "link", "show"], 5)
-    addr_out = run_cmd(["ip", "-o", "addr", "show"], 5)
-    # 先直接从 addr 输出解析「接口名 -> IP」映射：
-    # - ip -o link 对 veth/peer 接口会显示 name@ifN 后缀，而 ip -o addr 用原始名（也可能带 @ifN），
-    #   直接按行解析 addr 可绕开「按名回查整行」的匹配失败问题；
-    # - 不同版本/系统的 `ip -o addr show` 格式并不一致：有的接口名后带冒号，有的不带；
-    #   有的 inet 在接口名同行，有的 inet 在续行。用状态机维护当前接口名最稳；
-    # - 同一接口可能同时有 inet6/inet，这里优先取 IPv4。
-    ip4_map = {}
-    ip6_map = {}
-    cur_iface = None
-    for aline in addr_out.splitlines():
-        header = re.match(r"^\d+:\s+(\S+)", aline)
-        if header:
-            # 去掉末尾可能存在的冒号和 @ifN 后缀，与 link 解析出的 name 对齐
-            cur_iface = header.group(1).split("@")[0].rstrip(":")
-        if not cur_iface:
-            continue
-        im4 = re.search(r"\binet\s+(\S+)", aline)
-        if im4 and cur_iface not in ip4_map:
-            ip4_map[cur_iface] = im4.group(1).split("/")[0]
-        im6 = re.search(r"\binet6\s+(\S+)", aline)
-        if im6:
-            # 同一接口可能有多条 inet6（含 fe80 链路本地），用列表收集，优先全局地址
-            ip6_map.setdefault(cur_iface, []).append(im6.group(1).split("/")[0])
-    # 纯虚拟/容器/虚拟机接口不计入物理网卡列表，避免「无IP」噪音干扰查看
-    SKIP_NIC_PREFIX = ("lo", "docker", "br-", "veth", "ovs-system", "__tmp",
-                       "flannel", "cni", "tailscale", "ts", "wg", "safeline", "vnet", "virbr")
-    nics = []
-    for line in link_out.splitlines():
-        m = re.match(r"\d+:\s+(\S+?):\s+<([^>]*)>.*?state\s+(\w+).*?link/(\S+)\s+(\S+)", line)
-        if not m:
-            continue
-        name = m.group(1).split("@")[0]
-        if name == "lo" or name.startswith(SKIP_NIC_PREFIX):
-            continue
-        state = m.group(3)
-        mac = m.group(5)
-        speed = read_file(f"/sys/class/net/{name}/speed").strip()
-        if not speed.isdigit():
-            speed = ""
-        ip = ip4_map.get(name, "")
-        nics.append({"name": name, "state": state, "mac": mac, "speed": speed,
-                      "ip": ip, "ipv6": ""})
-    # 附加实时网速（来自采集 daemon 的 _metrics_cur，每 2s 刷新一次）
-    try:
-        with _METRICS_LOCK:
-            _net_rt = {n["name"]: n for n in _metrics_cur.get("net", [])}
-        for nic in nics:
-            rt = _net_rt.get(nic["name"])
-            if rt:
-                nic["rx_rate"] = rt.get("rx_rate", 0.0)
-                nic["tx_rate"] = rt.get("tx_rate", 0.0)
-    except Exception:
-        pass
-    # 补充每张网卡的硬件信息（MTU / 双工 / 驱动 / 总线 / 厂商型号）与 IPv6
-    for nic in nics:
-        nic.update(_nic_hw_info(nic["name"]))
-        v6 = ip6_map.get(nic["name"], [])
-        # 优先全局地址，没有全局地址再退而求其次显示链路本地
-        nic["ipv6"] = next((a for a in v6 if not a.lower().startswith("fe80:")), (v6[0] if v6 else ""))
-    # 去重：同一物理网卡与其 OVS 桥/虚拟端口常共享 MAC 地址，会被识别成两条记录
-    # （如 fnOS 的 eno1 与 eno1-ovs 共享 MAC；接 USB 网卡时也可能出现「物理口 + 桥」两条）。
-    # 按 MAC 归并最稳健——物理口名（不含 -ovs 后缀）作展示名，IP/速率/状态/实时流量各取所长，
-    # 最终页面只显示一条完整记录。纯虚拟接口（无 MAC 或唯一 MAC）保持独立。
-    by_mac = {}
-    _no_mac = []
-    for nic in nics:
-        mac = (nic.get("mac") or "").lower().strip()
-        if not mac:
-            _no_mac.append(nic)
-            continue
-        by_mac.setdefault(mac, []).append(nic)
-    merged_nics = []
-    for mac, grp in by_mac.items():
-        if len(grp) == 1:
-            merged_nics.append(grp[0])
-            continue
-        # 多条 → 合并：优先用物理口名（不含 -ovs）
-        phys = [n for n in grp if not n["name"].endswith("-ovs")] or grp
-        m = dict(phys[0])
-        for n in grp:
-            if not m.get("ip") and n.get("ip"):
-                m["ip"] = n["ip"]
-            if not m.get("speed") and n.get("speed"):
-                m["speed"] = n["speed"]
-            if n.get("state", "").upper() == "UP" and m.get("state", "").upper() != "UP":
-                m["state"] = n["state"]
-            if n.get("rx_rate") is not None:
-                m["rx_rate"] = n.get("rx_rate", 0.0)
-            if n.get("tx_rate") is not None:
-                m["tx_rate"] = n.get("tx_rate", 0.0)
-            for k in ("ipv6", "mtu", "duplex", "driver", "bus_info", "model"):
-                if not m.get(k) and n.get(k):
-                    m[k] = n[k]
-        # 显示名优先用 OVS 桥（与 fnOS 一致：真实 IP 配在桥上），硬件字段仍取自物理口
-        ovs = [n for n in grp if n["name"].endswith("-ovs")]
-        if ovs:
-            m["name"] = ovs[0]["name"]
-        # 实时流量轮询按「物理口名」匹配 /api/metrics（指标以物理口 eno1 上报，而非 eno1-ovs）
-        m["phy_name"] = phys[0]["name"].replace("-ovs", "") if phys[0]["name"].endswith("-ovs") else phys[0]["name"]
-        merged_nics.append(m)
-    merged_nics.extend(_no_mac)
-    nics = merged_nics
-    d["nics"] = nics
+    d["nics"] = get_network_nics()
     # 主板 / 内存品牌型号（dmidecode），失败不影响其它采集
     try:
         d["board"] = get_board()
@@ -4549,8 +4575,8 @@ def manual():
 # 这些指标需「两次采样差」才算速率，故由常驻 daemon 线程周期采样，/api/all 仅读最新值。
 # 模式复用 fan_smooth_loop 的 daemon 线程做法。
 _METRICS_LOCK = _threading.Lock()
-_metrics_prev = {"net": {}, "disk": {}, "rapl": None, "rapl_t": 0.0}
-_metrics_cur = {"net": [], "disk": [], "cpu_power_w": 0.0, "cpu_power_valid": False}
+_metrics_prev = {"net": {}, "disk": {}, "rapl": None, "rapl_t": 0.0, "cpu": None, "t": time.time()}
+_metrics_cur = {"net": [], "disk": [], "cpu_usage": None, "cpu_power_w": 0.0, "cpu_power_valid": False}
 _CPU_POWER_EMA = None
 
 def _read_net_bytes():
@@ -4651,12 +4677,16 @@ def _write_history_sample():
 _init_history_db()
 
 def metrics_collect_loop():
-    """daemon 线程：每 ~2s 采样一次，计算速率/功率并写入 _metrics_cur"""
+    """daemon 线程：每 ~1s 采样一次，计算速率/功率/CPU 使用率并写入 _metrics_cur。
+    采样窗口固定（net/disk 用真实间隔 dt，CPU 用相邻两次迭代差），不随请求并发抖动，
+    因此 /api/metrics 高频拉取也不会把 CPU 窗口压成毫秒级而出现瞬时 100%/50% 尖刺。"""
     global _CPU_POWER_EMA
     while True:
         try:
-            time.sleep(2)
-            now = time.time()
+            t_now = time.time()
+            now = int(t_now)
+            with _METRICS_LOCK:
+                dt = max(0.5, t_now - _metrics_prev["t"])
             # 历史趋势：每 30s 聚合写一行 SQLite（免维护，超 30 天自动清理）
             if now - _db_last_write >= 30:
                 _write_history_sample()
@@ -4667,7 +4697,6 @@ def metrics_collect_loop():
                 prev = _metrics_prev["net"]
                 for iface, (rx, tx) in net_now.items():
                     prx, ptx = prev.get(iface, (rx, tx))
-                    dt = 2.0
                     rx_rate = max(0.0, (rx - prx) / dt)
                     tx_rate = max(0.0, (tx - ptx) / dt)
                     net_out.append({
@@ -4686,7 +4715,6 @@ def metrics_collect_loop():
                 prev = _metrics_prev["disk"]
                 for dev, (rd, wr, iot) in disk_now.items():
                     prd, pwr, piot = prev.get(dev, (rd, wr, iot))
-                    dt = 2.0
                     rd_rate = max(0.0, (rd - prd) * 512 / dt)
                     wr_rate = max(0.0, (wr - pwr) * 512 / dt)
                     # busy%：io_ticks 两次采样差 / 间隔毫秒(dt*1000)，钳到 [0,100]
@@ -4709,6 +4737,22 @@ def metrics_collect_loop():
                     })
                 _metrics_prev["disk"] = disk_now
                 _metrics_cur["disk"] = disk_out
+            # CPU 使用率：固定窗口（两次迭代差，≈1s）采样，写 _CPU_USAGE_CACHE，供 /api/metrics 与 /api/system 直接读取。
+            # 不再由请求各自读 /proc/stat 改共享快照——那样并发请求会把窗口压到毫秒级，产生瞬时 100%/50% 尖刺。
+            try:
+                idle, total = _cpu_snap()
+                with _CPU_USAGE_LOCK:
+                    pc = _CPU_USAGE_CACHE.get("prev")
+                    if pc is not None:
+                        d_total = total - pc[0]
+                        d_idle = idle - pc[1]
+                        if d_total > 0:
+                            v = max(0.0, min(100.0, round((1.0 - d_idle / d_total) * 100, 1)))
+                            _CPU_USAGE_CACHE["v"] = v
+                            _CPU_USAGE_CACHE["t"] = time.time()
+                    _CPU_USAGE_CACHE["prev"] = (total, idle)
+            except Exception:
+                pass
             # CPU 封装功耗 (RAPL)：两次采样差算功率 + EMA 平滑
             e = _read_rapl_energy()
             with _METRICS_LOCK:
@@ -4723,8 +4767,12 @@ def metrics_collect_loop():
                             _metrics_cur["cpu_power_valid"] = True
                 _metrics_prev["rapl"] = e
                 _metrics_prev["rapl_t"] = now
+            # 记录本轮回合时间，供下一轮计算真实间隔 dt（net/disk 速率用）
+            with _METRICS_LOCK:
+                _metrics_prev["t"] = t_now
         except Exception:
             time.sleep(2)
+        time.sleep(1)
 
 _metrics_thread = _threading.Thread(target=metrics_collect_loop, daemon=True, name="metrics")
 _metrics_thread.start()
@@ -4738,6 +4786,12 @@ def _warmup_caches():
             fn()
         except Exception:
             pass
+    # 预热 CPU 使用率基准，避免首屏 /api/all 首次 get_cpu_usage 返回 None。
+    # 直接走 get_cpu_usage()：首次会做 1s 窗口采样并写进 _CPU_USAGE_CACHE，同时给 daemon 留好 prev 基准。
+    try:
+        get_cpu_usage()
+    except Exception:
+        pass
 _warmup_thread = _threading.Thread(target=_warmup_caches, daemon=True, name="cache-warmup")
 _warmup_thread.start()
 
@@ -4806,6 +4860,11 @@ def api_all():
                 memory_modules = {"modules": [], "total_gb": 0, "slots": 0, "brand_summary": ""}
             try:
                 system = f_sys.result()
+                # 首屏直接拿真实 CPU 使用率；_warmup_caches 已预热基准，不再短 sleep。
+                try:
+                    system["cpu_usage"] = get_cpu_usage()
+                except Exception:
+                    system["cpu_usage"] = None
             except Exception:
                 system = {}
             result = {
@@ -4819,6 +4878,10 @@ def api_all():
                 "nasdash_version": APP_VERSION,
                 "fnos_version": _fnos_version(),
             }
+            # 把阵列卡芯片温度并入 system，供「温度监控」tab 直接读取（随 /api/all /api/system 刷新）
+            _raid = result.get("raid")
+            if isinstance(_raid, dict):
+                result["system"]["raid_temp"] = _raid.get("controller_temp")
         try:
             # 给每块盘标注通道来源（阵列卡 / 主板），供前端「物理硬盘信息」区分
             result["disks"] = _enrich_disk_channels(result.get("disks", []) or [], result.get("raid") or {})
@@ -4867,6 +4930,13 @@ def api_system():
             system["cpu_usage"] = get_cpu_usage()
         except Exception:
             system["cpu_usage"] = None
+        # 阵列卡芯片温度（ROC Temperature），供「温度监控」tab 显示（get_raid_card 有 60s 缓存，开销极低）
+        try:
+            _raid = get_raid_card()
+            if isinstance(_raid, dict):
+                system["raid_temp"] = _raid.get("controller_temp")
+        except Exception:
+            system["raid_temp"] = None
         return jsonify({"system": system, "time": _panel_time(), "elapsed": round(time.time() - t0, 2)})
     except Exception as e:
         return jsonify({"error": str(e), "time": _panel_time()})
@@ -5000,9 +5070,40 @@ def api_docker():
     except Exception as e:
         return jsonify({"error": str(e), "time": _panel_time()})
 
+def get_live_mem():
+    """实时内存占用率(%):读 /proc/meminfo 用 MemAvailable 估算(无 psutil 依赖)。"""
+    try:
+        mem = {}
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if ':' in line:
+                    k, v = line.split(':', 1)
+                    mem[k.strip()] = int(v.split()[0])  # KB
+        total = mem.get("MemTotal", 0)
+        avail = mem.get("MemAvailable", 0)
+        if total <= 0:
+            return None
+        return round((1 - avail / total) * 100, 1)
+    except Exception:
+        return None
+
+@app.route("/api/network")
+def api_network():
+    """独立网卡接口：返回 get_network_nics() 结果（IP/MAC/速率/驱动/状态等）。
+    不进 get_system 的 60s TTL 缓存，供前端「网络」卡片轻量(5s)刷新，
+    避免被 RAID/SMART/Docker 等慢采集拖慢。"""
+    try:
+        nics = get_network_nics()
+        resp = jsonify({"nics": nics, "time": _panel_time()})
+        resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        return resp
+    except Exception as e:
+        return jsonify({"nics": [], "error": str(e)}), 500
+
+
 @app.route("/api/metrics")
 def api_metrics():
-    """轻量实时指标：网络吞吐 + 磁盘 I/O。供前端高频(2s)轮询，不触发重型 /api/all(阵列卡/SMART等)。
+    """轻量实时指标：网络吞吐 + 磁盘 I/O + CPU/内存/负载。供前端高频(1s)轮询，不触发重型 /api/all(阵列卡/SMART等)。
     网络速率会把 OVS 桥（如 eno1-ovs）归并到物理口名（eno1），与 /api/system 的合并显示名对齐，
     这样前端按 data-nic 直接覆盖即可。"""
     try:
@@ -5031,7 +5132,23 @@ def api_metrics():
             d["size"] = info.get("size", "")
             d["brand"] = info.get("brand", "")
             d["type"] = info.get("type", "")
+        # 实时 CPU / 内存 / 负载（无缓存，供前端 1s 增量刷新）。
+        # CPU 走 get_cpu_usage 的 1s 窗口缓存（daemon 每 1s 刷新；异常时就地 1s 采样兜底），
+        # 采样窗口恒为 ~1s，与 fnOS 口径一致，不再有毫秒级窗口导致的瞬时 100%/50% 尖刺。
+        try:
+            cpu_usage = get_cpu_usage()
+        except Exception:
+            cpu_usage = None
+        try:
+            mem_percent = get_live_mem()
+        except Exception:
+            mem_percent = None
+        try:
+            load = list(os.getloadavg())
+        except Exception:
+            load = None
         return jsonify({"net": list(merged.values()), "diskio": diskio,
+                        "cpu_usage": cpu_usage, "mem_percent": mem_percent, "load": load,
                         "time": time.strftime("%Y-%m-%d %H:%M:%S")})
     except Exception as e:
         return jsonify({"error": str(e), "net": [], "diskio": []})

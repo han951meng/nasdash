@@ -210,11 +210,11 @@
   .hero-badge .dot{width:6px;height:6px;border-radius:50%;background:#4ADE80}
   .hero-badge.warn .dot{background:#FDE047}
   .hero-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(104px,1fr));gap:8px;margin-top:18px;position:relative;z-index:1}
-  .hs{background:rgba(117,191,255,.06);border:1px solid rgba(0,0,0,.05);border-radius:var(--r-md);padding:10px 12px}
-  .hs-v{font-size:20px;font-weight:500;color:#1f2329;line-height:1.2;white-space:nowrap}
-  .hs-v small{font-size:12px;font-weight:400;opacity:.7;margin-left:2px}
-  .hs-k{font-size:12px;color:#646a73;margin-top:3px}
-  .hs-uptime .hs-v{white-space:normal;word-break:break-all;font-size:16px;line-height:1.25}
+  .hs{background:rgba(117,191,255,.06);border:1px solid rgba(0,0,0,.05);border-radius:var(--r-md);padding:14px 16px;display:flex;flex-direction:column;justify-content:center;align-items:center;min-height:78px;text-align:center}
+  .hs-v{font-size:28px;font-weight:600;color:#1f2329;line-height:1.15;white-space:nowrap;text-align:center}
+  .hs-v small{font-size:13px;font-weight:500;opacity:.7;margin-left:3px}
+  .hs-k{font-size:13px;color:#646a73;margin-top:5px;font-weight:500;text-align:center}
+  .hs-uptime .hs-v{white-space:normal;word-break:break-all;font-size:20px;line-height:1.25}
   .hs.bad .hs-v{color:#E5484D;background:rgba(229,72,77,.12);padding:1px 8px;border-radius:6px;display:inline-block}
   .hs.warn .hs-v{color:#B45309;background:rgba(180,83,9,.12);padding:1px 8px;border-radius:6px;display:inline-block}
   /* 暗色主题：hero 用和页面卡片一致的深色卡，只留一条飞牛蓝左边条做标识，不再用高饱和蓝渐变 */
@@ -332,8 +332,10 @@
     .hero-action{width:100%;margin-left:0;justify-content:flex-end}
     .hero-ctrls{justify-content:flex-end}
     .hero-stats{grid-template-columns:repeat(2,1fr);gap:8px;margin-top:14px}
-    .hs-v{font-size:17px}
-    .hs-uptime .hs-v{font-size:14px}
+    .hs{padding:12px 14px;min-height:70px}
+    .hs-v{font-size:22px}
+    .hs-k{font-size:12px}
+    .hs-uptime .hs-v{font-size:16px}
     .detect-cards,.cards{grid-template-columns:1fr;gap:12px}
     .detect-cards>*,.cards>*{grid-column:auto!important}
     .grid-2,.grid-auto{grid-template-columns:1fr}
@@ -389,7 +391,9 @@
   .nic-tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
   .nic-tab{padding:6px 14px;border:1px solid var(--border);background:var(--bg);color:var(--text);border-radius:6px;cursor:pointer;font-size:13px;line-height:1.4}
   .nic-tab.active{background:var(--blue);color:#fff;border-color:var(--blue)}
+  .net-upd{margin-top:8px;font-size:11px;color:var(--muted);text-align:right;font-family:ui-monospace,Menlo,Consolas,monospace}
   .nic-ifname{font-weight:600;font-size:14px;margin-bottom:8px;color:var(--text)}
+  .nic-rate{font-size:12px;color:var(--muted);margin:-4px 0 8px;font-family:ui-monospace,Menlo,Consolas,monospace}
   .nic-detail .kv:first-of-type{border-top:none;padding-top:0}
   .fan-label-state{font-size:12px;color:var(--green)}
   .volt-badge{display:inline-block;font-size:11px;font-weight:600;padding:1px 7px;border-radius:10px;background:var(--bg);color:var(--muted);border:1px solid var(--border);margin-left:4px}
@@ -1001,7 +1005,8 @@ function panelHero(o){
     let cls = st.cls ? ' '+st.cls : '';
     let unit = st.unit ? '<small>'+st.unit+'</small>' : '';
     let uptimeCls = (st.k === '已运行') ? ' hs-uptime' : '';
-    return '<div class="hs'+cls+uptimeCls+'"><div class="hs-v">'+st.v+unit+'</div><div class="hs-k"'+(st.tip?' title="'+esc(st.tip)+'"':'')+'>'+st.k+'</div></div>';
+    let idAttr = st.id ? ' id="'+st.id+'"' : '';
+    return '<div class="hs'+cls+uptimeCls+'"><div class="hs-v"'+idAttr+'>'+st.v+unit+'</div><div class="hs-k"'+(st.tip?' title="'+esc(st.tip)+'"':'')+'>'+st.k+'</div></div>';
   }).join('');
   let badge = o.badge ? '<div class="hero-badge'+(o.badge.ok?'':' warn')+'"><span class="dot"></span>'+o.badge.text+'</div>' : '';
   let action = '<div class="hero-action">' + heroControls() + (o.action || '') + '</div>';
@@ -1349,6 +1354,7 @@ function appConfirm(opts){
   });
 }
 function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function fmtLoad(v){ var n=parseFloat(v); return isNaN(n)?v:n.toFixed(2); }
 // 双磁臂硬盘：把“同一序列号被系统拆成多个设备”的盘合并成一块显示（纯前端，后端数据不变，自检不受影响）
 function parseSizeToB(s){
   if(!s) return 0;
@@ -1501,17 +1507,47 @@ function fmtSpeed(bps){
   if(bps < 1048576) return (bps/1024).toFixed(1) + ' KB/s';
   return (bps/1048576).toFixed(2) + ' MB/s';
 }
-// 网卡标签页切换（网口1/2/3/4），与顶端大标签页共用「active」配色
-function switchNic(idx){
-  document.querySelectorAll('.nic-tab').forEach(x=>x.classList.remove('active'));
-  let tb=document.querySelector('.nic-tab[data-nic-idx="'+idx+'"]');
+var currentSysNicIdx = 0;
+function renderSysNetCard(nics, ts){
+  let _sysNics = (nics||[]).filter(n=>{ let nm=(n.name||'').toLowerCase(); return !/^(lo|ovs-system|docker|virbr|br-)|veth/.test(nm); });
+  if(!_sysNics.length){
+    return `<h3>网络</h3><div class="loading">未检测到网卡</div>`;
+  }
+  if(currentSysNicIdx >= _sysNics.length) currentSysNicIdx = 0;
+  let tabs = _sysNics.map((n,i)=>`<button class="sys-nic-tab nic-tab ${i===currentSysNicIdx?'active':''}" data-sys-nic-idx="${i}" onclick="switchSysNic(${i})">网口${i+1}</button>`).join('');
+  let details = _sysNics.map((n,i)=>{
+    let st=(n.state||'').toUpperCase();
+    let sc=st==='UP'?'var(--green)':'var(--red)';
+    let sp=n.speed?n.speed+' Mbps':'N/A';
+    let duplex=n.duplex?n.duplex+'双工':'';
+    let cfg=[sp, duplex, n.mtu?('MTU '+n.mtu):''].filter(Boolean).join(' · ');
+    let hw=[n.model, n.driver?('驱动 '+n.driver):'', n.bus_info?('总线 '+n.bus_info):''].filter(Boolean).join(' · ');
+    let ipv6=n.ipv6||'无';
+    return `<div class="sys-nic-detail nic-detail" id="sys-nic-detail-${i}" style="${i===currentSysNicIdx?'':'display:none'}">
+      <div class="nic-ifname">${esc(n.name)}</div>
+      <div class="nic-rate" title="该网口当前实时上下行速率（每 5 秒刷新）">↓ ${fmtSpeed(n.rx_rate)} · ↑ ${fmtSpeed(n.tx_rate)}</div>
+      <div class="kv"><span class="k" title="设备在当前局域网里的网络门牌号">IPv4 地址</span><span class="v">${esc(n.ip||'无 IP')}</span></div>
+      <div class="kv"><span class="k" title="新一代网络地址，部分网络环境才用得到">IPv6 地址</span><span class="v">${esc(ipv6)}</span></div>
+      <div class="kv"><span class="k" title="网卡出厂自带的唯一物理编号，相当于网卡的身份证">MAC 地址</span><span class="v">${esc(n.mac||'-')}</span></div>
+      <div class="kv"><span class="k">网络配置</span><span class="v">${esc(cfg)}</span></div>
+      ${hw?`<div class="kv"><span class="k">硬件信息</span><span class="v">${esc(hw)}</span></div>`:''}
+      <div class="kv"><span class="k">状态</span><span class="v" style="color:${sc}">${esc(st)}</span></div>
+    </div>`;
+  }).join('');
+  return `<h3>网络</h3><div class="nic-tabs">${tabs}</div>${details}${ts?`<div class="net-upd">更新于 ${ts.toLocaleTimeString('zh-CN',{hour12:false})}</div>`:''}`;
+}
+function switchSysNic(idx){
+  currentSysNicIdx = idx;
+  document.querySelectorAll('.sys-nic-tab').forEach(x=>x.classList.remove('active'));
+  let tb=document.querySelector('.sys-nic-tab[data-sys-nic-idx="'+idx+'"]');
   if(tb) tb.classList.add('active');
-  document.querySelectorAll('.nic-detail').forEach(d=>d.style.display='none');
-  let el=document.getElementById('nic-detail-'+idx);
+  document.querySelectorAll('.sys-nic-detail').forEach(d=>d.style.display='none');
+  let el=document.getElementById('sys-nic-detail-'+idx);
   if(el) el.style.display='block';
 }
 
 function renderSystem(s){
+  window.__cpuThreads = s.cpu_threads || 1;
   let memPct = s.memory.percent;
   let memColor = memPct>85?'var(--red)':memPct>70?'var(--orange)':'var(--green)';
   let sens = s.sensors || {};
@@ -1570,51 +1606,57 @@ function renderSystem(s){
   let voltsHtml = gKey + proHtml;
   let diskHtml = fmtDiskRows(DATA.diskio);
   let loadColor = (l)=>parseFloat(l)>s.cpu_threads?'var(--red)':parseFloat(l)>s.cpu_threads*0.7?'var(--orange)':'var(--green)';
-  let loadText = (l)=>{
-    let t = s.cpu_threads || 1; let v = parseFloat(l)||0;
-    if(v <= t*0.7) return '当前很轻松，CPU 基本在闲着';
-    if(v <= t) return '还算顺畅，CPU 在干活但不吃力';
-    if(v <= t*2) return '有点忙了，机器可能会变慢';
-    return '太忙了！任务排队，建议查查谁在占资源';
-  };
-  // 实时功耗（RAPL 真实测量）：可用时替换 hero 的「现在忙不忙」格子
+  // 实时功耗（RAPL 真实测量）：用于 CPU 使用率卡片里的小字补充
   let pw = (s.power && s.power.ok) ? s.power : null;
   let pwTotal = pw ? pw.total : null;
   let pwColor = (w)=> (w==null?'var(--muted)': w>40?'var(--red)': w>20?'var(--orange)':'var(--green)');
   let pwTip = pw ? 'CPU+内存实时功耗（RAPL 硬件测量）。G5400 TDP 58W，日常通常 10~30W。' : '该设备不支持 RAPL 功耗测量（需 Intel CPU + powercap 内核支持）';
+  // 网络速率：优先用每 2s 实时刷新的 RT_NET（fetchNetRates 维护），首屏未就绪时回退 DATA.net（首屏 /api/all 快照）
+  let rawNet = (RT_NET && RT_NET.length) ? RT_NET : ((DATA&&DATA.net)||[]);
+  // 过滤虚拟/重复接口：去掉 ovs-system 这类纯虚拟 0 流量管理桥；若同时存在 X 与 X-ovs（OVS 桥接），只留 X-ovs，避免物理口与桥重复合计
+  let _ovsBridges = new Set(rawNet.filter(n=>/[-.]ovs$/.test(n.name||'')).map(n=>(n.name||'').replace(/[-.]ovs$/,'')));
+  let netData = rawNet.filter(n=> (n.name!=='ovs-system') && !_ovsBridges.has(n.name) && !((n.rx_rate||0)===0 && (n.tx_rate||0)===0));
+  let netRx = netData.reduce((a,n)=>a+((n&&n.rx_rate)||0),0);
+  let netTx = netData.reduce((a,n)=>a+((n&&n.tx_rate)||0),0);
+  let netVal = netData.length ? `<div style="display:flex;flex-direction:column;gap:3px;font-size:20px;font-weight:600;line-height:1.15"><span>↓${fmtSpeed(netRx)}</span><span>↑${fmtSpeed(netTx)}</span></div>` : '—';
+  // CPU 使用率（优先真实 cpu_usage，回退 load 估算）
+  let cpuPct = (s.cpu_usage!=null) ? s.cpu_usage : (s.cpu_threads ? Math.min(Math.round(parseFloat((s.load&&s.load[0])||0)/s.cpu_threads*100),100) : 0);
+  let cpuColor = cpuPct>85?'var(--red)':cpuPct>60?'var(--orange)':'var(--green)';
   return `
-  ${panelHero({icon:ICON_SYSTEM,title:'系统资源',sub:'CPU / 内存 / 传感器实时状态',stats:[
-    {v:(s.cpu_temp!=null?s.cpu_temp+'°C':'N/A'),k:'CPU 温度'},
-    {v:(s.cpu_usage!=null?s.cpu_usage+'%':'—'),k:'CPU 使用率'},
-    {v:memPct+'%',k:'内存占用'},
-    {v:(pwTotal!=null?pwTotal+' W':'N/A'),k:'实时功耗'},
+  ${panelHero({icon:ICON_SYSTEM,title:'系统资源',sub:'CPU / 内存 / 网络实时状态',stats:[
+    {v:(s.cpu_usage!=null?s.cpu_usage+'%':'—'),k:'CPU 使用率', id:'hero-cpu'},
+    {v:memPct+'%',k:'内存占用', id:'hero-mem'},
+    {v:netVal,k:'网络'},
     {v:(s.uptime?String(s.uptime).replace(/\s+/g,''):'—'),k:'已运行'}
   ]})}
   <div class="sys-grid">
-    ${pw?`<div class="card">
-      <h3 title="${esc(pwTip)}">实时功耗 <span style="font-weight:400;font-size:12px;color:var(--muted)">(CPU+内存)</span></h3>
-      <div class="kv"><span class="k">总功耗</span><span class="v" style="color:${pwColor(pwTotal)};font-size:20px;font-weight:700">${pwTotal!=null?pwTotal+' W':'—'}</span></div>
-      <div class="kv"><span class="k">CPU 封装</span><span class="v">${pw.package!=null?pw.package+' W':'—'}</span></div>
-      ${pw.core!=null?`<div class="kv"><span class="k">CPU 核心</span><span class="v">${pw.core} W</span></div>`:''}
-      ${pw.uncore!=null?`<div class="kv"><span class="k">CPU 非核心</span><span class="v">${pw.uncore} W</span></div>`:''}
-      ${pw.dram!=null?`<div class="kv"><span class="k">内存</span><span class="v">${pw.dram} W</span></div>`:''}
-      <div style="font-size:12px;color:var(--muted);margin-top:6px">RAPL 硬件测量，含 CPU+内存；硬盘/主板/风扇等不计入。参考：G5400 TDP 58W。</div>
-    </div>`:''}
     <div class="card">
-      <h3>系统忙不忙</h3>
-      <div class="kv"><span class="k">现在</span><span class="v" style="color:${loadColor(s.load[0])}">${s.load[0]}</span></div>
-      <div class="kv"><span class="k">近 5 分钟</span><span class="v" style="color:${loadColor(s.load[1])}">${s.load[1]}</span></div>
-      <div class="kv"><span class="k">近 15 分钟</span><span class="v" style="color:${loadColor(s.load[2])}">${s.load[2]}</span></div>
-      <div style="font-size:12px;color:var(--muted);margin-top:6px">参考线：> ${s.cpu_threads} 就该留意（活儿多到 CPU 忙不过来）</div>
-      <div style="font-size:12px;margin-top:4px;color:${loadColor(s.load[0])}">${loadText(s.load[0])}</div>
+      <h3>CPU 使用率</h3>
+      <div style="display:flex;align-items:baseline;gap:10px;margin:8px 0 10px">
+        <span id="sys-cpu-val" style="font-size:34px;font-weight:700;color:var(--text-1);line-height:1">${cpuPct}%</span>
+        <span style="font-size:12px;color:var(--muted)">${s.cpu_cores||0}核 / ${s.cpu_threads||0}线程</span>
+      </div>
+      <div class="progress"><div id="sys-cpu-bar" class="progress-fill" style="width:${cpuPct}%;background:${cpuColor};min-width:26px">${cpuPct}%</div></div>
+      <div style="margin-top:12px;display:grid;grid-template-columns:repeat(3,1fr);gap:6px;font-size:12px">
+        <div title="最近 1 分钟内，排队等 CPU 处理的任务数。数值越接近 ${s.cpu_threads||'CPU 线程数'}，系统越忙">现在 <span id="sys-load-0" style="color:${loadColor(s.load[0])};font-weight:600">${fmtLoad(s.load[0])}</span></div>
+        <div title="最近 5 分钟内，排队等 CPU 处理的任务数平均值">5分钟 <span id="sys-load-1" style="color:${loadColor(s.load[1])};font-weight:600">${fmtLoad(s.load[1])}</span></div>
+        <div title="最近 15 分钟内，排队等 CPU 处理的任务数平均值">15分钟 <span id="sys-load-2" style="color:${loadColor(s.load[2])};font-weight:600">${fmtLoad(s.load[2])}</span></div>
+      </div>
+      ${pw?`<div style="margin-top:10px;font-size:12px;color:var(--muted);border-top:1px solid var(--border);padding-top:8px" title="${esc(pwTip)}">实时功耗 ${pwTotal}W · CPU 封装 ${pw.package!=null?pw.package:'—'}W${pw.dram!=null?' · 内存 '+pw.dram+'W':''}</div>`:''}
     </div>
     <div class="card">
       <h3>内存使用</h3>
-      <div class="kv"><span class="k">总量</span><span class="v">${s.memory.total}</span></div>
-      <div class="kv"><span class="k">已用</span><span class="v">${s.memory.used}</span></div>
-      <div class="kv"><span class="k">可用</span><span class="v">${s.memory.available}</span></div>
-      <div style="margin-top:8px"><div class="progress"><div class="progress-fill" style="width:${memPct}%;background:${memColor}">${memPct}%</div></div></div>
+      <div style="display:flex;align-items:baseline;gap:10px;margin:8px 0 10px">
+        <span id="sys-mem-val" style="font-size:34px;font-weight:700;color:var(--text-1);line-height:1">${memPct}%</span>
+        <span style="font-size:12px;color:var(--muted)">${s.memory.used} / ${s.memory.total}</span>
+      </div>
+      <div class="progress"><div id="sys-mem-bar" class="progress-fill" style="width:${memPct}%;background:${memColor};min-width:26px">${memPct}%</div></div>
+      <div style="margin-top:10px;display:grid;grid-template-columns:repeat(2,1fr);gap:6px;font-size:12px">
+        <div>总量 <span style="font-weight:600">${s.memory.total}</span></div>
+        <div>可用 <span style="font-weight:600">${s.memory.available}</span></div>
+      </div>
     </div>
+    <div class="card" style="grid-column:1/-1" id="sys-net-card">${renderSysNetCard(s.nics)}</div>
     <div class="card">
       <h3>风扇转速</h3>
       ${fansHtml||'<div class="loading">无数据</div>'}
@@ -1633,54 +1675,43 @@ function renderSystem(s){
 // ===== 温度监控独立页面（关键温度阈值 + 主板测点温度墙）=====
 function renderTemps(s){
   let sens = (s&&s.sensors) || {};
-  // 关键温度阈值列表：主板 / 南桥(PCH 芯片组) / CPU 整体(封装)；过滤掉每个 CPU 核心、T_Sensor、VRM、PECI 代理等细分探头，以及未接线的 0°C 无效测点
-  let tempsHtml = (sens.temps||[]).filter(t=>{
-    let _n=(t.name||'').toLowerCase();
-    if(_n.includes('peci')) return false;                        // PECI 代理与封装温度重复，防误导
-    if(typeof t.value!=='number'||t.value<=0) return false;      // 未接线测点(0°C)不显示
-    if(_n.includes('主板')||_n.includes('acpi')||_n.includes('pch')||_n.includes('芯片组')) return true;
-    if(_n.includes('cpu') && !_n.includes('核心') && !_n.includes('ccd')) return true;
-    return false;
-  }).map(t=>{
-    let col = t.crit&&t.value>=t.crit ? 'var(--red)' : t.max&&t.value>=t.max ? 'var(--orange)' : 'inherit';
-    let extra = t.crit ? ` (上限${t.max||'-'}°C/临界${t.crit}°C)` : t.max ? ` (上限${t.max}°C)` : '';
-    return `<div class="kv"><span class="k">${esc(t.name)}</span><span class="v" style="color:${col}">${t.value}°C${extra}</span></div>`;
-  }).join('');
   // 主板测点全览墙（过滤无效 0°C / 负温）
   let tempEntries = (sens.temps||[]).filter(t=>typeof t.value==='number'&&t.value>0&&t.value<150);
-  let wall = tempEntries.length?`<div class="temp-wall">${tempEntries.map(t=>{let raw=t.raw||'';let tip=raw?raw+'（原始测点名）':'';let star=(t.name==='CPU 封装温度')?' <span class="best-tag" title="CPU 内部传感器直读，最准确">★最准</span>':'';return `<div class="temp-chip" title="${esc(tip)}"><span class="tc-name">${esc(t.name)}${star}</span><span class="tc-val" style="color:${tempColor(t.value,85)}">${t.value}°C</span></div>`;}).join('')}</div>`:'<div class="loading">未检测到温度测点</div>';
+  // 阵列卡芯片温度（ROC Temperature）：并入门禁温度监控（随 /api/system 刷新）
+  let raidTemp = (typeof s.raid_temp==='number') ? s.raid_temp
+              : (DATA && DATA.raid && typeof DATA.raid.controller_temp==='number') ? DATA.raid.controller_temp
+              : null;
+  let raidEntry = (raidTemp!=null) ? {name:'阵列卡芯片温度', raw:'Controller Temperature (ROC)', value:raidTemp, max:80, crit:90} : null;
+  let wallEntries = raidEntry ? tempEntries.concat([raidEntry]) : tempEntries;
+  let wall = wallEntries.length?`<div class="temp-wall">${wallEntries.map(t=>{let raw=t.raw||'';let tip=raw?raw+'（原始测点名）':'';let star=(t.name==='CPU 封装温度')?' <span class="best-tag" title="CPU 内部传感器直读，最准确">★最准</span>':'';let trip=t.crit||t.max||85;return `<div class="temp-chip" title="${esc(tip)}"><span class="tc-name">${esc(t.name)}${star}</span><span class="tc-val" style="color:${tempColor(t.value, trip)}">${t.value}°C</span></div>`;}).join('')}</div>`:'<div class="loading">未检测到温度测点</div>';
   // 温度汇总：最高、平均、偏高/告警数量（与系统资源页的 CPU/内存解耦，避免重复）
   let maxTemp = null, avgTemp = null, warnCount = 0, critCount = 0;
-  if(tempEntries.length){
+  if(wallEntries.length){
     let sum = 0;
-    tempEntries.forEach(t=>{
+    wallEntries.forEach(t=>{
       sum += t.value;
       if(t.crit && t.value >= t.crit) critCount++;
       else if(t.max && t.value >= t.max) warnCount++;
       else if(t.value >= 85) warnCount++;
       if(maxTemp===null || t.value > maxTemp) maxTemp = t.value;
     });
-    avgTemp = Math.round(sum / tempEntries.length * 10) / 10;
+    avgTemp = Math.round(sum / wallEntries.length * 10) / 10;
   }
   let statusText = critCount ? `${critCount} 个临界` : warnCount ? `${warnCount} 个偏高` : '全部正常';
   let statusOk = !critCount && !warnCount;
-  return `
-  ${panelHero({icon:ICON_TEMPS,title:'温度监控',sub:'主板 / CPU / 芯片组 温度与阈值',badge:{ok:statusOk,text:statusText},stats:[
+  let stats = [
     {v:(s.cpu_temp!=null?s.cpu_temp+'°C':'N/A'),k:'CPU 温度',tip:'CPU 封装温度（Package id），CPU 内部传感器直读，最准确'},
+    {v:(raidTemp!=null?raidTemp+'°C':'—'),k:'阵列卡温度',tip:'阵列卡芯片(ROC)温度，由 storcli 读取'},
     {v:(maxTemp!=null?maxTemp+'°C':'—'),k:'最高温度'},
-    {v:(avgTemp!=null?avgTemp+'°C':'—'),k:'平均温度'},
-    {v:(tempEntries.length||'—'),k:'温度测点'}
-  ]})}
+    {v:(avgTemp!=null?avgTemp+'°C':'—'),k:'平均温度'}
+  ];
+  return `
+  ${panelHero({icon:ICON_TEMPS,title:'温度监控',sub:'主板 / CPU / 芯片组 / 阵列卡 温度与阈值',badge:{ok:statusOk,text:statusText},stats:stats})}
   <div class="sys-grid">
-    <div class="card">
-      <h3>温度传感器</h3>
-      ${tempsHtml||'<div class="loading">无数据</div>'}
-      <div style="margin-top:8px;font-size:12px;color:var(--muted)">颜色：绿正常 · 橙偏高 · 红危险。阈值取自主板传感器。</div>
-    </div>
-    <div class="card" style="grid-column:1/-1">
+    <div class="card" style="flex:1 1 100%">
       <h3 title="硬件能承受的温度上限，超过会降频保护">温度墙</h3>
       ${wall}
-      <div style="margin-top:8px;font-size:12px;color:var(--muted)">主板传感器测点全览（已过滤无效 0°C / 负温）；鼠标悬停可查看原始英文名。颜色：绿正常 · 橙偏高 · 红危险</div>
+      <div style="margin-top:8px;font-size:12px;color:var(--muted)">主板传感器测点 + 阵列卡芯片温度全览（已过滤无效 0°C / 负温）；鼠标悬停可查看原始英文名。颜色：绿正常 · 橙偏高 · 红危险</div>
     </div>
   </div>`;
 }
@@ -2219,7 +2250,7 @@ async function fetchTemps(){
 function ensureTempPolling(){
   if(_tempTimer) return;
   fetchTemps();
-  _tempTimer=setInterval(fetchTemps, 10000);
+  _tempTimer=setInterval(fetchTemps, 5000);
 }
 
 // ===== 逐风扇温度联动控速（fan_rules）：每台风扇独立温度源 + 独立曲线 =====
@@ -2456,26 +2487,82 @@ async function applyFanPreset(val){
   highlightPreset(val);
 }
 let fanTimer=null;
-// 轻量实时流量刷新：每 2s 只拉 /api/metrics（后端 daemon 现成数据，不重跑硬件采集），
-// 只更新每个网卡「实时流量」那一行，不重渲整个系统面板（系统面板默认 30s 才拉一次，太慢）。
+// 轻量实时流量刷新：每 1s 只拉 /api/metrics（后端 daemon 现成数据，不重跑硬件采集），
+// 同时增量刷新 CPU/内存/负载数字，不重渲整个系统面板（系统面板默认 30s 才拉一次，太慢）。
 let netRateTimer=null;
+let RT_NET=[];   // 每 1s 由 fetchNetRates 刷新的实时网卡速率（系统资源页网络卡优先用此，避免读首屏死值）
+// 1 秒级增量刷新：只改 hero + 系统资源卡里的 CPU/内存/负载数字与进度条，绝不重渲整页（避免打断交互/抖动）
+function updateLiveStats(d){
+  if(!d) return;
+  if(d.cpu_usage!=null){
+    let p = Math.round(parseFloat(d.cpu_usage));
+    if(!isNaN(p)){
+      let col = p>85?'var(--red)':p>60?'var(--orange)':'var(--green)';
+      let hc=document.getElementById('hero-cpu'); if(hc) hc.textContent=p+'%';
+      let sc=document.getElementById('sys-cpu-val'); if(sc) sc.textContent=p+'%';
+      let sb=document.getElementById('sys-cpu-bar'); if(sb){ sb.style.width=p+'%'; sb.style.background=col; sb.textContent=p+'%'; }
+    }
+  }
+  if(d.mem_percent!=null){
+    let p=Math.round(parseFloat(d.mem_percent));
+    if(!isNaN(p)){
+      let col=p>85?'var(--red)':p>70?'var(--orange)':'var(--green)';
+      let hm=document.getElementById('hero-mem'); if(hm) hm.textContent=p+'%';
+      let sm=document.getElementById('sys-mem-val'); if(sm) sm.textContent=p+'%';
+      let smb=document.getElementById('sys-mem-bar'); if(smb){ smb.style.width=p+'%'; smb.style.background=col; smb.textContent=p+'%'; }
+    }
+  }
+  if(d.load && Array.isArray(d.load)){
+    let threads = window.__cpuThreads || 1;
+    d.load.forEach(function(lv,i){
+      let el=document.getElementById('sys-load-'+i); if(!el) return;
+      let c = parseFloat(lv)>threads?'var(--red)':parseFloat(lv)>threads*0.7?'var(--orange)':'var(--green)';
+      el.style.color=c; el.textContent=fmtLoad(lv);
+    });
+  }
+}
 async function fetchNetRates(){
   try{
     let r=await fetch('/api/metrics?_='+Date.now());
     let d=await r.json();
+    updateLiveStats(d);   // 1s 级增量刷新 CPU/内存/负载（后端已实时计算，不受 /api/system 60s 缓存影响）
+    RT_NET = (d.net||[]);
+    // 与 renderSystem 完全一致的虚拟/重复口过滤，避免总速率重复合计（物理口 eno1 与 OVS 桥 eno1-ovs 二留一）
+    let _ovsBridges = new Set(RT_NET.filter(n=>/[-.]ovs$/.test(n.name||'')).map(n=>(n.name||'').replace(/[-.]ovs$/,'')));
+    let netData = RT_NET.filter(n=> (n.name!=='ovs-system') && !_ovsBridges.has(n.name) && !((n.rx_rate||0)===0 && (n.tx_rate||0)===0));
     let rates={};
-    (d.net||[]).forEach(n=>{ rates[n.name]=n; });
+    netData.forEach(n=>{ rates[n.name]=n; });
     document.querySelectorAll('[data-nic]').forEach(el=>{
       let name=el.getAttribute('data-nic');
       let m=rates[name];
+      if(!m){
+        // OVS 桥（如 eno1-ovs）的流量实际记在物理口 eno1 上；按名称兜底匹配
+        m=rates[name.replace(/-ovs$/,'')] || rates[name.replace(/\.ovs$/,'')];
+      }
       if(!m) return;
       let rx=(m.rx_rate!=null)?fmtSpeed(m.rx_rate):'—';
       let tx=(m.tx_rate!=null)?fmtSpeed(m.tx_rate):'—';
       el.textContent='↓ '+rx+' / ↑ '+tx;
     });
+    // 同步更新系统资源页「网络」卡的总下载/上传速率（每 2s 实时，已过滤虚拟/重复口）
+    let rx=0, tx=0; netData.forEach(n=>{ rx+=(n.rx_rate||0); tx+=(n.tx_rate||0); });
+    let rxEl=document.getElementById('net-rx-total'); if(rxEl) rxEl.textContent=fmtSpeed(rx)+'/s';
+    let txEl=document.getElementById('net-tx-total'); if(txEl) txEl.textContent=fmtSpeed(tx)+'/s';
   }catch(e){}
 }
-function startNetRateTimer(){ if(!netRateTimer){ fetchNetRates(); netRateTimer=setInterval(fetchNetRates, 2000); } }
+function startNetRateTimer(){ if(!netRateTimer){ fetchNetRates(); netRateTimer=setInterval(fetchNetRates, 1000); } }
+// 网络卡片轻量刷新：每 5s 拉 /api/network（独立接口，不含 /api/system 的 60s 缓存），
+// 实时更新 IP/状态/连接速率等，避免网络卡片因慢缓存而长时间不更新。
+let sysNetTimer=null;
+async function fetchSysNet(){
+  try{
+    let r=await fetch('/api/network?_='+Date.now());
+    let d=await r.json();
+    let card=document.getElementById('sys-net-card');
+    if(card && d.nics){ card.innerHTML = renderSysNetCard(d.nics, new Date()); }
+  }catch(e){}
+}
+function startSysNetTimer(){ if(!sysNetTimer){ fetchSysNet(); sysNetTimer=setInterval(fetchSysNet, 5000); } }
 function clearPresetHighlight(){
   document.querySelectorAll('.preset-btn[data-preset]').forEach(b=>b.classList.remove('active'));
 }
@@ -2656,7 +2743,7 @@ function bindFanSliders(){
   document.querySelectorAll('.fan-custom-input').forEach(inp=>{
     inp.addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); applyFanCustom(inp.dataset.hwmon, parseInt(inp.dataset.idx)); } });
   });
-  if(!fanTimer){ fetchFanStatus(); fanTimer=setInterval(fetchFanStatus, 2000); }
+  if(!fanTimer){ fetchFanStatus(); fanTimer=setInterval(fetchFanStatus, 1000); }
 }
 
 
@@ -2941,44 +3028,6 @@ function renderDetect(D){
     <div class="kv"><span class="k">运行时间</span><span class="v">${s.uptime||'-'}</span></div>
     <div class="kv"><span class="k">虚拟内存</span><span class="v">${(s.swap&&s.swap.used)?(s.swap.used+' / '+s.swap.total):'-'}</span></div>
   </div>`;
-  let _nics = (s.nics||[]).filter(n=>{
-    let nm=(n.name||'').toLowerCase();
-    // 注意：只过滤 OVS 的「内部接口 ovs-system」，绝不能过滤 *-ovs 桥——
-    // fnOS 的真实 IP 就配在 eno1-ovs 这类 OVS 桥上，误过滤会导致整页显示「无IP」
-    return !/^(lo|ovs-system|docker|virbr|br-)|veth/.test(nm);
-  });
-  let netCard = '';
-  if(!_nics.length){
-    netCard = `<div class="card" style="grid-column:1/-1"><h3>网络</h3><div class="loading">未检测到网卡</div></div>`;
-  } else {
-    let tabs = _nics.map((n,i)=>`<button class="nic-tab ${i===0?'active':''}" data-nic-idx="${i}" onclick="switchNic(${i})">网口${i+1}</button>`).join('');
-    let details = _nics.map((n,i)=>{
-      let st=(n.state||'').toUpperCase();
-      let sc=st==='UP'?'var(--green)':'var(--red)';
-      let sp=n.speed?n.speed+' Mbps':'N/A';
-      let duplex=n.duplex?n.duplex+'双工':'';
-      let cfg=[sp, duplex, n.mtu?('MTU '+n.mtu):''].filter(Boolean).join(' · ');
-      let hw=[n.model, n.driver?('驱动 '+n.driver):'', n.bus_info?('总线 '+n.bus_info):''].filter(Boolean).join(' · ');
-      let ipv6=n.ipv6||'无';
-      let rx=(n.rx_rate!=null)?fmtSpeed(n.rx_rate):'—';
-      let tx=(n.tx_rate!=null)?fmtSpeed(n.tx_rate):'—';
-      return `<div class="nic-detail" id="nic-detail-${i}" style="${i===0?'':'display:none'}">
-        <div class="nic-ifname">${esc(n.name)}</div>
-        <div class="kv"><span class="k" title="设备在当前局域网里的网络门牌号">IPv4 地址</span><span class="v">${esc(n.ip||'无 IP')}</span></div>
-        <div class="kv"><span class="k" title="新一代网络地址，部分网络环境才用得到">IPv6 地址</span><span class="v">${esc(ipv6)}</span></div>
-        <div class="kv"><span class="k" title="网卡出厂自带的唯一物理编号，相当于网卡的身份证">MAC 地址</span><span class="v">${esc(n.mac||'-')}</span></div>
-        <div class="kv"><span class="k">网络配置</span><span class="v">${esc(cfg)}</span></div>
-        ${hw?`<div class="kv"><span class="k">硬件信息</span><span class="v">${esc(hw)}</span></div>`:''}
-        <div class="kv"><span class="k">状态</span><span class="v" style="color:${sc}">${esc(st)}</span></div>
-        <div class="kv"><span class="k">实时流量</span><span class="v" style="font-size:12px" data-nic="${esc(n.phy_name||n.name)}">↓ ${rx} / ↑ ${tx}</span></div>
-      </div>`;
-    }).join('');
-    netCard = `<div class="card" style="grid-column:1/-1">
-      <h3>网络</h3>
-      <div class="nic-tabs">${tabs}</div>
-      ${details}
-    </div>`;
-  }
   let gpuCard = `
   <div class="card">
     <h3>显卡</h3>
@@ -3105,7 +3154,6 @@ function renderDetect(D){
     </div>
     ${gpuCard}
     ${memCard}
-    ${netCard}
   </div>`;
   // 阵列卡 & 磁盘
   let raidCardsHtml;
@@ -3764,6 +3812,7 @@ if(autoRefreshEnabled){ timer = setInterval(autoRefreshTick, 30000); }
 
 loadData();  // 首屏仍全量拉取一次，打底填充所有板块 DATA
 startNetRateTimer();  // 启动轻量实时流量刷新（每 2s 只拉 /api/metrics，不动重采集）
+startSysNetTimer();  // 启动网络卡片轻量刷新（每 5s 拉独立 /api/network，不依赖 60s 缓存）
 
 // ---------- 检测新版本 ----------
 let updateDismissed = false;
