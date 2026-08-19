@@ -157,13 +157,14 @@ def test_select_subset_only_claims_listed():
 
 
 def test_select_sys_priority_over_disk():
-    # sys_temp 与 disk_temp 都设 "all" 时，sys 先占全部，disk 不得重复控（互不干扰）。
+    # sys_temp 与 disk_temp 都设 "all" 时，重叠风扇归 disk（硬盘温控更敏感，用户明确诉求），
+    # 从 sys 移除 disk 已选的风扇（v1.8.8 语义：disk 优先，不再是「sys 先占全部」）。
     all_fans = _fake_fans()
     sys_cfg = {"enabled": True, "controlled_fans": "all"}
     disk_cfg = {"enabled": True, "disks": ["/dev/sda"], "controlled_fans": "all"}
     sys_claimed, disk_claimed = app._select_temp_fans(all_fans, sys_cfg, disk_cfg)
-    assert sys_claimed == set(all_fans)
-    assert disk_claimed == set()
+    assert sys_claimed == set()
+    assert disk_claimed == set(all_fans)
 
 
 def test_select_disk_only_when_sys_disabled():
