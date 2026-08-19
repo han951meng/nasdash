@@ -36,7 +36,7 @@ jobs:
         run: ./build.sh
 
       - name: Upload fpk artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: nasdash-fpk
           path: nasdash.fpk
