@@ -2230,9 +2230,11 @@ def parse_nvme_smart(text):
     d["data_units_written"] = (m.group(1) + (m.group(2) or "")).strip() if m else None
     return d
 
-# ===================== 硬盘自检（A/B 双档）=====================
+# ===================== 硬盘自检（A/B/C 三档）=====================
 # A 档：smartctl -t long（只读， firmware 面扫，安全，可后台运行）。
 # B 档：badblocks -wsv（读写覆盖，破坏性，仅允许独立盘：未挂载、非 RAID/LVM 成员）。
+# C 档：badblocks -sv（只读表面扫描，不写数据、不伤盘，可在用盘/阵列成员上运行，1 遍读）。
+# B/C 档都会把坏块 LBA 实时/结束时写入 -o 文件，供前端画「哨兵式」扇区网格。
 DISK_TEST_LOCK = _threading.Lock()
 DISK_TEST_JOBS = {}
 
@@ -2360,8 +2362,9 @@ def _smart_long_worker(dev):
         time.sleep(5)
 
 
-def _estimate_badblocks_eta(dev):
-    """根据容量和 SSD/HDD 给 badblocks -wsv（4 pass 覆写）一个保守参考总用时（秒）。"""
+def _estimate_badblocks_eta(dev, passes=4, readonly=False):
+    """根据容量和 SSD/HDD 给 badblocks 一个保守参考总用时（秒）。
+    destructive（-wsv）默认 4 pass 覆写；surface（-sv）1 pass 只读。"""
     try:
         size_bytes = int(subprocess.check_output(["blockdev", "--getsize64", "/dev/%s" % dev], text=True, stderr=subprocess.DEVNULL).strip())
     except Exception:
@@ -2371,59 +2374,111 @@ def _estimate_badblocks_eta(dev):
             is_hdd = f.read().strip() == "1"
     except Exception:
         is_hdd = True
-    # 保守写速：HDD 约 50MB/s，SSD 约 120MB/s；4 pass 总数据量 = 容量 * 4
-    speed = 50 * 1024 * 1024 if is_hdd else 120 * 1024 * 1024
+    # 保守速度：只读 HDD 约 150MB/s、SSD 约 400MB/s；覆写 HDD 约 50MB/s、SSD 约 120MB/s
+    if readonly:
+        speed = 150 * 1024 * 1024 if is_hdd else 400 * 1024 * 1024
+    else:
+        speed = 50 * 1024 * 1024 if is_hdd else 120 * 1024 * 1024
     if size_bytes <= 0 or speed <= 0:
         return None
-    return int(size_bytes * 4 / speed)
+    return int(size_bytes * passes / speed)
 
 
-def _start_badblocks(dev):
-    ok, reason = _is_standalone_disk(dev)
-    if not ok:
-        raise RuntimeError(reason)
+def _start_badblocks(dev, mode="destructive"):
+    """启动 badblocks 扫描。
+    mode=destructive：-wsv 读写覆盖（破坏性，仅独立盘）；mode=surface：-sv 只读（可在用盘跑）。
+    两种模式都用 -o 把坏块 LBA 列表写到 /tmp，供前端扇区网格标红。"""
+    if mode == "destructive":
+        ok, reason = _is_standalone_disk(dev)
+        if not ok:
+            raise RuntimeError(reason)
     dev_path = "/dev/%s" % dev
-    cmd = [BADBLOCKS, "-wsv", dev_path]
+    try:
+        total_bytes = int(subprocess.check_output(["blockdev", "--getsize64", dev_path], text=True, stderr=subprocess.DEVNULL).strip())
+    except Exception:
+        total_bytes = 0
+    outfile = "/tmp/nasdash_bb_%s.txt" % dev
+    try:
+        if os.path.exists(outfile):
+            os.remove(outfile)
+    except Exception:
+        pass
+    blocksize = 4096
+    if mode == "surface":
+        passes = 1
+        cmd = [BADBLOCKS, "-sv", "-b", str(blocksize), "-o", outfile, dev_path]
+        msg = "只读表面扫描已启动（不写数据，可在用盘上运行）"
+        hint = _estimate_badblocks_eta(dev, passes=1, readonly=True)
+    else:
+        passes = 4
+        cmd = [BADBLOCKS, "-wsv", "-b", str(blocksize), "-o", outfile, dev_path]
+        msg = "坏块慢扫已启动（破坏性，会覆盖全盘数据）"
+        hint = _estimate_badblocks_eta(dev, passes=4)
     try:
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
     except Exception as e:
         raise RuntimeError("启动 badblocks 失败：%s" % e)
     with DISK_TEST_LOCK:
         DISK_TEST_JOBS[dev] = {
-            "type": "badblocks",
+            "type": "surface" if mode == "surface" else "badblocks",
             "state": "running",
             "started_at": time.time(),
-            "message": "坏块慢扫已启动（破坏性，会覆盖全盘数据）",
+            "message": msg,
             "progress": 0,
             "elapsed": 0,
             "eta_total": None,
             "eta_remain": None,
-            "eta_total_hint": _estimate_badblocks_eta(dev),  # 基于容量的参考总用时，0% 阶段先给用户一个大概
+            "eta_total_hint": hint,
             "result": None,
             "error": None,
             "pid": proc.pid,
+            "blocksize": blocksize,
+            "total_bytes": total_bytes,
+            "bad_blocks": [],
+            "outfile": outfile,
         }
-    _threading.Thread(target=_badblocks_worker, args=(dev, proc), daemon=True).start()
+    _threading.Thread(target=_badblocks_worker, args=(dev, proc, passes, outfile), daemon=True).start()
 
 
-def _badblocks_worker(dev, proc):
+def _badblocks_worker(dev, proc, passes=4, outfile=None):
     try:
         buf = ""
         pass_completed = 0
-        total_passes = 4  # badblocks -w 固定 4 个 pattern pass（0xaa/0x55/0xff/0x00）
+        total_passes = passes
+        seen_bad = set()
+
+        def _collect_bad(outf):
+            """从 badblocks -o 文件收集坏块 LBA（可能扫描过程中实时写入，也可能只在结束时落盘）。"""
+            nonlocal seen_bad
+            try:
+                with open(outf) as f:
+                    for line in f:
+                        line = line.strip()
+                        if line.isdigit():
+                            seen_bad.add(int(line))
+                if seen_bad:
+                    with DISK_TEST_LOCK:
+                        j = DISK_TEST_JOBS.get(dev)
+                        if j:
+                            j["bad_blocks"] = sorted(seen_bad)
+            except Exception:
+                pass
+
         while True:
-            chunk = proc.stdout.read(512)
+            chunk = proc.stdout.read(256)
             if not chunk:
                 break
             buf += chunk
             tail = buf[-8192:]
-            m = re.search(r"([\d.]+)% done", tail)
-            cur = float(m.group(1)) if m else None
+            # badblocks -s 用退格符原地覆盖刷新进度，buf 里会堆满历史行，
+            # re.search 会永远命中最早的 0.00% —— 必须 findall 取最后一个。
+            ms = re.findall(r"([\d.]+)% done", tail)
+            cur = float(ms[-1]) if ms else None
             pc = buf.count("Pass completed")
             if pc > pass_completed:
                 pass_completed = pc
             if cur is not None:
-                # 把 4 个 pass 各自的 0~100% 折算成整体进度，避免 ETA 被低估 4 倍、进度条回弹
+                # 把多个 pass 各自的 0~100% 折算成整体进度，避免 ETA 被低估、进度条回弹
                 overall = (pass_completed + cur / 100.0) / total_passes * 100.0
                 overall = max(0.0, min(100.0, overall))
                 now = time.time()
@@ -2436,23 +2491,31 @@ def _badblocks_worker(dev, proc):
                             total_eta = j["elapsed"] / (overall / 100.0)
                             j["eta_total"] = int(total_eta)
                             j["eta_remain"] = max(0, int(total_eta - j["elapsed"]))
-            em = re.search(r"\((\d+)/(\d+)/(\d+) errors\)", tail)
-            if em:
-                read_err, write_err, corr = em.groups()
+            ems = re.findall(r"\((\d+)/(\d+)/(\d+) errors\)", tail)
+            if ems:
+                read_err, write_err, corr = ems[-1]
                 with DISK_TEST_LOCK:
                     j = DISK_TEST_JOBS.get(dev)
                     if j:
                         j["result"] = {"read_errors": read_err, "write_errors": write_err, "corrected": corr}
+            if outfile:
+                _collect_bad(outfile)
         rc = proc.wait()
+        if outfile:
+            _collect_bad(outfile)
         with DISK_TEST_LOCK:
             j = DISK_TEST_JOBS.get(dev)
         if j and j["state"] == "running":
+            bad_n = len(j.get("bad_blocks") or [])
+            prefix = "表面扫描" if total_passes == 1 else "坏块慢扫"
             if rc == 0:
-                _set_disk_test_done(dev, "坏块慢扫完成，未发现坏块")
+                _set_disk_test_done(dev, "%s完成，未发现坏块" % prefix)
+            elif rc == 1:
+                _set_disk_test_done(dev, "%s完成，发现 %d 个坏块" % (prefix, bad_n))
             else:
-                _set_disk_test_done(dev, "坏块慢扫退出（返回码 %d）" % rc, error="返回码 %d" % rc)
+                _set_disk_test_done(dev, "%s退出（返回码 %d）" % (prefix, rc), error="返回码 %d" % rc)
     except Exception as e:
-        _set_disk_test_done(dev, "坏块慢扫异常：%s" % e, error=str(e))
+        _set_disk_test_done(dev, "扫描异常：%s" % e, error=str(e))
 
 
 def _abort_badblocks(dev):
@@ -2469,7 +2532,7 @@ def _abort_badblocks(dev):
             os.kill(pid, signal.SIGKILL)
         except Exception:
             pass
-    _set_disk_test_done(dev, "坏块慢扫已中止", error="用户中止")
+    _set_disk_test_done(dev, "扫描已中止", error="用户中止")
 
 
 @_ttl_cache(300)
@@ -4984,14 +5047,14 @@ def api_disks_selftest_get():
     with DISK_TEST_LOCK:
         jobs = {}
         for k, v in DISK_TEST_JOBS.items():
-            jobs[k] = {kk: vv for kk, vv in v.items() if kk != "pid" and kk != "_proc"}
+            jobs[k] = {kk: vv for kk, vv in v.items() if kk not in ("pid", "_proc", "outfile")}
     return jsonify({"ok": True, "jobs": jobs})
 
 
 @app.route("/api/disks/selftest", methods=["POST"])
 @require_admin()
 def api_disks_selftest_post():
-    """启动硬盘自检：type=long（SMART 长自检）或 badblocks（破坏性，仅限独立盘）。"""
+    """启动硬盘自检：type=long（SMART 长自检）/ badblocks（破坏性，仅独立盘）/ surface（只读表面扫描，所有盘）。"""
     try:
         data = request.get_json(force=True) or {}
     except Exception:
@@ -5001,8 +5064,8 @@ def api_disks_selftest_post():
     confirm = data.get("confirm", False)
     if not isinstance(dev, str) or not _safe_token(dev):
         return jsonify({"ok": False, "error": "非法设备名"}), 400
-    if ttype not in ("long", "badblocks"):
-        return jsonify({"ok": False, "error": "type 须为 long 或 badblocks"}), 400
+    if ttype not in ("long", "badblocks", "surface"):
+        return jsonify({"ok": False, "error": "type 须为 long / badblocks / surface"}), 400
     disks = get_disks()
     if not any(d.get("dev") == dev for d in disks):
         return jsonify({"ok": False, "error": "未找到该硬盘"}), 400
@@ -5015,11 +5078,16 @@ def api_disks_selftest_post():
         ok, reason = _is_standalone_disk(dev)
         if not ok:
             return jsonify({"ok": False, "error": reason}), 400
+    if ttype == "surface":
+        if not confirm:
+            return jsonify({"ok": False, "error": "C 类表面扫描耗时较长，请确认"}), 400
     try:
         if ttype == "long":
             _start_smart_long(dev)
+        elif ttype == "surface":
+            _start_badblocks(dev, mode="surface")
         else:
-            _start_badblocks(dev)
+            _start_badblocks(dev, mode="destructive")
         return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500

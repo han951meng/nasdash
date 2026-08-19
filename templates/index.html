@@ -306,6 +306,17 @@
 .disk-test-msg.error{color:var(--danger)}
 .disk-test-msg.done{color:var(--success)}
 .disk-test-actions{display:flex;gap:8px;align-items:center;margin-top:8px}
+/* 哨兵式扇区网格（灰=未扫 / 绿=正常 / 红=坏块 / 黄=当前扫描位置） */
+.surface-grid{display:grid;grid-template-columns:repeat(80,1fr);gap:1px;margin:10px 0 4px}
+.sg-cell{height:6px;border-radius:1px;background:var(--muted);opacity:.3}
+.sg-cell.ok{background:#22c55e;opacity:1}
+.sg-cell.bad{background:#ef4444;opacity:1}
+.sg-cell.cur{background:#f59e0b;opacity:1}
+.surface-legend{display:flex;flex-wrap:wrap;gap:14px;font-size:11px;color:var(--muted);margin:4px 0 8px}
+.surface-legend .sg-cell{vertical-align:-1px;margin-right:4px;display:inline-block;opacity:1}
+/* 扫描面板最小化：一行小条 */
+.disk-test-min{display:flex;align-items:center;flex-wrap:wrap;gap:10px;font-size:12px;color:var(--text-2)}
+.disk-test-min .pct{font-weight:700;color:var(--primary)}
 .disk-info-card{background:var(--fill-0);border:1px solid var(--border)}
 .disk-info-card h3{font-size:14px;font-weight:600;margin:0 0 10px;color:var(--text-1)}
 .disk-info-card .note{font-size:13px;line-height:1.8;color:var(--text-2)}
@@ -1130,6 +1141,7 @@ function diskInfoCard(){
       + '<p>只有当你手动点下面每块盘里的<b>A 档</b>或<b>B 档</b>，才是真正的自检：</p>'
       + '<p>• <b>A 档 · SMART 长自检</b>：只读扫描整盘，不伤数据，适合二手盘/老盘体检。</p>'
       + '<p>• <b>B 档 · 坏块慢扫（badblocks）</b>：会<b class="warn">写满整盘并清空数据</b>，且很慢。因此只让「独立盘」（没挂载、不在阵列、不在 LVM）跑；在用盘按钮置灰，硬点也会被拦下。</p>'
+      + '<p>• <b>C 档 · 只读表面扫描</b>：像硬盘哨兵那样<b>只读</b>扫盘面，不写数据、不伤盘，<b>所有盘都能跑</b>（包括正在用的盘/阵列成员），耗时较长；扫描时会显示扇区网格实时进度。</p>'
     + '</div>'
   + '</div>';
 }
@@ -1219,10 +1231,28 @@ function renderDiskTest(d){
         etaHtml = ' · 预计剩余 <span id="dt-eta-'+esc(d.dev)+'">计算中…</span>（'+hint+'）';
       }
     }
+    // 最小化：只留一行小条（盘名 + 进度），后台继续扫，可随时展开
+    if(diskTestMin[d.dev]){
+      return '<div class="disk-test-section disk-test-min">'
+        +iconSvg('pulse')+'硬盘自检 <b>'+esc(d.dev)+'</b> · '+esc(jobTypeName(job.type))+' <span class="pct" id="dt-minpct-'+esc(d.dev)+'">'+pct+'%</span>'
+        +'<button class="btn-mini" onclick="toggleDiskTestMin(\''+esc(d.dev)+'\',false)">展开</button>'
+        +'<button class="btn-mini" onclick="abortDiskTest(\''+esc(d.dev)+'\')">中止</button>'
+        +'<span class="disk-test-msg" id="dt-state-'+esc(d.dev)+'"></span>'
+        +'</div>';
+    }
+    var isGrid = (job.type==='badblocks'||job.type==='surface');
+    var gridHtml = isGrid
+      ? surfaceGridHTML(d.dev, job)
+        + '<div class="surface-legend">'
+        + '<span><i class="sg-cell ok"></i>正常</span><span><i class="sg-cell"></i>未扫</span>'
+        + '<span><i class="sg-cell bad"></i>坏块</span><span><i class="sg-cell cur"></i>扫描位置</span></div>'
+      : '';
     return '<div class="disk-test-section">'
-      +'<div class="disk-test-title">'+iconSvg('pulse')+'硬盘自检</div>'
+      +'<div class="disk-test-title">'+iconSvg('pulse')+'硬盘自检 · '+esc(jobTypeName(job.type))+' · '+esc(d.dev)
+      +'<button class="btn-mini" style="margin-left:auto" onclick="toggleDiskTestMin(\''+esc(d.dev)+'\',true)" title="收起面板，后台继续扫描">最小化</button></div>'
       +'<div class="disk-test-msg">'+esc(job.message)+' · 已运行 <span id="dt-elapsed-'+esc(d.dev)+'">'+fmtSec(elapsedNow)+'</span>'+etaHtml+'</div>'
       +prog
+      +gridHtml
       +'<div class="disk-test-actions"><button class="btn-mini" onclick="abortDiskTest(\''+esc(d.dev)+'\')">中止</button><span class="disk-test-msg" id="dt-state-'+esc(d.dev)+'"></span></div>'
     +'</div>';
   }
@@ -1231,6 +1261,9 @@ function renderDiskTest(d){
     var result = '';
     if(job.result && job.result.read_errors!==undefined){
       result = ' · 读错误 '+job.result.read_errors+' / 写错误 '+job.result.write_errors+' / 可纠正 '+job.result.corrected;
+    }
+    if(job.bad_blocks && job.bad_blocks.length){
+      result += ' · <b style="color:var(--danger)">坏块 '+job.bad_blocks.length+' 个</b>';
     }
     return '<div class="disk-test-section">'
       +'<div class="disk-test-title">'+iconSvg('pulse')+'硬盘自检 · '+(job.state==='done'?'完成':(job.state==='error'?'失败':'中止'))+'</div>'
@@ -1247,10 +1280,39 @@ function renderDiskTest(d){
     +'<div class="disk-test-title">'+iconSvg('pulse')+'硬盘自检</div>'
     +'<div class="disk-test-btns">'
       +'<button class="btn-mini" onclick="startDiskTest(\''+esc(d.dev)+'\',\'long\',\''+modelArg+'\')">A：SMART 长自检</button>'
+      +'<button class="btn-mini" onclick="startDiskTest(\''+esc(d.dev)+'\',\'surface\',\''+modelArg+'\')" title="只读扫描盘面，不写数据、不伤盘，可用于在用盘/阵列成员">C：只读表面扫描</button>'
       +'<button class="'+bClass+'"'+(bTitle?' title="'+esc(bTitle)+'"':'')+' onclick="'+bOnclick+'"'+(bDisabled?' disabled':'')+'>B：坏块慢扫（破坏性）</button>'
     +'</div>'
     +'<div class="disk-test-msg" id="dt-state-'+esc(d.dev)+'"></div>'
   +'</div>';
+}
+var diskTestMin = {};  // 扫描面板最小化状态：dev -> true/false（minimized 时只显示一行小条，后台继续扫）
+function toggleDiskTestMin(dev, on){ diskTestMin[dev] = !!on; renderPanel('disks'); }
+function jobTypeName(t){ return t==='surface'?'只读表面扫描':(t==='badblocks'?'坏块慢扫':'SMART 长自检'); }
+// 哨兵式扇区网格：灰=未扫 / 绿=正常 / 红=坏块 / 黄=当前扫描位置（80x8=640 格，每格=盘容量/640）
+function surfaceGridHTML(dev, job){
+  var n = 640;
+  var total = job.total_bytes || 0;
+  var bs = job.blocksize || 4096;
+  var pct = job.progress || 0;
+  var green = total>0 ? Math.floor(pct/100*n) : 0;
+  var badIdx = {};
+  if(total>0 && job.bad_blocks && job.bad_blocks.length){
+    var spanB = total/n;
+    for(var i=0;i<job.bad_blocks.length;i++){
+      var idx = Math.floor(job.bad_blocks[i]*bs/spanB);
+      if(idx>=0 && idx<n) badIdx[idx]=true;
+    }
+  }
+  var cells='';
+  for(var c=0;c<n;c++){
+    var cls='sg-cell';
+    if(badIdx[c]) cls+=' bad';
+    else if(c<green) cls+=' ok';
+    else if(c===green) cls+=' cur';
+    cells+='<i class="'+cls+'"></i>';
+  }
+  return '<div class="surface-grid" id="sg-'+esc(dev)+'">'+cells+'</div>';
 }
 async function startDiskTest(dev,type,model){
   model = model || '未知型号';
@@ -1259,6 +1321,12 @@ async function startDiskTest(dev,type,model){
     body: '目标磁盘：'+model+'（/dev/'+dev+'）\n\nB 类坏块慢扫会对该盘执行读写覆盖测试，这会擦除盘上所有数据，且耗时很长。\n请再次确认该盘为独立盘（未挂载、非 RAID/LVM 成员）。',
     danger: true,
     ok: '确定执行',
+    cancel: '取消'
+  })) return;
+  if(type==='surface' && !await appConfirm({
+    title: '确认对 '+model+' 执行 C 档只读表面扫描？',
+    body: '目标磁盘：'+model+'（/dev/'+dev+'）\n\nC 档是只读表面扫描：只读取盘面数据判断能否正常读出，不写入任何数据、不会伤盘，可用于正在用的盘/阵列成员。\n但会持续读取整块盘，耗时较长，扫描期间该盘的 IO 会被占用。',
+    ok: '开始扫描',
     cancel: '取消'
   })) return;
   var st=document.getElementById('dt-state-'+dev); if(st){ st.textContent='启动中…'; st.className='disk-test-msg'; }
@@ -1298,6 +1366,8 @@ function diskTestTick(){
           et.textContent = '计算中…';
         }
       }
+      var mp = document.getElementById('dt-minpct-'+dev);
+      if(mp && job.progress!=null){ mp.textContent = Math.min(100, Math.round(job.progress))+'%'; }
     }
   }
   if(!any && diskTestTimer){ clearInterval(diskTestTimer); diskTestTimer = null; }
