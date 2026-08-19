@@ -393,7 +393,6 @@
   .nic-tab.active{background:var(--blue);color:#fff;border-color:var(--blue)}
   .net-upd{margin-top:8px;font-size:11px;color:var(--muted);text-align:right;font-family:ui-monospace,Menlo,Consolas,monospace}
   .nic-ifname{font-weight:600;font-size:14px;margin-bottom:8px;color:var(--text)}
-  .nic-rate{font-size:12px;color:var(--muted);margin:-4px 0 8px;font-family:ui-monospace,Menlo,Consolas,monospace}
   .nic-detail .kv:first-of-type{border-top:none;padding-top:0}
   .fan-label-state{font-size:12px;color:var(--green)}
   .volt-badge{display:inline-block;font-size:11px;font-weight:600;padding:1px 7px;border-radius:10px;background:var(--bg);color:var(--muted);border:1px solid var(--border);margin-left:4px}
@@ -1525,7 +1524,6 @@ function renderSysNetCard(nics, ts){
     let ipv6=n.ipv6||'无';
     return `<div class="sys-nic-detail nic-detail" id="sys-nic-detail-${i}" style="${i===currentSysNicIdx?'':'display:none'}">
       <div class="nic-ifname">${esc(n.name)}</div>
-      <div class="nic-rate" title="该网口当前实时上下行速率（每 5 秒刷新）">↓ ${fmtSpeed(n.rx_rate)} · ↑ ${fmtSpeed(n.tx_rate)}</div>
       <div class="kv"><span class="k" title="设备在当前局域网里的网络门牌号">IPv4 地址</span><span class="v">${esc(n.ip||'无 IP')}</span></div>
       <div class="kv"><span class="k" title="新一代网络地址，部分网络环境才用得到">IPv6 地址</span><span class="v">${esc(ipv6)}</span></div>
       <div class="kv"><span class="k" title="网卡出厂自带的唯一物理编号，相当于网卡的身份证">MAC 地址</span><span class="v">${esc(n.mac||'-')}</span></div>
