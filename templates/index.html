@@ -1626,7 +1626,7 @@ function renderSystem(s){
   ${panelHero({icon:ICON_SYSTEM,title:'系统资源',sub:'CPU / 内存 / 网络实时状态',stats:[
     {v:(s.cpu_usage!=null?s.cpu_usage+'%':'—'),k:'CPU 使用率', id:'hero-cpu'},
     {v:memPct+'%',k:'内存占用', id:'hero-mem'},
-    {v:netVal,k:'网络'},
+    {v:netVal,k:'网络', id:'hero-net'},
     {v:(s.uptime?String(s.uptime).replace(/\s+/g,''):'—'),k:'已运行'}
   ]})}
   <div class="sys-grid">
@@ -2548,6 +2548,11 @@ async function fetchNetRates(){
     let rx=0, tx=0; netData.forEach(n=>{ rx+=(n.rx_rate||0); tx+=(n.tx_rate||0); });
     let rxEl=document.getElementById('net-rx-total'); if(rxEl) rxEl.textContent=fmtSpeed(rx)+'/s';
     let txEl=document.getElementById('net-tx-total'); if(txEl) txEl.textContent=fmtSpeed(tx)+'/s';
+    // 同步更新顶部 hero summary 的「网络」格子（用户截图箭头所指），避免它只随整页刷新才变
+    let heroNet=document.getElementById('hero-net');
+    if(heroNet){
+      heroNet.innerHTML = netData.length ? '<div style="display:flex;flex-direction:column;gap:3px;font-size:20px;font-weight:600;line-height:1.15"><span>↓'+fmtSpeed(rx)+'</span><span>↑'+fmtSpeed(tx)+'</span></div>' : '—';
+    }
   }catch(e){}
 }
 function startNetRateTimer(){ if(!netRateTimer){ fetchNetRates(); netRateTimer=setInterval(fetchNetRates, 1000); } }
