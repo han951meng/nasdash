@@ -317,6 +317,14 @@
 /* 扫描面板最小化：一行小条 */
 .disk-test-min{display:flex;align-items:center;flex-wrap:wrap;gap:10px;font-size:12px;color:var(--text-2)}
 .disk-test-min .pct{font-weight:700;color:var(--primary)}
+/* 硬盘自检入口选项弹窗 */
+.pick-opt{display:block;width:100%;text-align:left;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:8px;cursor:pointer;font:inherit}
+.pick-opt:hover{border-color:var(--primary)}
+.pick-opt-disabled{opacity:.55;cursor:not-allowed}
+.pick-opt-disabled:hover{border-color:var(--border)}
+.pick-opt-t{display:block;font-size:13px;font-weight:600;color:var(--text)}
+.pick-opt-d{display:block;font-size:12px;color:var(--muted);margin-top:2px;line-height:1.5}
+.pick-opt-note{display:block;font-size:11px;color:var(--danger);margin-top:2px}
 .disk-info-card{background:var(--fill-0);border:1px solid var(--border)}
 .disk-info-card h3{font-size:14px;font-weight:600;margin:0 0 10px;color:var(--text-1)}
 .disk-info-card .note{font-size:13px;line-height:1.8;color:var(--text-2)}
@@ -1138,10 +1146,10 @@ function diskInfoCard(){
     + '<h3>'+iconSvg('bulb')+' 硬盘自检会伤盘吗？</h3>'
     + '<div class="note">'
       + '<p>平时 nasdash 只是<b class="safe">只读 SMART 属性</b>（读健康度、温度、通电时间等），<b>不会扫描盘面，也不会写入数据</b>，对硬盘没有额外磨损。刷新一次也就 1～2 秒，点刷新/自动刷新都不会让你的硬盘一直转或一直扫。</p>'
-      + '<p>只有当你手动点下面每块盘里的<b>A 档</b>或<b>B 档</b>，才是真正的自检：</p>'
-      + '<p>• <b>A 档 · SMART 长自检</b>：只读扫描整盘，不伤数据，适合二手盘/老盘体检。</p>'
-      + '<p>• <b>B 档 · 坏块慢扫（badblocks）</b>：会<b class="warn">写满整盘并清空数据</b>，且很慢。因此只让「独立盘」（没挂载、不在阵列、不在 LVM）跑；在用盘按钮置灰，硬点也会被拦下。</p>'
-      + '<p>• <b>C 档 · 只读表面扫描</b>：像硬盘哨兵那样<b>只读</b>扫盘面，不写数据、不伤盘，<b>所有盘都能跑</b>（包括正在用的盘/阵列成员），耗时较长；扫描时会显示扇区网格实时进度。</p>'
+      + '<p>只有当你手动点下面每块盘里的「硬盘自检」，才是真正的自检——点开后按盘的情况可选三种方式：</p>'
+      + '<p>• <b>SMART 长自检（固件级）</b>：由硬盘固件只读自检整盘，不伤数据，适合二手盘/老盘体检，所有盘都能跑。</p>'
+      + '<p>• <b>只读表面扫描</b>：像硬盘哨兵那样<b>只读</b>逐扇区扫盘面找坏块，不写数据、不伤盘，<b>所有盘都能跑</b>（包括正在用的盘/阵列成员），耗时较长；扫描时显示扇区网格实时进度。</p>'
+      + '<p>• <b>全面坏块扫描</b>：会<b class="warn">写满整盘并清空数据</b>，最彻底但很慢。因此只让「独立盘」（没挂载、不在阵列、不在 LVM）跑；在用盘该项直接不显示。</p>'
     + '</div>'
   + '</div>';
 }
@@ -1271,20 +1279,63 @@ function renderDiskTest(d){
       +'<div class="disk-test-actions"><button class="btn-mini" onclick="clearDiskTest(\''+esc(d.dev)+'\')">清除</button></div>'
     +'</div>';
   }
-  var bDisabled = !d.standalone;
-  var bTitle = d.standalone ? '破坏性测试，会覆盖全盘数据，仅用于独立盘' : (d.standalone_reason || '该盘不是独立盘');
-  var bClass = d.standalone ? 'btn-mini danger' : 'btn-mini disabled';
   var modelArg = esc(d.model || '未知型号').replace(/'/g,"\\'");
-  var bOnclick = d.standalone ? 'startDiskTest(\''+esc(d.dev)+'\',\'badblocks\',\''+modelArg+'\')' : '';
   return '<div class="disk-test-section">'
     +'<div class="disk-test-title">'+iconSvg('pulse')+'硬盘自检</div>'
     +'<div class="disk-test-btns">'
-      +'<button class="btn-mini" onclick="startDiskTest(\''+esc(d.dev)+'\',\'long\',\''+modelArg+'\')">A：SMART 长自检</button>'
-      +'<button class="btn-mini" onclick="startDiskTest(\''+esc(d.dev)+'\',\'surface\',\''+modelArg+'\')" title="只读扫描盘面，不写数据、不伤盘，可用于在用盘/阵列成员">C：只读表面扫描</button>'
-      +'<button class="'+bClass+'"'+(bTitle?' title="'+esc(bTitle)+'"':'')+' onclick="'+bOnclick+'"'+(bDisabled?' disabled':'')+'>B：坏块慢扫（破坏性）</button>'
+      +'<button class="btn-mini" onclick="diskTestEntry(\''+esc(d.dev)+'\',\''+(d.standalone?'1':'0')+'\',\''+modelArg+'\')">硬盘自检</button>'
     +'</div>'
     +'<div class="disk-test-msg" id="dt-state-'+esc(d.dev)+'"></div>'
   +'</div>';
+}
+// 硬盘自检入口：一个按钮，点开按盘的情况给可选方式（在用盘不给清空式扫描）
+function diskTestEntry(dev, standalone, model){
+  var isStandalone = standalone === '1';
+  appPick({
+    title: '对 '+model+'（/dev/'+dev+'）执行哪种自检？',
+    options: [
+      {type:'long', label:'SMART 长自检（固件级）', desc:'由硬盘固件自检盘体逻辑健康，只读不伤数据，所有盘都能跑'},
+      {type:'surface', label:'只读表面扫描', desc:'逐扇区读盘面找坏块，不写数据不伤盘，所有盘（含在用盘/阵列成员）都能跑，扫完看扇区网格'},
+      {type:'badblocks', label:'全面坏块扫描（会清空数据）', desc:'写满整盘再读回校验，最彻底，但会清空盘上所有数据', disabled:!isStandalone, note: isStandalone?'':'该盘不是独立盘（在用/阵列成员），不能做清空式扫描'}
+    ],
+    onPick: function(type){ if(type){ startDiskTest(dev, type, model); } }
+  });
+}
+// 通用多选项弹窗（复用 app-modal 结构，body 放可点选项列表）
+function appPick(opts){
+  var modal = document.getElementById('app-modal');
+  var titleEl = document.getElementById('app-modal-title');
+  var bodyEl = document.getElementById('app-modal-body');
+  var actionsEl = document.getElementById('app-modal-actions');
+  if(!modal || !titleEl || !bodyEl || !actionsEl){ return; }
+  function cleanup(){
+    modal.classList.remove('show');
+    modal.setAttribute('aria-hidden','true');
+    document.removeEventListener('keydown', onKey);
+  }
+  function onKey(e){ if(e.key === 'Escape'){ cleanup(); } }
+  titleEl.textContent = opts.title || '请选择';
+  bodyEl.innerHTML = '';
+  (opts.options||[]).forEach(function(o){
+    var row = document.createElement('button');
+    row.className = 'pick-opt' + (o.disabled ? ' pick-opt-disabled' : '');
+    row.disabled = !!o.disabled;
+    row.innerHTML = '<span class="pick-opt-t">'+esc(o.label)+'</span>'
+      + '<span class="pick-opt-d">'+esc(o.desc||'')+'</span>'
+      + (o.note ? '<span class="pick-opt-note">'+esc(o.note)+'</span>' : '');
+    row.onclick = function(){ if(o.disabled){ return; } cleanup(); opts.onPick && opts.onPick(o.type); };
+    bodyEl.appendChild(row);
+  });
+  actionsEl.innerHTML = '';
+  var cancelBtn = document.createElement('button');
+  cancelBtn.className = 'btn';
+  cancelBtn.textContent = '取消';
+  cancelBtn.onclick = function(){ cleanup(); };
+  actionsEl.appendChild(cancelBtn);
+  modal.onclick = function(e){ if(e.target === modal){ cleanup(); } };
+  modal.classList.add('show');
+  modal.setAttribute('aria-hidden','false');
+  document.addEventListener('keydown', onKey);
 }
 var diskTestMin = {};  // 扫描面板最小化状态：dev -> true/false（minimized 时只显示一行小条，后台继续扫）
 function toggleDiskTestMin(dev, on){ diskTestMin[dev] = !!on; renderPanel('disks'); }
