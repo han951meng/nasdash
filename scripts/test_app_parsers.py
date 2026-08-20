@@ -301,8 +301,8 @@ def test_fan_read_sys_temp_cpu_prefers_package(monkeypatch):
         },
         "it8620-isa-0290": {"temp1_input": 40.0},
     })
-    monkeypatch.setattr(app, "run_cmd", lambda cmd, *a, **k: sens if (isinstance(cmd, (list, tuple)) and "sensors" in cmd) else "")
-    assert app._fan_read_sys_temp("cpu") == 55.0
+    # 统一温度解析（纯函数）：Intel coretemp 封装温度 = 核心 max，排除 temp1_input（虚拟最高点）
+    assert app._parse_cpu_temp(json.loads(sens)) == 50.0
 
 
 def test_fan_read_sys_temp_cpu_amd_tdie(monkeypatch):
@@ -314,17 +314,15 @@ def test_fan_read_sys_temp_cpu_amd_tdie(monkeypatch):
         },
         "it8620-isa-0290": {"temp1_input": 35.0},
     })
-    monkeypatch.setattr(app, "run_cmd", lambda cmd, *a, **k: sens if (isinstance(cmd, (list, tuple)) and "sensors" in cmd) else "")
-    assert app._fan_read_sys_temp("cpu") == 62.0
+    assert app._parse_cpu_temp(json.loads(sens)) == 62.0
 
 
 def test_fan_read_sys_temp_mb_excludes_coretemp(monkeypatch):
     sens = json.dumps({
         "coretemp-isa-0000": {"Package id 0": {"temp1_input": 70.0}},
-        "it8620-isa-0290": {"temp1_input": 38.0, "temp2_input": 41.0},
+        "it8620-isa-0290": {"temp1": {"temp1_input": 38.0}, "temp2": {"temp2_input": 41.0}},
     })
-    monkeypatch.setattr(app, "run_cmd", lambda cmd, *a, **k: sens if (isinstance(cmd, (list, tuple)) and "sensors" in cmd) else "")
-    assert app._fan_read_sys_temp("mb") == 41.0  # 主板温度取 it86 最高，不含 coretemp
+    assert app._parse_mb_temp(json.loads(sens)) == 41.0  # 主板温度取 it86 最高，不含 coretemp
 
 
 # ---------------- Docker 资源解析（v1.10.0） ----------------
@@ -457,23 +455,22 @@ def test_fcs_disable_survives_sudo_failure(monkeypatch):
     assert flag.get("v") is True
 
 def test_fcs_status_shape(monkeypatch):
-    monkeypatch.setattr(app, "_fcs_installed_state", lambda: "enabled")
-    monkeypatch.setattr(app, "_fan_ext_service_running", lambda: True)
+    # _fcs_status 用一条 `systemctl show` 同时取 ActiveState/UnitFileState
+    monkeypatch.setattr(app, "run_cmd", lambda cmd, *a, **k: "ActiveState=active\nUnitFileState=enabled\n")
     monkeypatch.setattr(app, "_fcs_disabled", lambda: False)
     s = app._fcs_status()
     assert s["installed"] is True and s["enabled"] is True
     assert s["running"] is True and s["disabled_by_user"] is False
-    # 未安装：is-enabled 返回空串
-    monkeypatch.setattr(app, "_fcs_installed_state", lambda: "")
+    # 未安装：输出为空串
+    monkeypatch.setattr(app, "run_cmd", lambda cmd, *a, **k: "")
     assert app._fcs_status()["installed"] is False
 
-def test_index_has_fcs_switch():
-    """前端风扇页应含 FCS 开关（状态加载 + 禁用/恢复动作）。"""
+def test_index_has_fan_ctrl_toggle():
+    """前端风扇页应含「接管风扇控制」总开关（FCS 状态框 v2.0.5 已移除，此开关保留）。"""
     with open("templates/index.html", encoding="utf-8") as f:
         html = f.read()
-    assert "loadFcsStatus" in html
-    assert "api/fan/fcs" in html
-    assert "永久禁用 pwm-fancontrol" in html
+    assert "fanCtrlToggle" in html
+    assert "接管风扇控制" in html
 
 
 def test_build_health_report_contains_all_sections():
