@@ -192,8 +192,12 @@
   .split-col{display:flex;flex-direction:column;gap:14px}
   .disk-scroll{overflow:auto;padding-right:4px}
   .grid-auto{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px}
-  .sys-grid{display:flex;flex-wrap:wrap;gap:14px;align-items:stretch}
-  .sys-grid .card{flex:1 1 280px;min-width:280px;max-width:100%;box-sizing:border-box;display:flex;flex-direction:column}
+  .sys-grid{display:grid;grid-template-columns:minmax(0,5fr) minmax(0,12fr);gap:14px;align-items:start}
+  .sys-grid .card{min-width:0;box-sizing:border-box;display:flex;flex-direction:column}
+  .sys-grid > .sys-area-cpu{grid-column:1;grid-row:1}
+  .sys-grid > .sys-area-mem{grid-column:1;grid-row:2}
+  .sys-grid > .sys-area-netlive{grid-column:1;grid-row:3}
+  .sys-grid > .sys-area-disk{grid-column:2;grid-row:1 / span 3}
   .detect-title{font-size:16px;font-weight:500;margin-bottom:2px;color:var(--text-1)}
   .detect-sub{font-size:13px;color:var(--text-3);margin-bottom:14px}
   /* ===== hero 横幅（对齐飞牛虚拟机概览页）===== */
@@ -313,7 +317,7 @@
 .sg-cell.bad{background:#ef4444;opacity:1}
 .sg-cell.cur{background:#f59e0b;opacity:1}
 .surface-legend{display:flex;flex-wrap:wrap;gap:14px;font-size:11px;color:var(--muted);margin:4px 0 8px}
-.surface-legend .sg-cell{vertical-align:-1px;margin-right:4px;display:inline-block;opacity:1}
+.surface-legend .sg-cell{vertical-align:-1px;margin-right:4px;display:inline-block;width:12px;height:6px;opacity:1}
 /* 扫描面板最小化：一行小条 */
 .disk-test-min{display:flex;align-items:center;flex-wrap:wrap;gap:10px;font-size:12px;color:var(--text-2)}
 .disk-test-min .pct{font-weight:700;color:var(--primary)}
@@ -358,7 +362,9 @@
     .detect-cards,.cards{grid-template-columns:1fr;gap:12px}
     .detect-cards>*,.cards>*{grid-column:auto!important}
     .grid-2,.grid-auto{grid-template-columns:1fr}
-    .sys-grid .card{flex:1 1 100%;min-width:100%}
+    .sys-grid{grid-template-columns:1fr;gap:12px}
+    .sys-grid > [class*="sys-area-"]{grid-column:auto!important;grid-row:auto!important}
+    .sys-grid .card{min-width:0}
     .card{padding:14px}
     .kv{gap:8px}
     .kv .v{word-break:break-word;overflow-wrap:anywhere}
@@ -381,12 +387,6 @@
   .inp{padding:6px 8px;font-size:13px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text)}
   /* 风扇控制独立页面 */
   .fan-page{display:flex;flex-direction:column;gap:16px}
-  .fcs-card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px}
-  .fcs-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px}
-  .fcs-head b{font-size:14px;color:var(--text)}
-  .fcs-desc{font-size:12.5px;color:var(--muted);line-height:1.6;margin:6px 0 10px}
-  .fcs-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-  .fcs-msg{font-size:12.5px;color:var(--muted)}
   .btn-mini.danger{border-color:rgba(245,63,63,.4);color:var(--danger);background:rgba(245,63,63,.08)}
   .btn-mini.danger:hover{background:#b91c1c;color:#fff;border-color:#b91c1c}
   .fan-presets{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:14px;background:var(--card);border:1px solid var(--border);border-radius:10px}
@@ -490,11 +490,11 @@
   .temp-overview{margin-bottom:14px;padding:12px 14px}
   .temp-overview-head{font-size:14px;font-weight:600;margin-bottom:8px;display:flex;align-items:center;gap:8px}
   .temp-updated{font-size:11px;font-weight:400;color:var(--muted);margin-left:auto}
-  .temp-row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
-  .temp-cat{display:flex;flex-wrap:wrap;gap:6px;align-items:center;width:100%;margin-top:4px;padding-top:6px;border-top:1px dashed var(--border)}
+  .temp-row{display:flex;flex-wrap:wrap;gap:6px;align-items:stretch}
+  .temp-cat{display:flex;flex-wrap:wrap;gap:6px;align-items:stretch;width:100%;margin-top:4px;padding-top:6px;border-top:1px dashed var(--border)}
   .temp-cat:first-of-type{margin-top:8px;padding-top:0;border-top:none}
-  .temp-cat-label{font-size:11px;color:var(--muted);min-width:42px;font-weight:600}
-  .temp-chip{display:inline-flex;align-items:center;gap:6px;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:4px 9px;font-size:12px;line-height:1.4}
+  .temp-cat-label{font-size:11px;color:var(--muted);min-width:42px;font-weight:600;align-self:center}
+  .temp-chip{display:inline-flex;align-items:center;justify-content:center;gap:6px;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:5px 9px;font-size:12px;line-height:1.4;white-space:nowrap;min-height:34px}
   .temp-chip.off{opacity:.65}
   .temp-chip-name{color:var(--muted);font-variant-numeric:tabular-nums}
   .temp-chip-val{font-weight:700;font-variant-numeric:tabular-nums;min-width:38px;text-align:right}
@@ -638,7 +638,7 @@
   .curve-presets{display:flex;gap:6px;margin:6px 0 10px;flex-wrap:wrap}
   .curve-canvas{width:100%;height:150px;background:var(--bg);border:1px solid var(--border);border-radius:8px;margin-top:8px;display:block}
   /* 2.0 暗色兜底：子面板背景跟随 fill，避免黑底黑块；文字色统一走 Token */
-  [data-theme="dark"] .mem-slot,[data-theme="dark"] .temp-chip,[data-theme="dark"] .fan-card,[data-theme="dark"] .fcs-card,[data-theme="dark"] .fan-presets,[data-theme="dark"] .dt-field,[data-theme="dark"] .dt-opt,[data-theme="dark"] .chan,[data-theme="dark"] .dt-live,[data-theme="dark"] .fan-rule-tip,[data-theme="dark"] .fan-hw-note,[data-theme="dark"] .fan-dc-note,[data-theme="dark"] .dt-hint,[data-theme="dark"] .temp-overview,[data-theme="dark"] .sleep-panel,[data-theme="dark"] .auto-card,[data-theme="dark"] .curve-pt-input,[data-theme="dark"] .fan-label-input,[data-theme="dark"] .fan-volt-select,[data-theme="dark"] .fan-rule-src,[data-theme="dark"] .fan-rule-fields input,[data-theme="dark"] .dt-field input,[data-theme="dark"] .auto-field input,[data-theme="dark"] .curve-canvas{background:var(--fill);border-color:var(--border)}
+  [data-theme="dark"] .mem-slot,[data-theme="dark"] .temp-chip,[data-theme="dark"] .fan-card,[data-theme="dark"] .fan-presets,[data-theme="dark"] .dt-field,[data-theme="dark"] .dt-opt,[data-theme="dark"] .chan,[data-theme="dark"] .dt-live,[data-theme="dark"] .fan-rule-tip,[data-theme="dark"] .fan-hw-note,[data-theme="dark"] .fan-dc-note,[data-theme="dark"] .dt-hint,[data-theme="dark"] .temp-overview,[data-theme="dark"] .sleep-panel,[data-theme="dark"] .auto-card,[data-theme="dark"] .curve-pt-input,[data-theme="dark"] .fan-label-input,[data-theme="dark"] .fan-volt-select,[data-theme="dark"] .fan-rule-src,[data-theme="dark"] .fan-rule-fields input,[data-theme="dark"] .dt-field input,[data-theme="dark"] .auto-field input,[data-theme="dark"] .curve-canvas{background:var(--fill);border-color:var(--border)}
   [data-theme="dark"] .kv{border-color:var(--divider)}
   [data-theme="dark"] .disk-group-title{color:var(--text-3)}
   [data-theme="dark"] .disk-card.bad{background:rgba(247,105,101,.08)}
@@ -966,11 +966,11 @@ function renderPanel(id){
   else if(id==='storage'){ smartUpdate(document.getElementById('storage'), renderStorage(DATA.storage)); }
   else if(id==='docker'){ smartUpdate(document.getElementById('docker'), renderDocker(DATA.docker)); }
   else if(id==='fan'){
-    // 正在拖动滑块/编辑占空比、或打开了曲线编辑器/硬盘休眠联动面板时，跳过整页重建，
-    // 避免打断操作（转速数值由 fetchFanStatus 每2秒刷新；曲线/休眠面板的编辑态不被冲掉）
-    if(!isFanPanelBusy()){
-      refreshFanPanel();
-    }
+    // 方案 A：风扇页不再参与 30s 自动刷新的整页重建——它的实时数据（转速/温度/徽标/接管状态）
+    // 已由 fetchFanStatus(1s)、fetchTemps(5s)、refreshFanControlState() 就地更新，30s 整页重载
+    // 只会造成页面每 30s 闪一下、打断正在编辑的滑块/曲线（曾用户反馈「风扇页不停刷新」）。
+    // 风扇标注/隐藏/曲线等配置变更都是用户操作时即时触发 loadData 或局部刷新，不依赖 30s 重载。
+    // 注意：fetchFanStatus 内部仍用 isFanPanelBusy() 决定是否覆盖徽标，故该函数保留。
   }
   if(DATA.time){
     document.querySelectorAll('.lastUpdate').forEach(lu=>{ lu.textContent='更新于 '+DATA.time+(DATA.elapsed!==undefined?' ('+DATA.elapsed+'s)':''); });
@@ -995,7 +995,7 @@ function heroControls(){
     + '<span class="lastUpdate hd-time">加载中…</span>'
     + '<span class="spin spinner" style="display:none"></span>'
     + '<label class="switch" title="自动刷新"><input type="checkbox" class="autoRefresh" onchange="setAutoRefresh(this.checked)"'+(autoRefreshEnabled?' checked':'')+'><span class="slider"></span>自动刷新</label>'
-    + '<button class="icon-btn" onclick="loadData()" title="立即刷新">'+iconSvg('refresh')+'</button>'
+    + '<button class="icon-btn" onclick="loadData(true)" title="立即刷新（强制重新检测硬件与 SMART）">'+iconSvg('refresh')+'</button>'
     + '<button class="icon-btn checkUpdateBtn" onclick="checkUpdate(true)" title="检查更新">'+iconSvg('bell')+'</button>'
     + '<button class="icon-btn themeToggle" onclick="cycleTheme()" title="'+title+'">'+icon+'</button>'
     + '</div>';
@@ -1149,9 +1149,23 @@ function diskInfoCard(){
       + '<p>只有当你手动点下面每块盘里的「硬盘自检」，才是真正的自检——点开后按盘的情况可选三种方式：</p>'
       + '<p>• <b>SMART 长自检（固件级）</b>：由硬盘固件只读自检整盘，不伤数据，适合二手盘/老盘体检，所有盘都能跑。</p>'
       + '<p>• <b>只读表面扫描</b>：像硬盘哨兵那样<b>只读</b>逐扇区扫盘面找坏块，不写数据、不伤盘，<b>所有盘都能跑</b>（包括正在用的盘/阵列成员），耗时较长；扫描时显示扇区网格实时进度。</p>'
-      + '<p>• <b>全面坏块扫描</b>：会<b class="warn">写满整盘并清空数据</b>，最彻底但很慢。因此只让「独立盘」（没挂载、不在阵列、不在 LVM）跑；在用盘该项直接不显示。</p>'
-    + '</div>'
+    + '<p>• <b>全面坏块扫描</b>：会<b class="warn">写满整盘并清空数据</b>，最彻底但很慢。因此只让「独立盘」（没挂载、不在阵列、不在 LVM）跑；在用盘该项直接不显示。</p>'
+  + '</div>'
   + '</div>';
+}
+
+// 硬盘健康异常横幅：仅在「硬盘 SMART」页内展示，并给出处理引导（不再进全局告警横幅）
+function diskHealthWarning(disks){
+  var bad = (disks||[]).filter(function(d){ return d.health_ok===false; });
+  if(!bad.length) return '';
+  var items = bad.map(function(d){
+    return '<li><b>'+esc(d.dev)+'</b>（'+esc(d.model||'未知型号')+'）：SMART 健康状态 <b style="color:var(--red)">'+esc(d.health||'异常')+'</b></li>';
+  }).join('');
+  return '<div style="background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.4);border-radius:10px;padding:14px 16px;margin-bottom:14px">'
+    + '<div style="font-weight:600;color:#b91c1c;margin-bottom:6px">⚠️ 检测到 '+bad.length+' 块硬盘健康异常</div>'
+    + '<ul style="margin:0 0 8px 18px;padding:0;font-size:13px;line-height:1.7">'+items+'</ul>'
+    + '<div style="font-size:13px;color:var(--text)">建议：<b>尽快备份</b>这块盘上的重要数据，并准备更换硬盘；在换新盘之前，避免往它上面写入关键文件。</div>'
+    + '</div>';
 }
 
 function renderDisks(disks){
@@ -1165,7 +1179,7 @@ function renderDisks(disks){
     {v:_healthy+'<small>/'+_total+'</small>',k:'健康',cls:(_healthy===_total?'':'warn')},
     {v:_nvme,k:'NVMe'},
     {v:(_maxT!=null?_maxT+'°C':'—'),k:'最高温度'}
-  ]}) + diskInfoCard() + '<div class="cards">'+disks.map(d=>{
+  ]}) + diskHealthWarning(disks) + diskInfoCard() + '<div class="cards">'+disks.map(d=>{
     let isSAS = d.type==='sas';
     let isNVMe = d.type==='nvme';
     let healthBadge = d.health_ok ? '<span class="badge b-ok">'+d.health+'</span>' : '<span class="badge b-bad">'+d.health+'</span>';
@@ -1737,7 +1751,7 @@ function renderSystem(s){
   let netData = rawNet.filter(n=> (n.name!=='ovs-system') && !_ovsBridges.has(n.name) && !((n.rx_rate||0)===0 && (n.tx_rate||0)===0));
   let netRx = netData.reduce((a,n)=>a+((n&&n.rx_rate)||0),0);
   let netTx = netData.reduce((a,n)=>a+((n&&n.tx_rate)||0),0);
-  let netVal = netData.length ? `<div style="display:flex;flex-direction:column;gap:3px;font-size:20px;font-weight:600;line-height:1.15"><span>↓${fmtSpeed(netRx)}</span><span>↑${fmtSpeed(netTx)}</span></div>` : '—';
+  let netVal = netData.length ? `<div style="display:flex;flex-direction:column;gap:4px;font-size:20px;font-weight:600;line-height:1.2"><span style="display:grid;grid-template-columns:14px auto;gap:2px;align-items:baseline"><span style="color:var(--green)">↑</span><span style="color:var(--green)">${fmtSpeed(netRx)}</span></span><span style="display:grid;grid-template-columns:14px auto;gap:2px;align-items:baseline"><span style="color:var(--blue)">↓</span><span style="color:var(--blue)">${fmtSpeed(netTx)}</span></span></div>` : '—';
   // CPU 使用率（优先真实 cpu_usage，回退 load 估算）
   let cpuPct = (s.cpu_usage!=null) ? s.cpu_usage : (s.cpu_threads ? Math.min(Math.round(parseFloat((s.load&&s.load[0])||0)/s.cpu_threads*100),100) : 0);
   let cpuColor = cpuPct>85?'var(--red)':cpuPct>60?'var(--orange)':'var(--green)';
@@ -1749,44 +1763,64 @@ function renderSystem(s){
     {v:(s.uptime?String(s.uptime).replace(/\s+/g,''):'—'),k:'已运行'}
   ]})}
   <div class="sys-grid">
-    <div class="card">
-      <h3>CPU 使用率</h3>
-      <div style="display:flex;align-items:baseline;gap:10px;margin:8px 0 10px">
-        <span id="sys-cpu-val" style="font-size:34px;font-weight:700;color:var(--text-1);line-height:1">${cpuPct}%</span>
-        <span style="font-size:12px;color:var(--muted)">${s.cpu_cores||0}核 / ${s.cpu_threads||0}线程</span>
+    <div class="card sys-area-cpu">
+      <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:6px;justify-content:space-between">
+        <h3 style="margin:0" title="CPU 实时使用率（飞牛系统资源页风格）">CPU</h3>
+        <span style="font-size:12px;color:var(--muted)">${esc(s.cpu_model||((s.cpu_cores||0)+'核 / '+(s.cpu_threads||0)+'线程'))}</span>
       </div>
-      <div class="progress"><div id="sys-cpu-bar" class="progress-fill" style="width:${cpuPct}%;background:${cpuColor};min-width:26px">${cpuPct}%</div></div>
-      <div style="margin-top:12px;display:grid;grid-template-columns:repeat(3,1fr);gap:6px;font-size:12px">
-        <div title="最近 1 分钟内，排队等 CPU 处理的任务数。数值越接近 ${s.cpu_threads||'CPU 线程数'}，系统越忙">现在 <span id="sys-load-0" style="color:${loadColor(s.load[0])};font-weight:600">${fmtLoad(s.load[0])}</span></div>
-        <div title="最近 5 分钟内，排队等 CPU 处理的任务数平均值">5分钟 <span id="sys-load-1" style="color:${loadColor(s.load[1])};font-weight:600">${fmtLoad(s.load[1])}</span></div>
-        <div title="最近 15 分钟内，排队等 CPU 处理的任务数平均值">15分钟 <span id="sys-load-2" style="color:${loadColor(s.load[2])};font-weight:600">${fmtLoad(s.load[2])}</span></div>
+      <div style="display:flex;align-items:baseline;gap:10px;margin:6px 0 4px">
+        <span id="sys-cpu-val" style="font-size:30px;font-weight:700;color:var(--blue);line-height:1">${cpuPct}%</span>
+        <span style="font-size:11px;color:var(--muted)">使用率</span>
       </div>
-      ${pw?`<div style="margin-top:10px;font-size:12px;color:var(--muted);border-top:1px solid var(--border);padding-top:8px" title="${esc(pwTip)}">实时功耗 ${pwTotal}W · CPU 封装 ${pw.package!=null?pw.package:'—'}W${pw.dram!=null?' · 内存 '+pw.dram+'W':''}</div>`:''}
-    </div>
-    <div class="card">
-      <h3>内存使用</h3>
-      <div style="display:flex;align-items:baseline;gap:10px;margin:8px 0 10px">
-        <span id="sys-mem-val" style="font-size:34px;font-weight:700;color:var(--text-1);line-height:1">${memPct}%</span>
-        <span style="font-size:12px;color:var(--muted)">${s.memory.used} / ${s.memory.total}</span>
-      </div>
-      <div class="progress"><div id="sys-mem-bar" class="progress-fill" style="width:${memPct}%;background:${memColor};min-width:26px">${memPct}%</div></div>
-      <div style="margin-top:10px;display:grid;grid-template-columns:repeat(2,1fr);gap:6px;font-size:12px">
-        <div>总量 <span style="font-weight:600">${s.memory.total}</span></div>
-        <div>可用 <span style="font-weight:600">${s.memory.available}</span></div>
+      <div style="position:relative">
+        <canvas id="cpu-spark" width="600" height="100" style="width:100%;height:80px;display:block"></canvas>
+        <span style="position:absolute;top:3px;right:6px;font-size:10px;color:var(--muted)">100%</span>
+        <span style="position:absolute;bottom:3px;left:6px;font-size:10px;color:var(--muted)">60 秒</span>
+        <span style="position:absolute;bottom:3px;right:6px;font-size:10px;color:var(--muted)">0</span>
       </div>
     </div>
-    <div class="card" style="grid-column:1/-1" id="sys-net-card">${renderSysNetCard(s.nics)}</div>
-    <div class="card">
-      <h3>风扇转速</h3>
-      ${fansHtml||'<div class="loading">无数据</div>'}
+    <div class="card sys-area-mem">
+      <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:6px;justify-content:space-between">
+        <h3 style="margin:0" title="内存实时使用率（飞牛系统资源页风格）">内存</h3>
+        <span style="font-size:12px;color:var(--muted)">${s.memory.total}</span>
+      </div>
+      <div style="display:flex;align-items:baseline;gap:10px;margin:6px 0 4px">
+        <span id="sys-mem-val" style="font-size:30px;font-weight:700;color:#a855f7;line-height:1">${memPct}%</span>
+      </div>
+      <div style="position:relative">
+        <canvas id="mem-spark" width="600" height="100" style="width:100%;height:80px;display:block"></canvas>
+        <span style="position:absolute;top:3px;left:6px;font-size:10px;color:var(--muted)">使用率</span>
+        <span style="position:absolute;top:3px;right:6px;font-size:10px;color:var(--muted)">100%</span>
+        <span style="position:absolute;bottom:3px;left:6px;font-size:10px;color:var(--muted)">60 秒</span>
+        <span style="position:absolute;bottom:3px;right:6px;font-size:10px;color:var(--muted)">0</span>
+      </div>
+      <div style="margin-top:8px;font-size:12px">
+        <div class="kv"><span class="k">应用占用</span><span class="v" style="font-weight:600">${s.memory.used}</span></div>
+        <div class="kv"><span class="k" title="可用 = 缓存 + 真空闲。缓存是系统把读过的文件留在内存里备用，程序需要时会自动腾出来，不用手动清理">可用（含缓存 ${s.memory.cached||'—'}，可自动回收）</span><span class="v" style="font-weight:600">${s.memory.available}</span></div>
+      </div>
     </div>
-    <div class="card">
-      <h3 title="主板各路供电电路的电压（如 3.3V、CPU 核心电压、主板电池）。只要数值在正常范围内、没报警，就不用管">电压</h3>
-      ${voltsHtml||'<div class="loading">无数据</div>'}
-    </div>
-    <div class="card">
+    <div class="card sys-area-disk">
       <h3 title="磁盘的读写速度，数字越大说明盘越忙">磁盘 I/O</h3>
       ${diskHtml||'<div class="loading">采样中…</div>'}
+    </div>
+    <div class="card sys-area-netlive">
+      <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:6px;justify-content:space-between">
+        <h3 style="margin:0" title="实时上下行速率（飞牛系统资源页风格）">网络</h3>
+        <span id="net-live-if" style="font-size:12px;color:var(--muted);text-align:right">合并全部网卡</span>
+      </div>
+      <div id="net-live-tabs" style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap"></div>
+      <div style="display:flex;gap:18px;font-size:13px;margin-bottom:10px;flex-wrap:wrap">
+        <div style="display:grid;grid-template-columns:14px auto;gap:2px;align-items:baseline;white-space:nowrap"><span style="color:var(--green);font-weight:600">↑</span><span id="net-live-tx" style="color:var(--green);font-weight:600">—</span></div>
+        <div style="display:grid;grid-template-columns:14px auto;gap:2px;align-items:baseline;white-space:nowrap"><span style="color:var(--blue);font-weight:600">↓</span><span id="net-live-rx" style="color:var(--blue);font-weight:600">—</span></div>
+      </div>
+      <div style="display:flex;gap:6px;align-items:stretch">
+        <div id="net-axis" style="position:relative;width:56px;flex:none;font-size:11px;color:var(--text-2);font-weight:600;line-height:1"></div>
+        <div style="position:relative;flex:1 1 auto;min-width:0">
+          <canvas id="net-spark" width="800" height="180" style="width:100%;height:140px;display:block"></canvas>
+          <span style="position:absolute;top:4px;left:8px;font-size:11px;color:var(--muted)">吞吐量</span>
+          <span style="position:absolute;bottom:4px;left:8px;font-size:11px;color:var(--muted)">60 秒</span>
+        </div>
+      </div>
     </div>
   </div>`;
 }
@@ -1794,10 +1828,19 @@ function renderSystem(s){
 // ===== 温度监控独立页面（关键温度阈值 + 主板测点温度墙）=====
 function renderTemps(s){
   let sens = (s&&s.sensors) || {};
+  // 温度墙实时化：优先统一温度快照（fetchTemps 每 5s 拉到 LAST_TEMPS.sensors/raid_temp），
+  // 快照未就绪时回退页面数据（/api/all 或 /api/system 的 sensors）
+  if(LAST_TEMPS && Array.isArray(LAST_TEMPS.sensors)){
+    sens = {temps: LAST_TEMPS.sensors, fans: [], voltages: []};
+  }
   // 主板测点全览墙（过滤无效 0°C / 负温）
-  let tempEntries = (sens.temps||[]).filter(t=>typeof t.value==='number'&&t.value>0&&t.value<150);
-  // 阵列卡芯片温度（ROC Temperature）：并入门禁温度监控（随 /api/system 刷新）
-  let raidTemp = (typeof s.raid_temp==='number') ? s.raid_temp
+  // 同时排除不直观/重复的测点：CPU PSS/CPU VRM（供电辅助，对用户无参考价值）、
+  // PECI Agent 0 Calibration（CPU 内部校准值，正常人都看不懂）、内存温度 1/2（DIMM 一般没传感器）
+  const EXCLUDE_TEMPS = new Set(['CPU PSS','CPU VRM','PECI Agent 0 Calibration','内存温度 1','内存温度 2','复合温度']);
+  let tempEntries = (sens.temps||[]).filter(t=>typeof t.value==='number'&&t.value>0&&t.value<150 && !EXCLUDE_TEMPS.has(t.name));
+  // 阵列卡芯片温度（ROC Temperature）：统一快照优先，回退页面数据
+  let raidTemp = (LAST_TEMPS && typeof LAST_TEMPS.raid_temp==='number') ? LAST_TEMPS.raid_temp
+              : (typeof s.raid_temp==='number') ? s.raid_temp
               : (DATA && DATA.raid && typeof DATA.raid.controller_temp==='number') ? DATA.raid.controller_temp
               : null;
   let raidEntry = (raidTemp!=null) ? {name:'阵列卡芯片温度', raw:'Controller Temperature (ROC)', value:raidTemp, max:80, crit:90} : null;
@@ -1814,12 +1857,12 @@ function renderTemps(s){
       else if(t.value >= 85) warnCount++;
       if(maxTemp===null || t.value > maxTemp) maxTemp = t.value;
     });
-    avgTemp = Math.round(sum / wallEntries.length * 10) / 10;
+    avgTemp = Math.round(sum / wallEntries.length);
   }
   let statusText = critCount ? `${critCount} 个临界` : warnCount ? `${warnCount} 个偏高` : '全部正常';
   let statusOk = !critCount && !warnCount;
   let stats = [
-    {v:(s.cpu_temp!=null?s.cpu_temp+'°C':'N/A'),k:'CPU 温度',tip:'CPU 封装温度（Package id），CPU 内部传感器直读，最准确'},
+    {v:(cpuTempUnified()!=null?cpuTempUnified()+'°C':'N/A'),k:'CPU 温度',id:'hero-cpu-temp-temps',tip:'CPU 封装温度（Package id），CPU 内部传感器直读，最准确'},
     {v:(raidTemp!=null?raidTemp+'°C':'—'),k:'阵列卡温度',tip:'阵列卡芯片(ROC)温度，由 storcli 读取'},
     {v:(maxTemp!=null?maxTemp+'°C':'—'),k:'最高温度'},
     {v:(avgTemp!=null?avgTemp+'°C':'—'),k:'平均温度'}
@@ -1827,7 +1870,7 @@ function renderTemps(s){
   return `
   ${panelHero({icon:ICON_TEMPS,title:'温度监控',sub:'主板 / CPU / 芯片组 / 阵列卡 温度与阈值',badge:{ok:statusOk,text:statusText},stats:stats})}
   <div class="sys-grid">
-    <div class="card" style="flex:1 1 100%">
+    <div class="card" style="grid-column:1/-1">
       <h3 title="硬件能承受的温度上限，超过会降频保护">温度墙</h3>
       ${wall}
       <div style="margin-top:8px;font-size:12px;color:var(--muted)">主板传感器测点 + 阵列卡芯片温度全览（已过滤无效 0°C / 负温）；鼠标悬停可查看原始英文名。颜色：绿正常 · 橙偏高 · 红危险</div>
@@ -1874,7 +1917,6 @@ function refreshFanPanel(){
   if(!box) return;
   box.innerHTML=renderFanControl();
   bindFanSliders();
-  loadFcsStatus();   // 重渲染会重置 fcs-panel 为「加载中」，需重新拉取
 }
 function toggleShowHiddenFans(){ SHOW_HIDDEN_FANS=!SHOW_HIDDEN_FANS; refreshFanPanel(); }
 // 判断风扇面板是否正处于「用户正在操作」状态：若为真则跳过整页重建，
@@ -1998,7 +2040,6 @@ function renderFanControl(){
     </div>
     <div class="fan-rule-tip">${iconSvg('bulb')} 每张卡片 3 个按钮选控速方案：<b>线性温控</b>（开转/全速 直线）、<b>曲线温控</b>（≥2 节点分段插值）、<b>手动固定</b>（拖滑块）。3 选 1 即生效、互不影响，徽标实时显示当前跑的是哪个。</div>
     <div class="fan-grid">${gridInner}</div>
-    <div class="card fcs-card" id="fcs-panel"><div class="fcs-head"><b>系统风扇服务（pwm-fancontrol）</b><span class="pill gray">读取中…</span></div><p class="fcs-desc">正在检测飞牛自带风扇服务…</p></div>
   </div>`;
 }
 // ===== 风扇 自动/手动 分段开关 + 极简硬盘休眠联动面板（stage2）=====
@@ -2007,7 +2048,7 @@ var FAN_CTRL_ENABLED = true;
 var FAN_CTRL_CHANGING = false; // 开关操作进行中，禁止轮询/同步把状态刷回旧值
 var FAN_CTRL_TIMER = null;     // 开关兜底解锁定时器
 // 仅局部更新「接管锁定态」视觉（横幅/面板 class），不整面板重绘——
-// 否则每次切开关都会把 fcs-panel 重置成「读取中…」并重新拉取，造成卡 loading 的观感。
+// 否则每次切开关都会触发整面板重绘，造成风扇卡片闪烁、滑块与编辑状态被打断。
 function applyFanLockVisual(){
   // 纯视觉更新，任何异常都不能冒泡出去——否则会打断 setFanControl 里后续的 fetch，
   // 导致请求没发出、CHANGING 卡死、开关 disabled 再也不复位（表现为「开关点不动」）。
@@ -2040,7 +2081,7 @@ function setFanControl(on){
   if(FAN_CTRL_CHANGING) return; // 上一次还没落定，忽略连点
   var t=document.getElementById('fanCtrlToggle');
   // 乐观更新：先按目标状态立即改锁定态视觉，开关瞬间响应，等 POST 结果再微调；
-  // 不整面板重绘，避免 fcs-panel 重新「读取中…」与全面板闪烁。
+  // 不整面板重绘，避免风扇卡片闪烁、打断正在编辑的滑块/曲线。
   FAN_CTRL_ENABLED=on;
   FAN_CTRL_CHANGING=true; // 操作期间禁止轮询把状态刷回旧值
   if(t){ t.disabled=true; }
@@ -2067,7 +2108,7 @@ function refreshFanPanel(){
   // 若此时重建 innerHTML，正在输入的数字框会被换掉 -> 「框能点但输不进字」。
   var ae=document.activeElement;
   if(ae && (ae.tagName==='INPUT' || ae.tagName==='SELECT' || ae.tagName==='TEXTAREA')) return;
-  fp.innerHTML=renderFanControl(); bindFanSliders(); loadFcsStatus();
+  fp.innerHTML=renderFanControl(); bindFanSliders();
 }
 var FAN_CTRL_SYNCING = false; // 同步请求在途，避免面板重绘时叠发多个请求
 function refreshFanControlState(){
@@ -2281,6 +2322,12 @@ let LAST_TEMPS=null;
 let LAST_DISK_TEMPS={};   // 缓存 dev → {temp, asleep, no_sleep}，防休眠/读不出时数字反复跳
 let _tempTimer=null;
 function fmtTemp(t){ return t!=null?t+'°C':'N/A'; }
+// 统一的 CPU 温度取值：优先温度页实时轮询值(LAST_TEMPS，5s 刷新、2s 缓存，最准的封装温度)，
+// 回退到系统首屏 cpu_temp。这样检测/风扇/温度三个页面对同一颗 CPU 显示完全一致，不再各跳各的。
+function cpuTempUnified(){
+  if(LAST_TEMPS && LAST_TEMPS.cpu_temp!=null) return LAST_TEMPS.cpu_temp;
+  return (DATA && DATA.system && DATA.system.cpu_temp!=null) ? DATA.system.cpu_temp : null;
+}
 // 把若干个数据点拍平成一排紧凑 chip：name=dev/CPU/主板, kind=sys|disk
 function _renderTempChip(name, val, opts){
   opts=opts||{};
@@ -2296,18 +2343,25 @@ function _renderTempChip(name, val, opts){
   return '<span class="temp-chip'+(opts.asleep?' off':'')+'"'+ti+'><span class="temp-chip-name">'+esc(name)+'</span><span class="temp-chip-val" style="color:'+color+'">'+showVal+'</span>'+tag+'</span>';
 }
 function renderTempOverview(){
+  // 面板整页重渲时直接把温度 chip 嵌进 HTML（LAST_TEMPS 已就绪则填，否则留空待首拍 _paintTemps 填充），
+  // 避免「温度行先空出来、5s 后才填上」的闪烁（该闪烁此前由 fetchTemps 误用整页 refreshPanel 触发）。
   return '<div class="card temp-overview" id="temp-overview">'
     +'<div class="temp-overview-head">'+iconSvg('thermo')+' 当前温度 <span class="temp-updated" id="temp-updated"></span></div>'
-    +'<div class="temp-row" id="temp-row"></div>'
+    +'<div class="temp-row" id="temp-row">'+(LAST_TEMPS?_buildTempRow():'')+'</div>'
   +'</div>';
 }
-function _paintTemps(){
-  var row=document.getElementById('temp-row'); if(!row||!LAST_TEMPS) return;
+// 把温度概览的 chip 行构建成 HTML 字符串（供 _paintTemps 与 renderTempOverview 共用，
+// 后者在面板整页重渲时直接把 chip 嵌进 HTML，避免「温度行先空出来、5s 后才填上」的闪烁）。
+function _buildTempRow(){
+  if(!LAST_TEMPS) return '';
   var cpu=LAST_TEMPS.cpu_temp, mb=LAST_TEMPS.mb_temp;
   var disks=(LAST_TEMPS.disks||[]);
-  // 系统温度（CPU/主板）单行
-  var html=_renderTempChip('CPU', cpu, {trip:100})
-    +_renderTempChip('主板', mb, {trip:90});
+  // 系统温度（CPU/主板）也套上 temp-cat，左侧加「核心」分类名，和下面 NVMe/SSD/机械 对齐
+  var html='<div class="temp-cat">'
+    +'<span class="temp-cat-label">核心</span>'
+    +_renderTempChip('CPU', cpu, {trip:100})
+    +_renderTempChip('主板', mb, {trip:90})
+    +'</div>';
   // 硬盘按分类分行：NVMe → SSD → HDD；同分类内系统盘优先置顶
   var cats=[{k:'NVMe',label:'NVMe'},{k:'SSD',label:'SSD'},{k:'HDD',label:'机械'}];
   var anyDisk=false;
@@ -2339,7 +2393,11 @@ function _paintTemps(){
   if(!anyDisk){
     html += '<span class="temp-chip-empty">未检测到硬盘</span>';
   }
-  row.innerHTML=html;
+  return html;
+}
+function _paintTemps(){
+  var row=document.getElementById('temp-row'); if(!row||!LAST_TEMPS) return;
+  row.innerHTML=_buildTempRow();
   var up=document.getElementById('temp-updated'); if(up) up.textContent='· 更新于 '+new Date().toLocaleTimeString();
 }
 async function fetchTemps(){
@@ -2364,6 +2422,25 @@ async function fetchTemps(){
     Object.keys(LAST_DISK_TEMPS).forEach(function(k){ if(!curDevs[k]) delete LAST_DISK_TEMPS[k]; });
     LAST_TEMPS=j;
     _paintTemps();
+    // 就地刷新检测页/温度页 hero 里的「CPU 温度」与温度概览（不再整页重渲）：
+    // 之前每 5 秒轮询都会 refreshPanel 重建整个面板，导致风扇页整页闪烁、
+    // 且温度概览 chip 先被清空再 5s 后重填（表现就是「当前温度显示/消失」）。
+    // 温度概览本身已由上方的 _paintTemps() 实时刷新；面板重渲时 renderTempOverview
+    // 也会直接把 chip 嵌进 HTML（见 _buildTempRow），不会出现空行。
+    try{
+      var ct2=cpuTempUnified();
+      var ctStr=ct2!=null?ct2+'°C':'N/A';
+      var e1=document.getElementById('sys-cpu-temp-kv'); if(e1){ e1.textContent=ctStr; e1.style.color=tempColor(ct2,100); }
+      var e2=document.getElementById('hero-cpu-temp-temps'); if(e2) e2.textContent=ctStr;
+      // 温度页温度墙：用统一快照（LAST_TEMPS.sensors/raid_temp）5s 就地重绘，
+      // 不再等 30s 自动刷新（曾表现为「温度显示不及时」）。
+      try{
+        if(currentTab()==='temps'){
+          var te=document.getElementById('temps');
+          if(te && typeof renderTemps==='function') smartUpdate(te, renderTemps(DATA.system));
+        }
+      }catch(e){}
+    }catch(e){}
   }catch(e){}
 }
 function ensureTempPolling(){
@@ -2527,69 +2604,6 @@ async function saveFanRule(hwmon, idx, activeMode){
     }
   }catch(e){ if(st){ st.textContent='请求失败（需管理员登录）'; st.className='fan-rule-state'; } }
 }
-// ===== 系统风扇服务（pwm-fancontrol）永久禁用 / 恢复 =====
-async function loadFcsStatus(){
-  let box=document.getElementById('fcs-panel');
-  // 风扇页为惰性渲染：switchTab 调本函数时 fcs-panel 可能尚未进 DOM。
-  // 不存在则短暂轮询等待，待 renderFans 生成该元素后再发请求（避免永久“加载中”）。
-  if(!box){ if((loadFcsStatus._r=(loadFcsStatus._r||0)+1)<=40) setTimeout(loadFcsStatus,200); return; }
-  loadFcsStatus._r=0;
-  // 保留已有内容骨架，只把徽标换成“读取中…”，避免切换开关时出现大块空白 loading。
-  let head=box.querySelector('.fcs-head');
-  if(head){
-    let oldPill=head.querySelector('.pill');
-    if(oldPill) oldPill.outerHTML='<span class="pill gray">读取中…</span>';
-  }
-  let s;
-  try{
-    const ctrl=new AbortController();
-    const t=setTimeout(()=>ctrl.abort(),8000);
-    const r=await fetch('/api/fan/fcs',{signal:ctrl.signal});
-    clearTimeout(t);
-    if(!r.ok) throw new Error('HTTP '+r.status);
-    s=await r.json();
-  }
-  catch(e){
-    if(box.dataset.fcsTried) { box.innerHTML='<div class="loading">系统风扇服务状态读取失败（请刷新页面重试）</div>'; return; }
-    box.dataset.fcsTried='1';
-    box.innerHTML='<div class="loading">读取超时，<a href="javascript:loadFcsStatus()">点此重试</a></div>';
-    return;
-  }
-  box.dataset.fcsTried='';
-  let pill, desc, actions;
-  if(!s.installed){
-    pill='<span class="pill gray">未检测到</span>';
-    desc='本机未检测到 fnOS 系统风扇服务（pwm-fancontrol），无需处理——nasdash 是唯一的风扇控制器。';
-    actions='';
-  }else if(s.disabled_by_user){
-    pill='<span class="pill red">已永久禁用</span>';
-    desc='系统风扇服务（pwm-fancontrol）已被永久禁用（已停止且重启不再自启）。当前仅由 nasdash 管理风扇。如需恢复系统原生控温，可点下方按钮。';
-    actions='<button class="btn-mini" onclick="toggleFcs(\'enable\')">恢复 pwm-fancontrol</button>';
-  }else{
-    pill='<span class="pill green">'+(s.running?'运行中':'已安装')+(s.enabled?' · 开机自启':'')+'</span>';
-    desc='nasdash 控速时会自动临时接管（停止 pwm-fancontrol），交还自动温控后再自动拉起，二者不冲突。若你确认永远只用 nasdash 管风扇，可永久禁用它（停止 + 关闭开机自启，重启不复活）。';
-    actions='<button class="btn-mini danger" onclick="toggleFcs(\'disable\')">永久禁用 pwm-fancontrol</button>';
-  }
-  box.innerHTML='<div class="fcs-head"><b>系统风扇服务（pwm-fancontrol）</b>'+pill+'</div>'
-    +'<p class="fcs-desc">'+desc+'</p>'
-    +'<div class="fcs-actions">'+actions+'<span class="fcs-msg" id="fcs-msg"></span></div>';
-}
-async function toggleFcs(action){
-  let msg=document.getElementById('fcs-msg');
-  if(action==='disable' && !await appConfirm({
-    title: '确认永久禁用 pwm-fancontrol？',
-    body: '确定永久禁用系统风扇服务（pwm-fancontrol）吗？\n将停止该服务并关闭开机自启（重启后不再启动），风扇改由 nasdash 独立管理。\n可随时点「恢复」还原。',
-    danger: true,
-    ok: '确定禁用',
-    cancel: '取消'
-  })) return;
-  if(msg) msg.textContent=(action==='disable'?'正在禁用…':'正在恢复…');
-  try{
-    let r=await (await fetch('/api/fan/fcs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action})})).json();
-    if(r.ok){ if(msg) msg.textContent='已'+(action==='disable'?'禁用':'恢复'); await loadFcsStatus(); }
-    else{ if(msg) msg.textContent='操作失败：'+(r.error||'未知错误'); }
-  }catch(e){ if(msg) msg.textContent='请求失败（需管理员登录）'; }
-}
 async function applyFanPreset(val){
   let gs=document.getElementById('fan-global-state');
   if(!FAN_LIST.length) return;
@@ -2645,6 +2659,9 @@ async function fetchNetRates(){
     let r=await fetch('/api/metrics?_='+Date.now());
     let d=await r.json();
     updateLiveStats(d);   // 1s 级增量刷新 CPU/内存/负载（后端已实时计算，不受 /api/system 60s 缓存影响）
+    // CPU / 内存折线图历史（每 1s 一个点，60s 滚动，Y 轴 0-100 固定）
+    if(d.cpu_usage!=null){ CPU_HISTORY.push(Math.min(100,Math.max(0,parseFloat(d.cpu_usage)||0))); if(CPU_HISTORY.length>60) CPU_HISTORY.shift(); drawCpuSpark(); }
+    if(d.mem_percent!=null){ MEM_HISTORY.push(Math.min(100,Math.max(0,parseFloat(d.mem_percent)||0))); if(MEM_HISTORY.length>60) MEM_HISTORY.shift(); drawMemSpark(); }
     RT_NET = (d.net||[]);
     // 与 renderSystem 完全一致的虚拟/重复口过滤，避免总速率重复合计（物理口 eno1 与 OVS 桥 eno1-ovs 二留一）
     let _ovsBridges = new Set(RT_NET.filter(n=>/[-.]ovs$/.test(n.name||'')).map(n=>(n.name||'').replace(/[-.]ovs$/,'')));
@@ -2670,9 +2687,236 @@ async function fetchNetRates(){
     // 同步更新顶部 hero summary 的「网络」格子（用户截图箭头所指），避免它只随整页刷新才变
     let heroNet=document.getElementById('hero-net');
     if(heroNet){
-      heroNet.innerHTML = netData.length ? '<div style="display:flex;flex-direction:column;gap:3px;font-size:20px;font-weight:600;line-height:1.15"><span>↓'+fmtSpeed(rx)+'</span><span>↑'+fmtSpeed(tx)+'</span></div>' : '—';
+      // 顺序：上行↑上传在上，下行↓下载在下；箭头列固定14px+gap2px，数字变化不影响箭头位置
+      heroNet.innerHTML = netData.length ? '<div style="display:flex;flex-direction:column;gap:4px;font-size:20px;font-weight:600;line-height:1.2"><span style="display:grid;grid-template-columns:14px auto;gap:2px;align-items:baseline"><span style="color:var(--green)">↑</span><span style="color:var(--green)">'+fmtSpeed(rx)+'</span></span><span style="display:grid;grid-template-columns:14px auto;gap:2px;align-items:baseline"><span style="color:var(--blue)">↓</span><span style="color:var(--blue)">'+fmtSpeed(tx)+'</span></span></div>' : '—';
     }
+    // 网络实时速率卡（Windows 任务管理器风格）：累积最近 60 秒历史 + 更新大数字 + 画折线
+    NET_SPARK.push({rx:rx, tx:tx});
+    if(NET_SPARK.length>60) NET_SPARK.shift();
+    // 每张网卡独立 60s 历史（供网口 Tab 切换显示）
+    netData.forEach(n=>{
+      if(!NIC_HISTORY[n.name]) NIC_HISTORY[n.name]=[];
+      NIC_HISTORY[n.name].push({rx:n.rx_rate||0, tx:n.tx_rate||0});
+      if(NIC_HISTORY[n.name].length>60) NIC_HISTORY[n.name].shift();
+    });
+    // 当前 Tab 大数字（用户视角：下行=下载=tx/NAS发送，上行=上传=rx/NAS接收）
+    let curDown = tx, curUp = rx;
+    if(NET_TAB_IDX>0){
+      let t = NET_TAB_LIST[NET_TAB_IDX-1];
+      let m = t ? netData.find(x=>x.name===t.name) : null;
+      if(m){ curDown = m.tx_rate||0; curUp = m.rx_rate||0; }
+    }
+    // id 在内层数字 span，外层 div 是它的 parent。grid 内箭头 span + 数字 span，
+    // 只更新数字 span（外层 div 的 lastElementChild），箭头 span 保留，箭头列固定 14px。
+    let lrxSpan=document.getElementById('net-live-rx');
+    let lrxDiv=lrxSpan ? lrxSpan.parentElement : null;
+    if(lrxDiv && lrxDiv.lastElementChild) lrxDiv.lastElementChild.textContent=fmtSpeed(curDown);
+    let ltxSpan=document.getElementById('net-live-tx');
+    let ltxDiv=ltxSpan ? ltxSpan.parentElement : null;
+    if(ltxDiv && ltxDiv.lastElementChild) ltxDiv.lastElementChild.textContent=fmtSpeed(curUp);
+    drawNetSpark();
+    // 网口 Tab 栏：网卡列表变化时重建（首次或数量/名称变化）
+    let tabsEl = document.getElementById('net-live-tabs');
+    if(tabsEl && (!tabsEl.children.length || tabsEl.dataset.key !== netData.map(n=>n.name).join(','))){
+      tabsEl.dataset.key = netData.map(n=>n.name).join(',');
+      renderNetTabs(netData);
+    }
+    // 更新各网卡 model/speed（Tab 重建后型号可能刷新）
+    if(tabsEl && tabsEl.children.length){ updateNetTabHead(); }
   }catch(e){}
+}
+// 网络实时速率卡的 60s 滚动历史（每秒一个点，rx/tx 为合并后总速率 bps）
+let NET_SPARK=[];
+// CPU / 内存使用率的 60s 滚动历史（值域 0-100，每秒一个点）
+let CPU_HISTORY=[];
+let MEM_HISTORY=[];
+// 各网卡 60s 折线历史（每个 nic 一个数组，最多 60 个点；key=nic.name）
+let NIC_HISTORY={};
+// 网络卡 Tab 状态：0=全部合并，1..N=第 N 张网卡
+let NET_TAB_IDX = 0;
+let NET_TAB_LIST = [];   // [{name, model, speed}]
+// 渲染"网络"卡的网口 Tab 栏（全部 + 网口1/网口2...）
+function renderNetTabs(netData){
+  let el = document.getElementById('net-live-tabs');
+  if(!el) return;
+  NET_TAB_LIST = (netData||[]).map(n=>{
+    let m = (n.model||'').trim();
+    if(!m && DATA && DATA.system && DATA.system.nics){
+      let full = DATA.system.nics.find(x=>x.name===n.name);
+      if(!full && /-ovs$/.test(n.name)) full = DATA.system.nics.find(x=>x.name===n.name.replace(/-ovs$/,''));
+      if(!full && !/-ovs$/.test(n.name)) full = DATA.system.nics.find(x=>x.name===n.name+'-ovs');
+      m = full ? (full.model||'') : '';
+    }
+    return {name:n.name, model:m, speed:n.speed};
+  });
+  let html = `<button class="nic-tab sys-nic-tab${NET_TAB_IDX===0?' active':''}" data-net-tab="0" onclick="switchNetTab(0)">全部</button>`;
+  NET_TAB_LIST.forEach((t,i)=>{
+    html += `<button class="nic-tab sys-nic-tab${NET_TAB_IDX===i+1?' active':''}" data-net-tab="${i+1}" onclick="switchNetTab(${i+1})" title="${esc(t.name)}">网口${i+1}</button>`;
+  });
+  el.innerHTML = html;
+  updateNetTabHead();
+}
+// 切换网络卡 Tab
+function switchNetTab(idx){
+  NET_TAB_IDX = idx;
+  document.querySelectorAll('#net-live-tabs .nic-tab').forEach(b=>{
+    b.classList.toggle('active', Number(b.dataset.netTab)===idx);
+  });
+  updateNetTabHead();
+  drawNetSpark();
+  // 大数字即时切到对应网卡（用户视角：下行=下载=tx，上行=上传=rx）
+  let netData = (typeof RT_NET!=='undefined' ? RT_NET : []).filter(n=> (n.name!=='ovs-system') && !((n.rx_rate||0)===0 && (n.tx_rate||0)===0));
+  let curDown=0, curUp=0; netData.forEach(n=>{ curDown+=(n.tx_rate||0); curUp+=(n.rx_rate||0); });
+  if(idx>0){
+    let t = NET_TAB_LIST[idx-1];
+    let m = t ? netData.find(x=>x.name===t.name) : null;
+    if(m){ curDown = m.tx_rate||0; curUp = m.rx_rate||0; }
+  }
+  let lrxSpan=document.getElementById('net-live-rx');
+  let lrxDiv=lrxSpan ? lrxSpan.parentElement : null;
+  if(lrxDiv && lrxDiv.lastElementChild) lrxDiv.lastElementChild.textContent=fmtSpeed(curDown);
+  let ltxSpan=document.getElementById('net-live-tx');
+  let ltxDiv=ltxSpan ? ltxSpan.parentElement : null;
+  if(ltxDiv && ltxDiv.lastElementChild) ltxDiv.lastElementChild.textContent=fmtSpeed(curUp);
+}
+// 更新 Tab 标题区：网卡名 + 型号（全部=合并全部网卡）
+function updateNetTabHead(){
+  let ifEl = document.getElementById('net-live-if');
+  if(!ifEl) return;
+  if(NET_TAB_IDX===0){ ifEl.textContent='合并全部网卡'; return; }
+  let t = NET_TAB_LIST[NET_TAB_IDX-1];
+  if(!t){ ifEl.textContent=''; return; }
+  ifEl.textContent = t.model ? (t.name + ' · ' + t.model) : t.name;
+}
+// 当前 Tab 对应的历史数据源（全部=合并，否则=该网卡）
+function netSparkSource(){
+  if(NET_TAB_IDX===0) return NET_SPARK;
+  let t = NET_TAB_LIST[NET_TAB_IDX-1];
+  return (t && NIC_HISTORY[t.name]) || [];
+}
+// 系统资源页图表通用绘制：单线 + fillArea + 外框 + 网格（飞牛风格）
+function drawSingleSpark(canvasId, hist, lineColor, fillColor){
+  let cv=document.getElementById(canvasId);
+  if(!cv) return;
+  let ctx=cv.getContext('2d');
+  let W=cv.width, H=cv.height;
+  ctx.clearRect(0,0,W,H);
+  let cssVar=function(n,f){ let v=getComputedStyle(document.documentElement).getPropertyValue(n).trim(); return v||f; };
+  let bd=cssVar('--border','rgba(0,0,0,.1)');
+  let padL=6,padR=6,padT=10,padB=10;
+  let iw=W-padL-padR, ih=H-padT-padB;
+  // 网格：3 横 + 4 纵
+  ctx.lineWidth=1;
+  ctx.strokeStyle=bd; ctx.globalAlpha=0.45;
+  for(let gi=1; gi<4; gi++){
+    let gy=padT+ih*gi/4;
+    ctx.beginPath(); ctx.moveTo(padL,gy); ctx.lineTo(W-padR,gy); ctx.stroke();
+  }
+  for(let gi=1; gi<5; gi++){
+    let gx=padL+iw*gi/5;
+    ctx.beginPath(); ctx.moveTo(gx,padT); ctx.lineTo(gx,padT+ih); ctx.stroke();
+  }
+  // 外框
+  ctx.globalAlpha=1;
+  ctx.strokeRect(padL-0.5, padT-0.5, iw+1, ih+1);
+  if(!hist.length) return;
+  let px=function(i){ return padL + (hist.length===1?0: i*iw/(hist.length-1)); };
+  let py=function(v){ return padT + ih - (v/100)*ih; };
+  // fillArea：曲线下方到基线
+  ctx.fillStyle=fillColor; ctx.globalAlpha=0.18;
+  ctx.beginPath();
+  ctx.moveTo(padL, padT+ih);
+  hist.forEach(function(v,i){ var x=px(i), y=py(v); i?ctx.lineTo(x,y):ctx.lineTo(x,y); });
+  ctx.lineTo(W-padR, padT+ih);
+  ctx.closePath();
+  ctx.fill();
+  ctx.globalAlpha=1;
+  // 曲线
+  ctx.strokeStyle=lineColor; ctx.lineWidth=2; ctx.lineJoin='round'; ctx.lineCap='round';
+  ctx.beginPath();
+  hist.forEach(function(v,i){ var x=px(i), y=py(v); i?ctx.lineTo(x,y):ctx.moveTo(x,y); });
+  ctx.stroke();
+}
+function drawCpuSpark(){
+  // 蓝色 + 浅蓝 fill
+  let cssVar=function(n,f){ let v=getComputedStyle(document.documentElement).getPropertyValue(n).trim(); return v||f; };
+  drawSingleSpark('cpu-spark', CPU_HISTORY, cssVar('--blue','#2a6fd6'), cssVar('--blue','#2a6fd6'));
+}
+function drawMemSpark(){
+  // 紫色 #a855f7 + 浅紫 fill（飞牛内存配色）
+  drawSingleSpark('mem-spark', MEM_HISTORY, '#a855f7', '#a855f7');
+}
+// 画 Windows 任务管理器风格的小折线图：绿=下行，蓝=上行，Y 轴按历史最大值自适应
+// 数据源：当前 Tab 对应（全部=合并 NET_SPARK，网口N=该网卡 NIC_HISTORY）
+function drawNetSpark(){
+  let cv=document.getElementById('net-spark');
+  if(!cv) return;
+  let ctx=cv.getContext('2d');
+  let W=cv.width, H=cv.height;
+  ctx.clearRect(0,0,W,H);
+  let hist = netSparkSource();
+  let cssVar=function(n,f){ let v=getComputedStyle(document.documentElement).getPropertyValue(n).trim(); return v||f; };
+  // padT=padB=0：曲线贴 canvas 顶/底画，与 HTML 刻度栏 top:0/bottom:0 完全对齐
+  let padL=6, padR=6, padT=0, padB=0;
+  let iw=W-padL-padR, ih=H-padT-padB;
+  let g=cssVar('--green','#22c55e'), b=cssVar('--blue','#3b82f6');
+  let bd=cssVar('--border','rgba(0,0,0,.1)');
+  // 画格子框（始终画，避免首屏空白）
+  ctx.lineWidth=1;
+  ctx.strokeStyle=bd; ctx.globalAlpha=0.4;
+  for(let gi=1; gi<4; gi++){
+    let gy=padT+ih*gi/4;
+    ctx.beginPath(); ctx.moveTo(padL,gy); ctx.lineTo(W-padR,gy); ctx.stroke();
+  }
+  for(let gi=1; gi<6; gi++){
+    let gx=padL+iw*gi/6;
+    ctx.beginPath(); ctx.moveTo(gx,padT); ctx.lineTo(gx,padT+ih); ctx.stroke();
+  }
+  ctx.globalAlpha=1;
+  ctx.strokeRect(padL-0.5, padT-0.5, iw+1, ih+1);
+  // 历史为空时画一条 0 基线后返回（首屏空数据不显示白板）
+  if(!hist.length){
+    ctx.strokeStyle=g; ctx.globalAlpha=0.4; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.moveTo(padL, padT+ih); ctx.lineTo(W-padR, padT+ih); ctx.stroke();
+    ctx.globalAlpha=1;
+    return;
+  }
+  let maxV=0; hist.forEach(p=>{ if(p.rx>maxV)maxV=p.rx; if(p.tx>maxV)maxV=p.tx; });
+  if(maxV<1024) maxV=1024;                 // 保底刻度，避免全 0 时除零
+  let px=function(i){ return padL + (hist.length===1?0: i*iw/(hist.length-1)); };
+  let py=function(v){ return padT + ih - (v/maxV)*ih; };
+  function line(arr, color, key){
+    ctx.strokeStyle=color; ctx.lineWidth=2; ctx.lineJoin='round'; ctx.lineCap='round';
+    ctx.beginPath();
+    arr.forEach(function(p,i){
+      let x=px(i), y=py(p[key]);
+      i? ctx.lineTo(x,y) : ctx.moveTo(x,y);
+    });
+    ctx.stroke();
+  }
+  line(hist,g,'rx');
+  line(hist,b,'tx');
+  // 更新 Y 轴最大刻度文字（HTML 刻度栏）
+  let axisEl = document.getElementById('net-axis');
+  if(axisEl){
+    let ticks = [
+      {frac:1,    top:'0px'},
+      {frac:2/3,  top:'33.333%'},
+      {frac:1/3,  top:'66.667%'},
+      {frac:0,    bottom:'0px'}
+    ];
+    axisEl.innerHTML = ticks.map(t=>{
+      let pos = t.top!=null ? `top:${t.top}` : `bottom:${t.bottom}`;
+      return `<span style="position:absolute;${pos};right:2px;transform:translateY(${t.top?'-50%':'50%'})">${fmtAxisSpeed(maxV*t.frac)}</span>`;
+    }).join('');
+  }
+}
+  // 刻度数值精简格式：1.5 KB / 35.0 MB，省空间更清晰
+function fmtAxisSpeed(bps){
+  if(bps==null || isNaN(bps) || bps<=0) return '0';
+  if(bps < 1024) return bps.toFixed(0)+' B';
+  if(bps < 1048576) return (bps/1024).toFixed(1)+' KB';
+  return (bps/1048576).toFixed(1)+' MB';
 }
 function startNetRateTimer(){ if(!netRateTimer){ fetchNetRates(); netRateTimer=setInterval(fetchNetRates, 1000); } }
 // 网络卡片轻量刷新：每 5s 拉 /api/network（独立接口，不含 /api/system 的 60s 缓存），
@@ -3039,7 +3283,7 @@ function renderStorage(st){
 
 function renderDetect(D){
   if(!D) return '';
-  let r = D.raid||{}, disks = D.disks||[], s = D.system||{}, st = D.storage||{}, dk = D.docker||{};
+  let r = D.raid||{}, disks = D.disks||[], s = D.system||{}, dk = D.docker||{};
   let pwColor = (w)=> (w==null?'var(--muted)': w>40?'var(--red)': w>20?'var(--orange)':'var(--green)');
   // 状态栏健康判定
   // 健康检查只看「可见 + 能读转速」的风扇：
@@ -3056,7 +3300,6 @@ function renderDetect(D){
   let sataDisks = mergedDisks.filter(d=>{let t=(d.type||'').toUpperCase(); return t==='SATA'||t==='ATA';});
   let sasHealthy = sasDisks.filter(d=>d.health_ok).length;
   let sataHealthy = sataDisks.filter(d=>d.health_ok).length;
-  let dockerStr = (dk.running||0)+' 运行中';
   // hero 横幅：整体健康 = 风扇 + 阵列卡 + 全部硬盘均正常
   let allDiskOk = (sasHealthy===sasDisks.length) && (sataHealthy===sataDisks.length);
   let sysOk = (fans.length===0 || fanOk) && raidOk && allDiskOk;
@@ -3080,8 +3323,6 @@ function renderDetect(D){
       <div class="hs${raidOk?'':' warn'}"><div class="hs-v">${raidStr}</div><div class="hs-k">阵列卡</div></div>
       ${sasDisks.length?`<div class="hs${sasHealthy===sasDisks.length?'':' warn'}"><div class="hs-v">${sasHealthy}<small>/${sasDisks.length}</small></div><div class="hs-k">SAS 硬盘健康</div></div>`:''}
       ${sataDisks.length?`<div class="hs${sataHealthy===sataDisks.length?'':' warn'}"><div class="hs-v">${sataHealthy}<small>/${sataDisks.length}</small></div><div class="hs-k">SATA 硬盘健康</div></div>`:''}
-      <div class="hs"><div class="hs-v">${dk.running||0}<small>/${dk.total||0}</small></div><div class="hs-k">Docker 运行中</div></div>
-      <div class="hs hs-uptime"><div class="hs-v">${s.uptime? String(s.uptime).replace(/\s+/g,'') : '—'}</div><div class="hs-k">已运行</div></div>
     </div>
   </div>`;
   // 系统配置
@@ -3121,11 +3362,9 @@ function renderDetect(D){
   <div class="card" style="grid-column:1/-1">
     <h3>内存</h3>
     <div class="kv"><span class="k">总量</span><span class="v">${(s.memory&&s.memory.total)||'-'}</span></div>
-    <div class="kv"><span class="k">已用</span><span class="v">${(s.memory&&s.memory.used)||'-'}</span></div>
-    <div class="kv"><span class="k">占用率</span><span class="v" style="color:${s.memory&&s.memory.percent>70?'var(--orange)':'var(--green)'}">${(s.memory&&s.memory.percent)||0}%</span></div>
     <div class="kv"><span class="k">内存插槽</span><span class="v">${memSummary||'-'}</span></div>
     <div class="mem-slots">${memSlotHtml}</div>
-    <div style="margin-top:8px;font-size:12px;color:var(--muted)">通道 ${chanTxt} · 品牌取自 SPD 直读；灰色为空槽</div>
+    <div style="margin-top:8px;font-size:12px;color:var(--muted)">通道 ${chanTxt} · 品牌取自 SPD 直读；灰色为空槽 · 实时占用率见「系统资源」页</div>
   </div>`;
   let bm = (s.board && s.board.manufacturer) || "";
   let boardHasDMI = bm && bm.toLowerCase() !== "default string" && bm.toLowerCase() !== "to be filled by o.e.m.";
@@ -3147,7 +3386,7 @@ function renderDetect(D){
   <div class="card">
     <h3>系统信息</h3>
     <div class="kv"><span class="k">设备名称</span><span class="v">${s.hostname||'-'}</span></div>
-    <div class="kv"><span class="k">系统</span><span class="v">${s.os||'-'}</span></div>
+    <div class="kv"><span class="k">系统</span><span class="v">${DATA && DATA.fnos_version ? esc(DATA.fnos_version)+' (Debian 12 底层)' : (s.os||'-')}</span></div>
     <div class="kv"><span class="k" title="系统最核心的程序版本，相当于手机底层的操作系统">内核</span><span class="v">${s.kernel||'-'}</span></div>
     <div class="kv"><span class="k">运行时间</span><span class="v">${s.uptime||'-'}</span></div>
     <div class="kv"><span class="k">虚拟内存</span><span class="v">${(s.swap&&s.swap.used)?(s.swap.used+' / '+s.swap.total):'-'}</span></div>
@@ -3225,7 +3464,7 @@ function renderDetect(D){
         else if(s.cpu_freq!=null) txt = Math.round(parseFloat(s.cpu_freq))+' MHz';
         return `<div class="kv"><span class="k">频率</span><span class="v">${txt||'N/A'}</span></div>`;
       })()}
-      <div class="kv"><span class="k">CPU 温度</span><span class="v" style="color:${tempColor(s.cpu_temp,100)}">${s.cpu_temp!=null?s.cpu_temp+'°C':'N/A'}</span></div>
+      <div class="kv"><span class="k">CPU 温度</span><span class="v" id="sys-cpu-temp-kv" style="color:${tempColor(cpuTempUnified(),100)}">${cpuTempUnified()!=null?cpuTempUnified()+'°C':'N/A'}</span></div>
       <div class="kv"><span class="k">CPU 使用率</span><span class="v">${cpuPct}%</span></div>
       ${(()=>{
         let pw=s.power;
@@ -3277,6 +3516,7 @@ function renderDetect(D){
       })()}
     </div>
     ${gpuCard}
+    <div class="card" style="grid-column:1/-1" id="sys-net-card">${renderSysNetCard(s.nics)}</div>
     ${memCard}
   </div>`;
   // 阵列卡 & 磁盘
@@ -3387,7 +3627,7 @@ function renderDocker(dk){
       <td><b>${c.name}</b><br><span style="font-size:12px;color:var(--muted)">${c.image}</span></td>
       <td style="white-space:nowrap;text-align:right">${c.cpu!=null?c.cpu.toFixed(1)+'%':'—'}</td>
       <td style="white-space:nowrap">${mem}${c.mem_pct!=null?'<br><small style="color:var(--muted)">'+c.mem_pct.toFixed(1)+'%</small>':''}</td>
-      <td style="font-size:12px;white-space:nowrap">↓${fmtSpeed(c.net_rx)}<br>↑${fmtSpeed(c.net_tx)}</td>
+      <td style="font-size:12px;white-space:nowrap" title="${(c.net_rx!=null?'累计下行 '+fmtBToSize(c.net_rx):'')+(c.net_tx!=null?((c.net_rx!=null?' / ':'')+'上行 '+fmtBToSize(c.net_tx)):'')}">↓${c.net_rx_rate!=null?fmtSpeed(c.net_rx_rate):(c.net_rx!=null?'累计 '+fmtBToSize(c.net_rx):'—')}<br>↑${c.net_tx_rate!=null?fmtSpeed(c.net_tx_rate):(c.net_tx!=null?'累计 '+fmtBToSize(c.net_tx):'—')}</td>
       <td style="font-size:12px">${ports}</td>
       <td style="font-size:12px;color:var(--muted)">${c.runtime}</td>
     </tr>`;
@@ -3395,7 +3635,7 @@ function renderDocker(dk){
   let table = `
   <div class="section-title" style="margin-top:14px">容器列表</div>
   <div class="card">
-    <table class="table"><thead><tr><th>状态</th><th>名称 / 镜像</th><th>CPU</th><th>内存</th><th>网络 (↓收/↑发)</th><th>端口映射</th><th>运行时长</th></tr></thead><tbody>${rows}</tbody></table>
+    <table class="table"><thead><tr><th>状态</th><th>名称 / 镜像</th><th>CPU</th><th>内存</th><th>网络速率 (↓收/↑发)</th><th>端口映射</th><th>运行时长</th></tr></thead><tbody>${rows}</tbody></table>
   </div>`;
   return panelHero({icon:ICON_DOCKER,title:'Docker',sub:'容器运行状态与资源占用',stats:[
     {v:(dk.running||0)+'/'+(dk.total||0),k:'运行中'},
@@ -3765,6 +4005,8 @@ function showAlerts(alerts){
   var banner=document.getElementById('alertBanner');
   if(!banner) return;
   alerts=alerts||[];
+  // 硬盘健康类告警只在「硬盘 SMART」页面内展示（带处理引导），不占用全局横幅刷存在感
+  alerts = alerts.filter(function(a){ return !/硬盘健康|SMART 健康/.test(a.title||''); });
   if(!alerts.length || alertsDismissed){ banner.classList.remove('show'); return; }
   var txt=document.getElementById('alertText'); if(txt) txt.textContent='检测到 '+alerts.length+' 项告警：';
   var ul=document.getElementById('alertList');
@@ -3805,7 +4047,6 @@ function renderAll(isCache){
   if(!_fanBusy){
     document.getElementById('fan').innerHTML = renderFanControl();
     bindFanSliders();
-    loadFcsStatus();
   }
   smartUpdate(document.getElementById('storage'), renderStorage(DATA.storage));
   smartUpdate(document.getElementById('docker'), renderDocker(DATA.docker));
@@ -3894,7 +4135,7 @@ async function loadHistory(){
 }
 
 const CACHE_KEY = 'nasdash_all_cache_v1';
-async function loadData(){
+async function loadData(force){
   // 1) 先用浏览器本地缓存「秒开」界面：硬刷新也能立刻看到上一次的内容，后台静默刷新最新数据
   let usedCache = false;
   try{
@@ -3911,7 +4152,7 @@ async function loadData(){
   // 2) 后台静默拉取最新全量数据，到了再无缝覆盖
   document.querySelectorAll('.spin').forEach(spin=>spin.style.display='inline-block');
   try{
-    let r = await fetch('/api/all?_='+Date.now());
+    let r = await fetch('/api/all' + (force?'?force=1&_=':'?_=') + Date.now());
     DATA = await r.json();
     renderAll(false);
     try{ localStorage.setItem(CACHE_KEY, JSON.stringify({data:DATA, savedAt:new Date().toISOString()})); }catch(e){}
@@ -3937,6 +4178,7 @@ if(autoRefreshEnabled){ timer = setInterval(autoRefreshTick, 30000); }
 loadData();  // 首屏仍全量拉取一次，打底填充所有板块 DATA
 startNetRateTimer();  // 启动轻量实时流量刷新（每 2s 只拉 /api/metrics，不动重采集）
 startSysNetTimer();  // 启动网络卡片轻量刷新（每 5s 拉独立 /api/network，不依赖 60s 缓存）
+ensureTempPolling();  // 全局开启温度轮询，让检测/风扇页也用实时 CPU 温度，避免各页温度不一致
 
 // ---------- 检测新版本 ----------
 let updateDismissed = false;

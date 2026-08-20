@@ -98,22 +98,35 @@ def _migrate_legacy_configs():
 _migrate_legacy_configs()
 
 # 版本号单一来源：fnOS 标准安装时 manifest 不在 APP_DIR（APP_DIR 只有 app.tgz 内容），
-# 而是在 /var/apps/<appid>/manifest。两个位置都查，最后才回退硬编码值（曾因只查 APP_DIR 导致所有标准安装都显示 v1.6.2）。
+# 而是在 /var/apps/<appid>/manifest；热替换部署时我们又会把 manifest 上传到 APP_DIR。
+# 两个位置都查，取「版本号较高者」——既兼容标准安装（只有 /var/apps 有），
+# 也兼容热替换（APP_DIR 已是最新、/var/apps 仍是旧版），最后才回退硬编码值。
+def _parse_ver(v):
+    try:
+        s = str(v).strip().lstrip("vV")
+        return tuple(int(x) for x in s.split("."))
+    except Exception:
+        return (0,)
+
 def _app_version():
     appid = os.path.basename(APP_DIR)  # 如 com.dashboard.nasdash
     candidates = [
-        os.path.join("/var/apps", appid, "manifest"),
         os.path.join(APP_DIR, "manifest"),
+        os.path.join("/var/apps", appid, "manifest"),
     ]
+    best = None
     for path in candidates:
         try:
             with open(path) as f:
                 m = re.search(r"^version\s*=\s*(\S+)", f.read(), re.M)
                 if m:
-                    return "v" + m.group(1).strip()
+                    ver = "v" + m.group(1).strip()
+                    t = _parse_ver(ver)
+                    if best is None or t > best[0]:
+                        best = (t, ver)
         except Exception:
             pass
-    return "v1.6.2"
+    return best[1] if best else "v1.6.2"
 APP_VERSION = _app_version()
 
 def _load_icon_data(name):
@@ -449,7 +462,6 @@ def get_cpu_usage():
 # 全局风扇目标状态：key=(hwmon, idx) -> {"mode":"manual"|"auto", "target":0-255}
 FAN_LOCK = _threading.Lock()
 FAN_TARGETS = {}
-_FAN_LAST_CPU_TEMP = {"t": 0.0, "v": None}
 # 本机真实风扇全集缓存（拓扑基本静态，30s 刷新；见 _enumerate_fans）
 _FAN_ENUM_CACHE = {"t": 0.0, "v": []}
 
@@ -525,35 +537,77 @@ def _fcs_installed_state():
     return run_cmd(["systemctl", "is-enabled", "pwm-fancontrol"], 3).strip().lower()
 
 def _fcs_status():
-    """汇总 FanControlServer 状态供面板展示：是否安装/是否开机自启/是否在跑/是否被用户永久禁用。"""
-    raw = _fcs_installed_state()
-    installed = raw in ("enabled", "disabled", "masked", "static", "indirect",
-                        "enabled-runtime", "linked", "generated", "alias")
+    """汇总 FanControlServer 状态供面板展示：是否安装/是否开机自启/是否在跑/是否被用户永久禁用。
+    用一条 `systemctl show` 同时取 ActiveState 与 UnitFileState，比 is-active + is-enabled
+    两次独立命令少一次 D-Bus 往返，降低超时/卡住的概率。"""
+    raw = run_cmd(["systemctl", "show", "pwm-fancontrol",
+                   "-p", "ActiveState", "-p", "UnitFileState", "--no-pager"], 4).strip()
+    active = ""
+    unit_state = ""
+    for line in raw.splitlines():
+        if line.startswith("ActiveState="):
+            active = line.split("=", 1)[1].strip().lower()
+        elif line.startswith("UnitFileState="):
+            unit_state = line.split("=", 1)[1].strip().lower()
+    installed = bool(unit_state) or active in ("active", "activating")
+    enabled = unit_state == "enabled"
+    running = active in ("active", "activating")
     return {
         "installed": installed,
-        "enabled": raw == "enabled",
-        "running": _fan_ext_service_running(),
+        "enabled": enabled,
+        "running": running,
         "disabled_by_user": _fcs_disabled(),
-        "raw": raw,
+        "raw": unit_state or active,
     }
 
-# FCS 状态查询涉及 systemctl is-active/is-enabled，可能各耗时 1~3 秒。
-# 面板高频刷新（切页/切换开关）时不必每次都重新跑命令，缓存 5 秒可大幅缩短「加载中」时间。
-_FCS_STATUS_CACHE = {"t": 0.0, "v": None}
-_FCS_STATUS_TTL = 5.0
+# 诊断开关：置 True 时跳过 systemctl，直接返回硬编码状态，用于排查网关/请求路径问题。
+_FCS_DIAG_HARD = False
+
+def _fcs_status_hard():
+    return {"installed": False, "enabled": False, "running": False,
+            "disabled_by_user": False, "raw": "diag"}
+
+# FCS 状态查询涉及 systemctl，可能耗时 1~3 秒；面板高频刷新/用户快速切页时会并发请求。
+# 改为后台线程每隔 TTL 刷新一次，HTTP 接口只读缓存，永远不再因为 systemctl 慢而卡住请求。
+_FCS_STATUS_CACHE = {"t": 0.0, "v": None, "lock": _threading.Lock()}
+_FCS_STATUS_TTL = 15.0
+
+def _fcs_status_refresh_loop():
+    while True:
+        try:
+            v = _fcs_status_hard() if _FCS_DIAG_HARD else _fcs_status()
+            with _FCS_STATUS_CACHE["lock"]:
+                _FCS_STATUS_CACHE["v"] = v
+                _FCS_STATUS_CACHE["t"] = time.time()
+        except Exception:
+            pass
+        time.sleep(_FCS_STATUS_TTL)
 
 def _fcs_status_cached(clear=False):
-    """带 TTL 缓存的 FCS 状态查询。切换开关等操作后调用 clear=True 立即刷新。"""
-    global _FCS_STATUS_CACHE
+    """返回 FCS 状态缓存；首次调用会启动后台刷新线程，之后 always 立即返回。
+    切换开关等操作后调用 clear=True 会先尝试同步刷新一次，让用户立刻看到最新状态。"""
+    if _FCS_DIAG_HARD:
+        return _fcs_status_hard()
+    cache = _FCS_STATUS_CACHE
+    with cache["lock"]:
+        if not getattr(_fcs_status_cached, "_started", False):
+            _threading.Thread(target=_fcs_status_refresh_loop, daemon=True).start()
+            _fcs_status_cached._started = True
+        if clear:
+            cache["t"] = 0.0
+            cache["v"] = None
+        now = time.time()
+        if cache["v"] is not None and now - cache["t"] < _FCS_STATUS_TTL:
+            return cache["v"]
+    # clear 时（如用户点了禁用/恢复）同步刷一次，保证 UI 即时反馈；_fcs_status 内部有 4s 超时兜底。
     if clear:
-        _FCS_STATUS_CACHE["t"] = 0.0
-    now = time.time()
-    if now - _FCS_STATUS_CACHE["t"] < _FCS_STATUS_TTL and _FCS_STATUS_CACHE["v"] is not None:
-        return _FCS_STATUS_CACHE["v"]
-    v = _fcs_status()
-    _FCS_STATUS_CACHE["t"] = now
-    _FCS_STATUS_CACHE["v"] = v
-    return v
+        v = _fcs_status()
+        with cache["lock"]:
+            cache["v"] = v
+            cache["t"] = time.time()
+        return v
+    return {"installed": False, "enabled": False, "running": False,
+            "disabled_by_user": _fcs_disabled(), "raw": ""}
 
 def _fcs_has_board_config():
     """判断 FCS 是否真的配置了风扇参数。飞牛部分机型 /boot/board.json 为空或没有 fan 段，
@@ -642,27 +696,226 @@ def _save_fan_mode(idx, mode, target):
     except Exception:
         pass
 
-def _fan_read_cpu_temp():
-    try:
-        out = run_cmd(["sensors", "-j"], 5)
-        j = json.loads(out)
-        for chip, entries in j.items():
-            if chip.startswith("coretemp"):
-                for ename, fields in entries.items():
-                    if isinstance(fields, dict) and "Package" in ename:
-                        for k, v in fields.items():
-                            if k.startswith("temp") and k.endswith("_input"):
-                                return float(v)
-    except Exception:
-        pass
-    return None
+# ===================== 统一温度采集（一次采样、处处共享） =====================
+# 历史问题：CPU/主板/温度墙/控速线程各自跑 sensors -j、各带各的缓存，导致
+# ① coretemp 的 temp1_input（驱动虚拟偏高读数）被当 CPU 温度，虚高 ~10°C；
+# ② 控速线程每 0.6s 跑一次 sensors；③ 温度墙 30s 才刷新，显示不及时。
+# 统一方案：后台采集循环 ~2s 一次 sensors -j → 一份 _TEMP_SNAP 快照；
+# 所有温度消费方（/api/fan/temps、get_system、控速线程、get_fan_status）读同一份快照。
+# 硬盘(4s TTL)与阵列卡(12~60s TTL)走各自已有缓存并入快照。
+
+def _parse_cpu_temp(j):
+    """统一 CPU 封装温度解析（纯函数，不跑命令）。
+    1) AMD：k10temp/zenpower 的 Tdie（真实量纲）优先，Tctl 次之；
+    2) Intel coretemp：封装温度 = 各核心(Core N)测点最大值，排除 temp1_input
+       （coretemp 驱动的"虚拟最高点"读数，曾致 CPU 温度虚高 ~10°C）；
+    3) 兜底：任意 Package/Tdie/Tctl 标签取 max（coretemp 仍排除 temp1_input）。"""
+    j = j or {}
+    for chip, entries in j.items():
+        c = str(chip).lower()
+        if c.startswith("k10temp") or c.startswith("zenpower"):
+            best = None
+            for ename, fields in (entries or {}).items():
+                if not isinstance(fields, dict):
+                    continue
+                en = str(ename).lower()
+                if "tdie" in en:
+                    for k, v in fields.items():
+                        if k.endswith("_input") and isinstance(v, (int, float)):
+                            return float(v)
+                if "tctl" in en and best is None:
+                    for k, v in fields.items():
+                        if k.endswith("_input") and isinstance(v, (int, float)):
+                            best = float(v)
+            if best is not None:
+                return best
+    core_vals, pkg_vals = [], []
+    for chip, entries in j.items():
+        if not str(chip).lower().startswith("coretemp"):
+            continue
+        for ename, fields in (entries or {}).items():
+            if not isinstance(fields, dict):
+                continue
+            en = str(ename)
+            vals = [float(v) for k, v in fields.items()
+                    if k.startswith("temp") and k.endswith("_input")
+                    and k != "temp1_input" and isinstance(v, (int, float))]
+            if re.match(r"^Core\s+\d+$", en):
+                core_vals.extend(vals)
+            elif "package" in en.lower():
+                pkg_vals.extend(vals)
+    if core_vals:
+        return max(core_vals)
+    if pkg_vals:
+        return max(pkg_vals)
+    fallback = []
+    for chip, entries in j.items():
+        for ename, fields in (entries or {}).items():
+            if not isinstance(fields, dict):
+                continue
+            en = str(ename).lower()
+            if "package" in en or "tdie" in en or "tctl" in en:
+                for k, v in fields.items():
+                    if k.startswith("temp") and k.endswith("_input") and isinstance(v, (int, float)):
+                        if str(chip).lower().startswith("coretemp") and k == "temp1_input":
+                            continue
+                        fallback.append(float(v))
+    return max(fallback) if fallback else None
+
+def _parse_mb_temp(j):
+    """统一主板温度解析（纯函数）：SYSTIN 精确测点优先；
+    回落排除 coretemp/AUX 后最高；再回落非 coretemp 最高。"""
+    temps = []
+    for chip, entries in (j or {}).items():
+        if not isinstance(entries, dict):
+            continue
+        for ename, fields in entries.items():
+            if not isinstance(fields, dict) or ename == "Adapter":
+                continue
+            for k, v in fields.items():
+                if k.startswith("temp") and k.endswith("_input") and isinstance(v, (int, float)):
+                    temps.append((str(chip), str(ename), float(v)))
+    if not temps:
+        return None
+    systin = [t for t in temps if t[1].strip().upper() == "SYSTIN"]
+    if systin:
+        return systin[0][2]
+    mb = [t for t in temps if "coretemp" not in t[0].lower() and not t[1].strip().upper().startswith("AUXTIN")]
+    if mb:
+        return max(t[2] for t in mb)
+    mb2 = [t for t in temps if "coretemp" not in t[0].lower()]
+    if mb2:
+        return max(t[2] for t in mb2)
+    return max(t[2] for t in temps)
+
+def _parse_sensors_all(j):
+    """统一传感器全量解析（温度墙测点 + 电压）：与旧 get_system 内联解析同口径，
+    抽成纯函数供采集循环与 get_system 共用，保证两处数据完全一致。"""
+    temps, voltages = [], []
+    for chip, entries in (j or {}).items():
+        cs = str(chip).split("-")[0]
+        for ename, fields in (entries or {}).items():
+            if not isinstance(fields, dict) or ename == "Adapter":
+                continue
+            for fn, fv in fields.items():
+                if not fn.endswith("_input") or not isinstance(fv, (int, float)):
+                    continue
+                prefix = fn.replace("_input", "")
+                if fn.startswith("temp"):
+                    if str(ename).strip().upper().startswith("AUXTIN"):
+                        continue
+                    if fv < -50 or fv > 150:
+                        continue
+                    mx = fields.get(prefix + "_max")
+                    cr = fields.get(prefix + "_crit")
+                    if cs != "coretemp":
+                        mx = cr = None
+                    if mx is not None and (mx < 0 or mx > 150):
+                        mx = None
+                    if cr is not None and (cr < 0 or cr > 150):
+                        cr = None
+                    nm = _temp_name_zh(ename, cs) if cs == "coretemp" else (
+                        "主板(ACPI)" if cs == "acpitz" else
+                        "PCH 芯片组" if cs.startswith("pch") else
+                        "主板(CPU附近)" if cs.startswith("it") and "temp1" in str(ename) else
+                        "主板(系统)" if cs.startswith("it") and "temp2" in str(ename) else
+                        "主板" if cs.startswith("it") else _temp_name_zh(ename, cs))
+                    if cs == "coretemp" and "package" in str(ename).lower():
+                        # 系统温度合集归口：CPU 封装温度的权威来源只有 _parse_cpu_temp（核心 max、排除
+                        # temp1_input 虚拟偏高值）。温度墙此条目直接引用该值，不再自己取 Package 字段，
+                        # 否则会与 hero/三页 CPU 温度出现第二套语义差（曾差 2°C）。
+                        fv = _parse_cpu_temp(j)
+                        if mx is None:
+                            for _k, _v in fields.items():
+                                if _k.startswith("temp") and _k.endswith("_max") and _k != "temp1_max" and isinstance(_v, (int, float)):
+                                    mx = _v
+                                    break
+                        if cr is None:
+                            for _k, _v in fields.items():
+                                if _k.startswith("temp") and _k.endswith("_crit") and _k != "temp1_crit" and isinstance(_v, (int, float)):
+                                    cr = _v
+                                    break
+                    temps.append({"name": nm, "raw": str(ename), "value": int(float(fv) + 0.5), "max": mx, "crit": cr})
+                    break
+                elif fn.startswith("in"):
+                    v = fv / 1000 if fv > 100 else fv
+                    nm = str(ename)
+                    if "3.3V" in nm:
+                        nm = "+3.3V"
+                    elif "VSB" in nm:
+                        nm = "3VSB 待机"
+                    elif "bat" in nm.lower():
+                        nm = "CMOS 电池"
+                    voltages.append({"name": nm, "value": round(v, 2)})
+                    break
+    return temps, voltages
+
+_TEMP_SNAP = {"t": 0.0, "cpu_temp": None, "mb_temp": None, "temps": [], "voltages": [], "disks": {}, "raid_temp": None}
+_TEMP_SNAP_LOCK = _threading.Lock()
+
+# CPU 温度 EMA 平滑状态：核心温度热容量小，瞬时负载下 1~2 秒可跳 10°C+（如 39→47），
+# 显示与风扇控速都不宜追着尖峰跑。用指数加权平均（前值 50% + 新值 50%，采集周期 2s）
+# 让温度渐进变化；风扇温控同源，转速也更稳。进程内状态，重启后首个读数直接采纳。
+_CPU_TEMP_EMA = {"v": None}
+
+def _smooth_cpu_temp(raw):
+    if raw is None:
+        return _CPU_TEMP_EMA["v"]   # 读不到时沿用上次（避免闪 None/空）
+    e = _CPU_TEMP_EMA["v"]
+    if e is None:
+        e = float(raw)
+    else:
+        e = e * 0.5 + float(raw) * 0.5
+    _CPU_TEMP_EMA["v"] = e
+    return int(e + 0.5)   # 显示取整（四舍五入）；EMA 内部保留 float 精度
+
+def _temp_snapshot_read():
+    with _TEMP_SNAP_LOCK:
+        return dict(_TEMP_SNAP)
+
+def _temp_collect_loop():
+    """统一温度采集循环（~2s）：一次 sensors -j 解析出 CPU/主板/全量测点，
+    硬盘走 4s 缓存、阵列卡走 12~60s 缓存，汇总成一份快照。
+    所有温度消费方读同一份快照，消除重复采样与口径不一致。"""
+    while True:
+        try:
+            sens_j = run_cmd([SENSORS, "-j"], 8)
+            j = json.loads(sens_j) if sens_j else {}
+            temps, voltages = _parse_sensors_all(j)
+            mb = _parse_mb_temp(j)
+            # CPU 封装温度：EMA 平滑（防核心瞬时尖峰秒跳）。快照 cpu_temp 与温度墙
+            # "CPU 封装温度"条目写同一个平滑值，两处保持一致；风扇温控同源转速更稳。
+            raw_cpu = _parse_cpu_temp(j)
+            cpu = _smooth_cpu_temp(raw_cpu)
+            if isinstance(cpu, (int, float)):
+                for _t in temps:
+                    if _t.get("name") == "CPU 封装温度":
+                        _t["value"] = int(cpu + 0.5)
+                        break
+            devs = _list_all_disk_devs()
+            states = get_disk_temps_cached(devs) if devs else {}
+            raid_temp = None
+            try:
+                _raid = get_raid_card()
+                if isinstance(_raid, dict):
+                    raid_temp = _raid.get("controller_temp")
+            except Exception:
+                pass
+            with _TEMP_SNAP_LOCK:
+                _TEMP_SNAP["t"] = time.time()
+                _TEMP_SNAP["cpu_temp"] = cpu
+                _TEMP_SNAP["mb_temp"] = int(mb + 0.5) if isinstance(mb, (int, float)) else None
+                _TEMP_SNAP["temps"] = temps
+                _TEMP_SNAP["voltages"] = voltages
+                _TEMP_SNAP["disks"] = states
+                _TEMP_SNAP["raid_temp"] = raid_temp
+        except Exception:
+            pass
+        time.sleep(2)
 
 def _fan_cpu_temp_cached():
-    now = time.time()
-    if now - _FAN_LAST_CPU_TEMP["t"] > 2:
-        _FAN_LAST_CPU_TEMP["v"] = _fan_read_cpu_temp()
-        _FAN_LAST_CPU_TEMP["t"] = now
-    return _FAN_LAST_CPU_TEMP["v"]
+    """CPU 封装温度（统一快照，~2s 刷新；已修正 coretemp temp1_input 虚高问题）。"""
+    return _temp_snapshot_read().get("cpu_temp")
 
 def _fan_auto_pwm(cpu_temp):
     # nasdash 自带保守温控曲线（系统风扇服务不在时接管）
@@ -1074,70 +1327,11 @@ def _save_fan_sys_temp(cfg):
     return _save_json_file(FAN_SYS_TEMP_FILE, cfg)
 
 def _fan_read_sys_temp(source):
-    """读取主板/CPU 温控的温度源单值（°C），自动适配不同主板传感器布局。
-    source='cpu' → CPU 封装温度：优先 coretemp 的 'Package id' / AMD k10temp/zenpower 的 'Tdie'/'Tctl'；
-                   找不到时回落取 coretemp 全部通道最高，再回落取所有传感器最高。
-    source='mb'  → 主板温度：排除 coretemp 等 CPU 芯片后取最高（it87/nct/等主板传感器），
-                   回落取所有传感器最高。
-    同时兼容 sensors -j 的嵌套格式(chip->{标签:{tempN_input:值}})与扁平格式(chip->{tempN_input:值})，
-    不依赖芯片具体型号，换主板/CPU 后仍能正确取温。读不到返回 None。"""
-    source = (source or "cpu").lower()
-    try:
-        out = run_cmd(["sensors", "-j"], 5)
-        j = json.loads(out)
-        # temps: (chip, label, value) —— label 为传感器名(Package id 0 / Tdie / temp1_input 等)
-        temps = []
-        for chip, entries in j.items():
-            if not isinstance(entries, dict):
-                continue
-            for _ename, fields in entries.items():
-                if isinstance(fields, dict):
-                    # 嵌套格式：chip -> { "Package id 0": {"temp1_input": 55.0}, ... }
-                    for k, v in fields.items():
-                        if k.startswith("temp") and k.endswith("_input"):
-                            try:
-                                temps.append((chip, _ename, float(v)))
-                            except (TypeError, ValueError):
-                                pass
-                elif isinstance(fields, (int, float)) and _ename.startswith("temp") and _ename.endswith("_input"):
-                    # 扁平格式：chip -> { "temp1_input": 40.0, ... }
-                    try:
-                        temps.append((chip, _ename, float(fields)))
-                    except (TypeError, ValueError):
-                        pass
-        if temps:
-            _prio = ("package", "tdie", "tctl")
-            def _is_prio(t):
-                return any(p in t[1].lower() for p in _prio)
-            if source == "mb":
-                # 主板温度 = Nuvoton/ITE 芯片上的 SYSTIN 测点（对应「主板温度」）。
-                # 优先精确取 SYSTIN；找不到时回落：排除 AUXTIN0~N 等常未接线、读虚高/乱值的扩展探头，
-                # 取其余非 CPU 芯片传感器的最高者（更贴近真实主板温度）。
-                systin = [t for t in temps if t[1].strip().upper() == "SYSTIN"]
-                if systin:
-                    return systin[0][2]
-                mb = [t for t in temps
-                      if "coretemp" not in t[0].lower()
-                      and not t[1].strip().upper().startswith("AUXTIN")]
-                if mb:
-                    return max(t[2] for t in mb)
-                # 再回落：非 CPU 芯片全部最高
-                mb2 = [t for t in temps if "coretemp" not in t[0].lower()]
-                if mb2:
-                    return max(t[2] for t in mb2)
-                return max(t[2] for t in temps)
-            else:
-                # CPU：优先 CPU 封装/Tdie/Tctl 标签，再回落 coretemp 全部通道，最后回落全部传感器
-                prio = [t for t in temps if _is_prio(t)]
-                if prio:
-                    return max(t[2] for t in prio)
-                cpu = [t for t in temps if "coretemp" in t[0].lower()]
-                if cpu:
-                    return max(t[2] for t in cpu)
-                return max(t[2] for t in temps)  # 回落
-    except Exception:
-        pass
-    return None
+    """温度源单值（统一快照读取，~2s 刷新；控速线程/状态接口不再各自跑 sensors -j）。
+    source='cpu' → CPU 封装温度（coretemp 核心 max / AMD Tdie，见 _parse_cpu_temp）；
+    source='mb'  → 主板温度（SYSTIN 优先，见 _parse_mb_temp）。读不到返回 None。"""
+    snap = _temp_snapshot_read()
+    return snap.get("mb_temp") if (source or "cpu").lower() == "mb" else snap.get("cpu_temp")
 
 def _fan_curve_pwm(T, cfg, default_min, default_max):
     """自定义温度→PWM 曲线（分段线性）。cfg["curve"]=[[temp,pwm],...]（已按温度升序）。
@@ -1293,6 +1487,37 @@ def get_disk_temps(devs):
             states[dev] = {"dev": dev, "temp": None, "asleep": None,
                            "no_sleep": False, "is_nvme": is_nvme}
     return states
+
+
+# 磁盘温度短缓存：/api/fan/temps 被前端每 5s 轮询、风扇控速线程每 0.6s tick、
+# /api/fan/status 每 1s 轮询都会读盘温，而 get_disk_temps 对每块盘跑 smartctl
+# （每块 8s 超时），多盘时单次可能耗时数秒~数十秒（盘休眠/慢盘时尤甚）。
+# 无缓存时这些高频调用会叠起海量慢扫描（实测曾每秒十几发 smartctl 打满磁盘 I/O），
+# 把后端与网关拖死（表现为整个面板所有接口全部卡住、风扇转速冻结、温度卡片空转）。
+# 因此统一走本缓存：TTL 4s 合并所有调用为同一次扫描；扫描进行中时调用方直接返回
+# 旧快照（宁可旧几秒，绝不阻塞）。前端另有「沿用上次已知温度」兜底，数值不会消失。
+_DISK_TEMP_CACHE = {"t": 0.0, "v": None, "devs": None}
+_DISK_TEMP_TTL = 4.0
+_DISK_TEMP_LOCK = _threading.Lock()
+
+def get_disk_temps_cached(devs):
+    now = time.time()
+    key = tuple(devs or ())
+    c = _DISK_TEMP_CACHE
+    if c["devs"] == key and now - c["t"] <= _DISK_TEMP_TTL:
+        return c["v"]
+    # 缓存过期：尝试获取扫描权（非阻塞）；拿不到说明另一线程正在扫，直接返回旧值。
+    if _DISK_TEMP_LOCK.acquire(blocking=False):
+        try:
+            # 双重检查：等待期间可能已被其他线程刷新
+            if c["devs"] != key or now - c["t"] > _DISK_TEMP_TTL:
+                c["v"] = get_disk_temps(devs or [])
+                c["devs"] = key
+                c["t"] = time.time()
+        finally:
+            _DISK_TEMP_LOCK.release()
+        return c["v"]
+    return c["v"]
 
 
 _DISK_IO_CACHE = {}   # dev -> {"sectors": int, "t": float}；按 /proc/diskstats 扇区计数判断磁盘是否真的在读写
@@ -1751,7 +1976,7 @@ def _disk_source_state(dt_cfg):
     devs = dt_cfg.get("disks") or []
     if not devs:
         return (False, None, False)
-    states = get_disk_temps(devs)
+    states = get_disk_temps_cached(devs)
     valid = [s for s in states.values() if isinstance(s, dict)]
     if not valid:
         return (False, None, True)
@@ -2535,8 +2760,35 @@ def _abort_badblocks(dev):
     _set_disk_test_done(dev, "扫描已中止", error="用户中止")
 
 
-@_ttl_cache(300)
-def get_disks():
+_DISKS_CACHE = {"t": 0.0, "v": None}
+_DISKS_TTL = 60
+_DISKS_LOCK = _threading.Lock()
+
+def get_disks(force=False):
+    """硬盘 SMART 统一采集（60s TTL 缓存 + force 支持）。
+    get_disks 全量 smartctl 扫盘很重（每盘最多 20s 超时），此前 /api/all、/api/raid、/api/disks、
+    /api/metrics 等各自调用都会重复扫盘。统一为一份快照共享；force=True 强制重扫
+    （用户手动「立即刷新」/硬盘自检完成后，需看最新 SMART 数据时）。"""
+    now = time.time()
+    c = _DISKS_CACHE
+    if not force and c["v"] is not None and now - c["t"] <= _DISKS_TTL:
+        return c["v"]
+    if force:
+        with _DISKS_LOCK:
+            c["v"] = _collect_disks_full()
+            c["t"] = time.time()
+        return c["v"]
+    if _DISKS_LOCK.acquire(blocking=False):
+        try:
+            if c["v"] is None or now - c["t"] > _DISKS_TTL:
+                c["v"] = _collect_disks_full()
+                c["t"] = time.time()
+        finally:
+            _DISKS_LOCK.release()
+        return c["v"]
+    return c["v"] or []
+
+def _collect_disks_full():
     """采集所有块设备 + SMART（SD/SAS 用 ls /dev/sd*，NVMe 用 ls /dev/nvme*；再用正则过滤掉分区/控制器，
     支持多位盘名 sdaa/sdab 与多控制器 nvme10n1 等；smartctl 拿详情，不依赖 lsblk 字段对齐）"""
     disks = []
@@ -3294,7 +3546,35 @@ def get_network_nics():
     nics = merged_nics
     return nics
 
-def get_system():
+_SYSTEM_CACHE = {"t": 0.0, "v": None}
+_SYSTEM_TTL = 30
+_SYSTEM_LOCK = _threading.Lock()
+
+def get_system(force=False):
+    """系统总览统一采集（30s TTL 缓存 + force 支持）。
+    get_system 每次跑完整采集（sensors/风扇枚举/网卡/GPU/CPU/lscpu 等），
+    /api/system 与 /api/all 此前各跑一遍。统一为一份快照共享；
+    force=True 强制重采（检测页手动「立即刷新」）。"""
+    now = time.time()
+    c = _SYSTEM_CACHE
+    if not force and c["v"] is not None and now - c["t"] <= _SYSTEM_TTL:
+        return c["v"]
+    if force:
+        with _SYSTEM_LOCK:
+            c["v"] = _collect_system_full()
+            c["t"] = time.time()
+        return c["v"]
+    if _SYSTEM_LOCK.acquire(blocking=False):
+        try:
+            if c["v"] is None or now - c["t"] > _SYSTEM_TTL:
+                c["v"] = _collect_system_full()
+                c["t"] = time.time()
+        finally:
+            _SYSTEM_LOCK.release()
+        return c["v"]
+    return c["v"] or {}
+
+def _collect_system_full():
     d = {}
     d["hostname"] = socket.gethostname()
     d["kernel"] = platform.release()
@@ -3394,16 +3674,26 @@ def get_system():
             mi[m.group(1)] = int(m.group(2))
     mt = mi.get("MemTotal", 0); ma = mi.get("MemAvailable", 0)
     used = mt - ma
+    cached = mi.get("Cached", 0) + mi.get("Buffers", 0)
     d["memory"] = {
         "total": fmt_kb(mt), "used": fmt_kb(used), "available": fmt_kb(ma),
         "percent": round(used / mt * 100, 1) if mt else 0,
+        # 缓存（文件页+缓冲）：可被内核自动回收，不占"真占用"；用于界面拆分展示
+        "cached": fmt_kb(cached),
+        "cached_kb": cached,
     }
     st = mi.get("SwapTotal", 0); sf = mi.get("SwapFree", 0)
     d["swap"] = {"total": fmt_kb(st), "used": fmt_kb(st - sf)}
-    # 传感器分类解析（温度/风扇/电压）
-    sens_j = run_cmd([SENSORS, "-j"], 8)
+    # 传感器分类解析（温度/风扇/电压）：温度/电压/CPU 温度统一走采集循环快照（~2s 准实时），
+    # 快照未就绪（进程刚启动首拍）时回退一次实时 sensors -j，保证首屏不空。
     d["sensors"] = {"temps": [], "fans": [], "voltages": []}
     cpu_temp = None
+    sens_j = None
+    _snap = _temp_snapshot_read()
+    if _snap.get("temps"):
+        d["sensors"]["temps"] = _snap["temps"]
+        d["sensors"]["voltages"] = _snap["voltages"]
+        cpu_temp = _snap.get("cpu_temp")
     # 风扇控制信息：优先系统风扇服务配置，其次 sysfs（不依赖任何外部应用）
     fan_info = {}
     # 1) 系统风扇服务配置（可选）—— 提供风扇名称/模式，并借 pwm_path 推断可写路径
@@ -3460,68 +3750,11 @@ def get_system():
     if sens_j:
         try:
             j = json.loads(sens_j)
-            for chip, entries in j.items():
-                cs = chip.split("-")[0]
-                for ename, fields in entries.items():
-                    if ename == "Adapter":
-                        continue
-                    for fn, fv in fields.items():
-                        if not fn.endswith("_input") or not isinstance(fv, (int, float)):
-                            continue
-                        prefix = fn.replace("_input", "")
-                        if fn.startswith("temp"):
-                            # 跳过未接线的扩展虚拟探头（AUXTIN0~N 在多数主板上无真实温度源，常报 70~100+°C 虚高）
-                            if ename.strip().upper().startswith("AUXTIN"):
-                                continue
-                            if fv < -50 or fv > 150:
-                                continue
-                            mx = fields.get(f"{prefix}_max")
-                            cr = fields.get(f"{prefix}_crit")
-                            if cs != "coretemp":
-                                mx = None
-                                cr = None
-                            if mx is not None and (mx < 0 or mx > 150): mx = None
-                            if cr is not None and (cr < 0 or cr > 150): cr = None
-                            if cs == "coretemp":
-                                nm = _temp_name_zh(ename, cs)
-                                if "Package" in ename:
-                                    cpu_temp = round(fv, 1)
-                            elif cs == "acpitz":
-                                nm = "主板(ACPI)"
-                            elif cs.startswith("pch"):
-                                nm = "PCH 芯片组"
-                            elif cs.startswith("it"):
-                                nm = "主板(CPU附近)" if "temp1" in ename else "主板(系统)" if "temp2" in ename else "主板"
-                            else:
-                                nm = _temp_name_zh(ename, cs)
-                            d["sensors"]["temps"].append({"name": nm, "raw": ename, "value": round(fv, 1), "max": mx, "crit": cr})
-                            break
-                        elif fn.startswith("fan"):
-                            # 风扇卡片不再从 sensors -j 逐条生成：华硕双芯片主板（nct6798 / asus-ec）
-                            # 会把同一物理风扇报两遍，造成「两个 FAN1」幽灵卡。统一改由下方
-                            # 「风扇卡片」段用 _enumerate_fans() 生成（只含 pwm 通道 + 芯片前缀命名）。
-                            continue
-                        elif fn.startswith("in"):
-                            v = fv / 1000 if fv > 100 else fv
-                            nm = ename
-                            if "3.3V" in ename:
-                                nm = "+3.3V"
-                            elif "VSB" in ename:
-                                nm = "3VSB 待机"
-                            elif "bat" in ename.lower():
-                                nm = "CMOS 电池"
-                            d["sensors"]["voltages"].append({"name": nm, "value": round(v, 2)})
-                            break
-            # 同名风扇去重：飞牛系统风扇服务(FanControlServer)可能给不同通道命名重复
-            # (如两个通道都叫 CHA_FAN1)，导致界面出现两张同名卡片分不清。
-            # 名字撞车时追加通道号后缀(#fan{idx})，让用户一眼区分。
-            if len(d["sensors"]["fans"]) > 1:
-                _name_counts = {}
-                for _f in d["sensors"]["fans"]:
-                    _name_counts[_f["name"]] = _name_counts.get(_f["name"], 0) + 1
-                for _f in d["sensors"]["fans"]:
-                    if _name_counts[_f["name"]] > 1:
-                        _f["name"] = f"{_f['name']} #fan{_f['idx']}"
+            _t, _v = _parse_sensors_all(j)
+            d["sensors"]["temps"] = _t
+            d["sensors"]["voltages"] = _v
+            if cpu_temp is None:
+                cpu_temp = _parse_cpu_temp(j)
         except (json.JSONDecodeError, ValueError):
             pass
     # 风扇卡片：唯一来源 = 本机可控制风扇全集（_enumerate_fans，与温控循环 / 风扇专页同一份）。
@@ -4321,6 +4554,24 @@ def _split_netio(s):
     tx = _docker_size_to_bytes(parts[1]) if len(parts) >= 2 else None
     return (rx, tx)
 
+# `docker stats --no-stream` 给出的是「容器启动以来累计收/发字节」，并非实时速率。
+# 若直接把累计字节当速率显示，会冒出「14 GB/s」这种假数字（远超 1Gbps 网卡上限）。
+# 这里用两次采集的差值 / 时间差算出真实速率(B/s)；首采样或容器重启(累计值回落)时返回 (None, None)。
+_DOCKER_NET_PREV = {}
+
+def _docker_net_rate(name, rx, tx):
+    """返回 (rx_rate_Bps, tx_rate_Bps)；首采样或容器重启(累计值回落)时返回 (None, None)。"""
+    now = time.time()
+    prev = _DOCKER_NET_PREV.get(name)
+    rate = (None, None)
+    if prev and prev["rx"] is not None and prev["tx"] is not None \
+            and rx is not None and tx is not None:
+        dt = now - prev["ts"]
+        if 0 < dt < 600 and rx >= prev["rx"] and tx >= prev["tx"]:
+            rate = ((rx - prev["rx"]) / dt, (tx - prev["tx"]) / dt)
+    _DOCKER_NET_PREV[name] = {"rx": rx, "tx": tx, "ts": now}
+    return rate
+
 @_ttl_cache(60)
 def get_docker():
     """统计 Docker 容器数（运行中/总数），并自动探测每个容器真实监听端口与资源占用"""
@@ -4389,6 +4640,7 @@ def get_docker():
                 cname, cpu_s, memp_s, mem_s, net_s = parts[0], parts[1], parts[2], parts[3], parts[4]
                 cname = cname.strip()
                 rx, tx = _split_netio(net_s)
+                rrx, rtx = _docker_net_rate(cname, rx, tx)
                 for c in containers:
                     if c["name"] == cname:
                         c["cpu"] = _parse_docker_pct(cpu_s)
@@ -4397,6 +4649,8 @@ def get_docker():
                         c["mem_bytes"] = _docker_size_to_bytes(mem_s.split("/")[0].strip()) if "/" in mem_s else _docker_size_to_bytes(mem_s.strip())
                         c["net_rx"] = rx
                         c["net_tx"] = tx
+                        c["net_rx_rate"] = rrx
+                        c["net_tx_rate"] = rtx
                         break
         except Exception:
             pass
@@ -4840,6 +5094,10 @@ def metrics_collect_loop():
 _metrics_thread = _threading.Thread(target=metrics_collect_loop, daemon=True, name="metrics")
 _metrics_thread.start()
 
+# 统一温度采集循环（~2s）：一次 sensors -j → _TEMP_SNAP 快照，所有温度消费方共享。
+_temp_thread = _threading.Thread(target=_temp_collect_loop, daemon=True, name="temp-snap")
+_temp_thread.start()
+
 # 启动即后台预热重型采集缓存（storcli/smartctl/docker 等同步命令耗时长）。
 # 首个用户请求直接命中缓存，首屏 /api/all 从 4~5s 降至 <0.05s，不再阻塞转圈。
 def _warmup_caches():
@@ -4897,6 +5155,7 @@ def _enrich_disk_channels(disks, raid):
 @app.route("/api/all")
 def api_all():
     t0 = time.time()
+    force = request.args.get("force") == "1"
     from concurrent.futures import ThreadPoolExecutor
     try:
         def _safe(fn, default):
@@ -4905,12 +5164,13 @@ def api_all():
             except Exception:
                 return default
         # 各板块采集相互独立，并行跑，首屏不再被串行累加拖慢
+        # （get_system/get_disks 有统一 TTL 缓存，force=1 时手动刷新强制重采）
         with ThreadPoolExecutor(max_workers=8) as ex:
-            f_sys = ex.submit(get_system)
+            f_sys = ex.submit(get_system, force)
             f_board = ex.submit(get_board)
             f_mem = ex.submit(get_memory_modules)
             f_raid = ex.submit(get_raid_card)
-            f_disks = ex.submit(get_disks)
+            f_disks = ex.submit(get_disks, force)
             f_storage = ex.submit(get_storage)
             f_docker = ex.submit(get_docker)
             try:
@@ -4988,7 +5248,7 @@ def api_system():
             memory_modules = get_memory_modules()
         except Exception:
             memory_modules = {"modules": [], "total_gb": 0, "slots": 0, "brand_summary": ""}
-        system = {**get_system(), "board": board, "memory_modules": memory_modules}
+        system = {**get_system(request.args.get("force") == "1"), "board": board, "memory_modules": memory_modules}
         try:
             system["cpu_usage"] = get_cpu_usage()
         except Exception:
@@ -5024,7 +5284,7 @@ def api_disks():
     """
     t0 = time.time()
     try:
-        cached = get_disks()
+        cached = get_disks(request.args.get("force") == "1")
         disks = []
         for d in cached:
             d2 = dict(d)
@@ -5169,6 +5429,34 @@ def api_network():
         return jsonify({"nics": [], "error": str(e)}), 500
 
 
+# 磁盘静态元数据缓存：/api/metrics 被前端每 1s 轮询，而 get_disks() 对每块盘跑 smartctl
+# （每块 20s 超时）只为取 model/size/brand/type 这类几乎不变的静态信息。
+# 无缓存时每秒全量扫盘（与 /api/fan/temps 同源风暴），把磁盘 I/O 打满并拖慢接口（实测 ~2s）。
+# 元数据 5 分钟不变，TTL 300s；health/temp 等动态字段由磁盘页各自实时读取，不受影响。
+# 加锁防并发双扫：过期时非阻塞抢锁，抢不到就返回旧值，绝不排队等待。
+_DISKS_META_CACHE = {"t": 0.0, "v": None}
+_DISKS_META_TTL = 300
+_DISKS_META_LOCK = _threading.Lock()
+
+def _disks_meta_map():
+    now = time.time()
+    c = _DISKS_META_CACHE
+    if now - c["t"] <= _DISKS_META_TTL and c["v"] is not None:
+        return c["v"]
+    if _DISKS_META_LOCK.acquire(blocking=False):
+        try:
+            if now - c["t"] > _DISKS_META_TTL:
+                m = {}
+                for d in get_disks():
+                    m[d.get("dev")] = d
+                c["v"] = m
+                c["t"] = time.time()
+        except Exception:
+            pass
+        finally:
+            _DISKS_META_LOCK.release()
+    return c["v"] or {}
+
 @app.route("/api/metrics")
 def api_metrics():
     """轻量实时指标：网络吞吐 + 磁盘 I/O + CPU/内存/负载。供前端高频(1s)轮询，不触发重型 /api/all(阵列卡/SMART等)。
@@ -5191,7 +5479,7 @@ def api_metrics():
                                 "tx_rate": e.get("tx_rate", 0.0)}
         diskio = rt["disk"]
         try:
-            disk_map = {d["dev"]: d for d in get_disks()}
+            disk_map = _disks_meta_map()
         except Exception:
             disk_map = {}
         for d in diskio:
@@ -5630,11 +5918,13 @@ def api_fan_control_set():
 
 @app.route("/api/fan/temps")
 def api_fan_temps():
-    """轻量温度快照：CPU/主板/各硬盘当前温度，供前端「当前温度」卡片高频展示（独立于 2s 风扇状态轮询）。"""
-    cpu_T = _fan_read_sys_temp("cpu")
-    mb_T = _fan_read_sys_temp("mb")
-    devs = _list_all_disk_devs()
-    states = get_disk_temps(devs) if devs else {}
+    """温度统一快照：CPU/主板/各硬盘/全量测点/阵列卡，供前端「当前温度」卡与温度墙高频展示。
+    全部数据来自后台采集循环的 _TEMP_SNAP（~2s 刷新），不再各自采样。"""
+    _snap = _temp_snapshot_read()
+    cpu_T = _snap.get("cpu_temp")
+    mb_T = _snap.get("mb_temp")
+    states = _snap.get("disks") or {}
+    devs = list(states.keys())
     disks = []
     for d in devs:
         st = states.get(d, {})
@@ -5664,6 +5954,9 @@ def api_fan_temps():
         "cpu_temp": round(cpu_T, 1) if isinstance(cpu_T, (int, float)) else None,
         "mb_temp": round(mb_T, 1) if isinstance(mb_T, (int, float)) else None,
         "disks": disks,
+        # 温度墙测点全量 + 阵列卡芯片温度：前端温度页 5s 实时刷新用（不再等 30s 快照）
+        "sensors": _snap.get("temps") or [],
+        "raid_temp": _snap.get("raid_temp"),
     })
 
 
@@ -5672,7 +5965,7 @@ def api_fan_disk_temp_get():
     """读取硬盘温度控风扇配置 + 实时监控盘温度/休眠 + 计算所得目标PWM"""
     cfg = _load_fan_disk_temp()
     devs = cfg.get("disks", [])
-    states = get_disk_temps(devs) if devs else {}
+    states = get_disk_temps_cached(devs) if devs else {}
     disks_out = [{
         "dev": dev,
         "temp": states.get(dev, {}).get("temp"),
@@ -5911,11 +6204,6 @@ def api_fan_rules_set():
     return jsonify({"ok": False, "error": "写配置失败"}), 500
 
 
-@app.route("/api/fan/fcs")
-def api_fan_fcs_get():
-    """FanControlServer 状态：是否安装 / 开机自启 / 运行中 / 被用户永久禁用。
-    使用短时缓存，避免每次打开面板都等待 systemctl。"""
-    return jsonify(_fcs_status_cached())
 
 
 @app.route("/api/fan/fcs", methods=["POST"])
