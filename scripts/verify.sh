@@ -41,6 +41,19 @@ for line in s.split('\n'):
 assert '\n' not in kv.get('desc', ''), "desc 含换行！应用中心会报 10111"
 print("OK: manifest desc 单行通过")
 
+# desc 必须含 APP_CHANGELOG 哨兵（release.py 维护应用中心「最近更新」区块的锚点）
+_desc = kv.get('desc', '')
+assert '<!--APP_CHANGELOG_START-->' in _desc and '<!--APP_CHANGELOG_END-->' in _desc, \
+    "desc 缺少 APP_CHANGELOG 哨兵（release.py 无法维护更新日志）"
+print("OK: desc 含 APP_CHANGELOG 哨兵")
+
+# changelog 字段存在且 ≤3 条（应用中心规范：更新日志保持 3 条）
+_chg = kv.get('changelog', '')
+assert _chg.strip(), "changelog 字段缺失"
+_chg_vers = re.findall(r'(?:^|\s)(\d+\.\d+\.\d+):(?!\d)', _chg)
+assert len(_chg_vers) <= 3, f"changelog 超过 3 条（当前 {len(_chg_vers)} 条）——应用中心规范保持 3 条，发布前由 release.py 裁剪"
+print(f"OK: changelog 存在且 {len(_chg_vers)} 条 ≤3")
+
 man_ver = re.search(r'^version\s*=\s*(\S+)', s, re.M).group(1)
 fpk = subprocess.check_output(['tar', '-xzOf', 'nasdash.fpk', 'manifest']).decode()
 fpk_ver = re.search(r'^version\s*=\s*(\S+)', fpk, re.M).group(1)
