@@ -9,6 +9,7 @@
 <title>飞牛 NAS 硬件监控</title>
 <style>
   :root{
+    color-scheme:light;
     /* ===== fnOS Semi Design 真实设计变量（飞牛真值，仿 Semi Design 色阶） ===== */
     --semi-grey-0:250,250,250; --semi-grey-1:243,243,243; --semi-grey-2:194,195,196; --semi-grey-3:159,160,161; --semi-grey-4:124,125,127; --semi-grey-5:90,91,92; --semi-grey-6:75,75,75; --semi-grey-7:48,48,48; --semi-grey-8:30,30,33; --semi-grey-9:11,11,12;
     --semi-brand-0:230,244,255; --semi-brand-1:215,237,255; --semi-brand-2:171,219,255; --semi-brand-3:117,191,255; --semi-brand-4:51,133,255; --semi-brand-5:0,102,255; --semi-brand-6:0,94,235; --semi-brand-7:0,67,184; --semi-brand-8:0,45,112; --semi-brand-9:0,31,77;
@@ -49,6 +50,7 @@
     --text:var(--text-1); --muted:var(--text-3);
   }
   [data-theme="dark"]{
+    color-scheme:dark;
     /* 暗色：翻转色阶（同 Semi Design 机制） */
     --c-bg:#1A1E23;
     --c-bg-1:#23262B;
@@ -639,6 +641,10 @@
   .curve-canvas{width:100%;height:150px;background:var(--bg);border:1px solid var(--border);border-radius:8px;margin-top:8px;display:block}
   /* 2.0 暗色兜底：子面板背景跟随 fill，避免黑底黑块；文字色统一走 Token */
   [data-theme="dark"] .mem-slot,[data-theme="dark"] .temp-chip,[data-theme="dark"] .fan-card,[data-theme="dark"] .fan-presets,[data-theme="dark"] .dt-field,[data-theme="dark"] .dt-opt,[data-theme="dark"] .chan,[data-theme="dark"] .dt-live,[data-theme="dark"] .fan-rule-tip,[data-theme="dark"] .fan-hw-note,[data-theme="dark"] .fan-dc-note,[data-theme="dark"] .dt-hint,[data-theme="dark"] .temp-overview,[data-theme="dark"] .sleep-panel,[data-theme="dark"] .auto-card,[data-theme="dark"] .curve-pt-input,[data-theme="dark"] .fan-label-input,[data-theme="dark"] .fan-volt-select,[data-theme="dark"] .fan-rule-src,[data-theme="dark"] .fan-rule-fields input,[data-theme="dark"] .dt-field input,[data-theme="dark"] .auto-field input,[data-theme="dark"] .curve-canvas{background:var(--fill);border-color:var(--border)}
+  /* 表单控件文字色显式补 Token：select/input 的 color 在部分浏览器/内核（Safari/webview）不继承页面样式，
+     深底 + 系统默认黑字 = 深色模式下文字空白（温度源下拉框 2.0 以来的论坛反馈 bug）；color-scheme 已同步声明 */
+  [data-theme="dark"] .fan-rule-src,[data-theme="dark"] .fan-volt-select,[data-theme="dark"] .fan-rule-fields input,[data-theme="dark"] .dt-field input,[data-theme="dark"] .auto-field input,[data-theme="dark"] .curve-pt-input,[data-theme="dark"] .fan-label-input{color:var(--text)}
+  [data-theme="dark"] .fan-rule-src option,[data-theme="dark"] .fan-volt-select option{background:var(--card);color:var(--text)}
   [data-theme="dark"] .kv{border-color:var(--divider)}
   [data-theme="dark"] .disk-group-title{color:var(--text-3)}
   [data-theme="dark"] .disk-card.bad{background:rgba(247,105,101,.08)}
