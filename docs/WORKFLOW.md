@@ -78,7 +78,8 @@ grep '^version' manifest   # 确认 version = 2.0.1
 | 温度监控 | 统一温度快照（见下节） | `/api/fan/temps` |
 | 存储卷 | `mdadm` + `df` | `/api/storage` |
 | Docker | `docker ps/stats/inspect`（60s 缓存） | `/api/docker` |
-| 控制与自动化 | 自动刷新、告警、硬盘自检（SMART 长自检 / badblocks） | `/api/disks/selftest` 等 |
+| 控制与自动化 | 自动刷新、告警、硬盘自检（SMART 长自检 / badblocks / 只读表面扫描） | `/api/disks/selftest` 等 |
+| 硬盘自检历史 | `_set_disk_test_done` 追加 JSON（`disk_test_history.json`，最近 50 条），前端「自检记录」弹窗回查 | `/api/disks/selftest/history` |
 | 实时数据 | metrics daemon（CPU 使用率/功耗/网速/磁盘 IO） | `/api/metrics` |
 
 ## 数据采集架构（核心设计：一次采样、处处共享）
@@ -160,6 +161,7 @@ grep '^version' manifest   # 确认 version = 2.0.1
 | P6 | 风扇"停不下来/忽快忽慢"误报 | 0% 已下发但惯性减速中；或 pwm_enable=2（交还主板）读到的 0 非自己下发 | 入场 8s 才提示（等惯性）；`pwm_enable==1` 才算自己控速；退场 1.5s 延迟隐藏防抖 |
 | P7 | 温度三页各跳各的 | 各页各自取值 | 前端 `cpuTempUnified()`：优先实时温度快照，回退首屏快照，三页强制同源 |
 | P8 | 深色模式下 select/input 文字空白（温度源下拉框 2.0 以来论坛反馈） | 深色规则只给控件设深色背景（`background:var(--fill)`）没设文字色；select/input 的 `color` 在部分浏览器/内核（Safari/webview）不继承页面样式 → 深底+系统默认黑字=空白；新版 Chrome 继承正常所以本地试不出来 | ① `:root{color-scheme:light}` + `[data-theme="dark"]{color-scheme:dark}`（让浏览器按主题渲染表单控件 UA 配色）② 深色模式下给被染深背景的表单控件**显式补** `color:var(--text)`（.fan-rule-src/.fan-volt-select/各 input）③ 深色 option 补 `background:var(--card);color:var(--text)` |
+| P9 | 自检预计剩余显示带 17 位小数（"1分37.96761133603286秒"） | `fmtSec(s)` 直接拿 float 型 `_remain`（前端 `elapsedNow*100/job.progress - elapsedNow`）用 `s%60` 拼接秒，浮点小数未取整 | `fmtSec` 开头加 `var n=Math.round(s)`，后续全部用整数 `n`（`Math.floor(n/60)` / `n%60`） |
 
 ### 发版 / 打包类（历史已踩，勿再踩）
 

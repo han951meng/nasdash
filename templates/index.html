@@ -121,7 +121,16 @@
   .modal-body{font-size:14px;color:var(--text-1);line-height:1.7;white-space:pre-line}
   .modal-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:6px;flex-wrap:wrap}
   .modal-overlay .btn{min-width:72px}
-  .modal-box.modal-wide{max-width:min(820px, calc(100vw - 32px));width:100%}
+  .modal-box.modal-wide{max-width:min(1000px, calc(100vw - 32px));width:100%}
+.modal-overlay.modal-wide .modal-box{max-width:min(1000px, calc(100vw - 32px));width:100%}
+/* 自检历史表格：grid 固定列宽，中文 nowrap + 溢出省略；只有说明列允许换行 */
+.hist-head,.hist-row{display:grid;grid-template-columns:48px 120px 60px 80px 90px 1fr 140px;column-gap:12px;align-items:center;font-size:13px;padding:8px 4px}
+.hist-head{font-size:12px;color:var(--text-3);font-weight:600;border-bottom:1px solid var(--border,#e5e7eb)}
+.hist-row{border-bottom:1px solid var(--border,#e5e7eb);color:var(--text-1)}
+.hist-row .c1{font-weight:700}
+.hist-row .c2,.hist-row .c3,.hist-row .c4,.hist-row .c5,.hist-row .c7{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hist-row .c6{color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12px}
+.hist-foot{padding:10px 4px 0;font-size:12px;color:var(--text-3)}
   .logstat{margin-bottom:10px;font-size:13px;color:var(--text-1)}
   .logstat b{font-size:13px;margin:0 2px}
   .logstat b.danger{color:#e0394a}
@@ -1238,7 +1247,8 @@ function renderDisks(disks){
 var DISK_TEST_JOBS = {};
 var diskTestTimer = null;      // 本地 1 秒 elapsed 计时器
 var diskTestPollTimer = null;  // 后端 3 秒状态轮询计时器
-function fmtSec(s){ if(s==null) return '-'; if(s<60) return s+'秒'; var m=Math.floor(s/60), h=Math.floor(m/60); m=m%60; if(h) return h+'小时'+m+'分'; return m+'分'+(s%60)+'秒'; }
+function fmtSec(s){ if(s==null) return '-'; var n=Math.round(s); if(n<60) return n+'秒'; var m=Math.floor(n/60), h=Math.floor(m/60); m=m%60; if(h) return h+'小时'+m+'分'; return m+'分'+(n%60)+'秒'; }
+function fmtBytes(b){ if(!b) return '0'; var u=['B','KB','MB','GB','TB','PB'],i=0; while(b>=1024&&i<u.length-1){ b/=1024; i++; } return (b>=100?Math.round(b):Math.round(b*10)/10)+u[i]; }
 function renderDiskTest(d){
   var job = (DISK_TEST_JOBS || {})[d.dev];
   if(job && job.state === 'running'){
@@ -1304,9 +1314,97 @@ function renderDiskTest(d){
     +'<div class="disk-test-title">'+iconSvg('pulse')+'硬盘自检</div>'
     +'<div class="disk-test-btns">'
       +'<button class="btn-mini" onclick="diskTestEntry(\''+esc(d.dev)+'\',\''+(d.standalone?'1':'0')+'\',\''+modelArg+'\')">硬盘自检</button>'
+      +'<button class="btn-mini" onclick="showDiskTestHistory(\''+esc(d.dev)+'\')">自检记录</button>'
     +'</div>'
     +'<div class="disk-test-msg" id="dt-state-'+esc(d.dev)+'"></div>'
   +'</div>';
+}
+// 硬盘自检历史记录：点击「自检记录」按钮弹出历史列表（复用 app-modal）
+function showDiskTestHistory(dev){
+  var modal=document.getElementById('app-modal');
+  var titleEl=document.getElementById('app-modal-title');
+  var bodyEl=document.getElementById('app-modal-body');
+  var actionsEl=document.getElementById('app-modal-actions');
+  if(!modal||!titleEl||!bodyEl||!actionsEl){ alert('弹窗组件未就绪'); return; }
+  function cleanup(){
+    modal.classList.remove('show'); modal.classList.remove('modal-wide');
+    modal.setAttribute('aria-hidden','true');
+    document.removeEventListener('keydown', onKey);
+    modal.onclick=null;
+  }
+  function onKey(e){ if(e.key==='Escape') cleanup(); }
+  titleEl.textContent='硬盘自检记录'+(dev?' · /dev/'+dev:'');
+  bodyEl.innerHTML='<div class="log-empty">加载中…</div>';
+  actionsEl.innerHTML='';
+  modal.classList.add('modal-wide');
+  modal.classList.add('show');
+  modal.setAttribute('aria-hidden','false');
+  document.addEventListener('keydown', onKey);
+  modal.onclick=function(e){ if(e.target===modal) cleanup(); };
+  var closeBtn=document.createElement('button');
+  closeBtn.className='btn'; closeBtn.textContent='关闭';
+  closeBtn.onclick=cleanup;
+  actionsEl.appendChild(closeBtn);
+  var url='/api/disks/selftest/history'+(dev?'?dev='+encodeURIComponent(dev):'');
+  fetch(url).then(function(r){ return r.json(); }).then(function(j){
+    var hist=(j&&j.history)||[];
+    if(!hist.length){ bodyEl.innerHTML='<div class="log-empty">暂无自检记录</div>'; return; }
+    var rows=hist.map(function(h){
+      var st=h.state==='done'?'<span style="color:var(--success)">完成</span>'
+        :(h.state==='error'?'<span style="color:var(--danger)">失败</span>'
+        :'<span style="color:var(--warn)">中止</span>');
+      var t=h.type==='surface'?'只读表面扫描':(h.type==='badblocks'?'坏块慢扫':'SMART 长自检');
+      var bb=h.bad_blocks>0?'<span style="color:var(--danger)">坏块 '+h.bad_blocks+'</span>':'坏块 0';
+      // 说明：单行紧凑（容量+速率 / 坏块位置 / SMART 前后对比 / 错误细分）；全部内容放 title 悬停看
+      var segs=[];   // 显示行（单行拼接，空格分隔）
+      var tips=[];   // title 全文（每段一行）
+      if(h.total_bytes){
+        var speed=Math.round(h.total_bytes / Math.max(1, h.elapsed||0) / 1048576);
+        var cap='扫描 '+fmtBytes(h.total_bytes)+(speed?' · 平均 '+speed+'MB/s':'');
+        segs.push(cap); tips.push(cap);
+      }
+      if(h.bad_lbas && h.bad_lbas.length){
+        var bbTxt='坏块 '+h.bad_blocks+' · LBA '+h.bad_lbas.join(', ')+(h.bad_blocks>20?' …':'');
+        segs.push('<span style="color:var(--danger)">'+bbTxt+'</span>');
+        tips.push(bbTxt);
+      }
+      function _deltaItem(b,a,name){
+        if(b==null && a==null) return null;
+        var bv=b==null?'-':b, av=a==null?'-':a;
+        var chg=(b!=null && a!=null && a!==b);
+        var val=name+' '+bv+(chg?'→'+av+' ('+(a>b?'+':'')+(a-b)+')':'='+av);
+        return {text:val, changed:chg};
+      }
+      var sb=h.smart_before||{}, sa=h.smart_after||{};
+      [_deltaItem(sb[5],sa[5],'重映射'),_deltaItem(sb[197],sa[197],'待处理'),_deltaItem(sb[198],sa[198],'不可校正')]
+        .forEach(function(x){ if(x){ segs.push(x.changed?'<span style="color:var(--danger)">'+x.text+'</span>':'<span style="color:var(--text-3)">'+x.text+'</span>'); tips.push(x.text); }});
+      if(h.result && h.result.read_errors!==undefined && (h.result.read_errors!=='0'||h.result.write_errors!=='0'||h.result.corrected!=='0')){
+        var rTxt='读错 '+h.result.read_errors+'/写错 '+h.result.write_errors+'/纠正 '+h.result.corrected;
+        segs.push(rTxt); tips.push(rTxt);
+      }
+      var descTxt=segs.length?segs.join(' · '):esc(h.message||'');
+      var descTitle=tips.length?tips.join('\n'):(h.message||'');
+      var ts=new Date((h.finished_at||0)*1000);
+      var timeStr=isNaN(ts.getTime())?'-':(ts.getFullYear()+'-'+String(ts.getMonth()+1).padStart(2,'0')+'-'+String(ts.getDate()).padStart(2,'0')+' '+String(ts.getHours()).padStart(2,'0')+':'+String(ts.getMinutes()).padStart(2,'0'));
+      return '<div class="hist-row">'
+        +'<b class="c1">'+esc(h.dev||'')+'</b>'
+        +'<span class="c2">'+t+'</span>'
+        +'<span class="c3">'+st+'</span>'
+        +'<span class="c4">'+bb+'</span>'
+        +'<span class="c5">'+fmtSec(h.elapsed||0)+'</span>'
+        +'<span class="c6" title="'+esc(descTitle)+'">'+descTxt+'</span>'
+        +'<span class="c7">'+timeStr+'</span>'
+        +'</div>';
+    }).join('');
+    bodyEl.innerHTML='<div class="hist-head">'
+      +'<b class="c1">盘</b><span class="c2">类型</span><span class="c3">结果</span>'
+      +'<span class="c4">坏块</span><span class="c5">用时</span>'
+      +'<span class="c6">说明</span><span class="c7">时间</span>'
+      +'</div>'+rows
+      +'<div class="hist-foot">仅保留最近 50 条 · 应用重启后仍可回查</div>';
+  }).catch(function(e){
+    bodyEl.innerHTML='<div class="log-empty">加载失败：'+esc(String(e))+'</div>';
+  });
 }
 // 硬盘自检入口：一个按钮，点开按盘的情况给可选方式（在用盘不给清空式扫描）
 function diskTestEntry(dev, standalone, model){

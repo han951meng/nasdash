@@ -2462,6 +2462,24 @@ def parse_nvme_smart(text):
 # B/C 档都会把坏块 LBA 实时/结束时写入 -o 文件，供前端画「哨兵式」扇区网格。
 DISK_TEST_LOCK = _threading.Lock()
 DISK_TEST_JOBS = {}
+# 自检历史持久化：每次自检完成/中止/失败追加一条，保留最近 50 条（供「自检记录」回查）
+DISK_TEST_HISTORY_FILE = os.path.join(_config_dir(), "disk_test_history.json")
+DISK_TEST_HISTORY_MAX = 50
+
+
+def _load_disk_test_history():
+    h = _load_json_file(DISK_TEST_HISTORY_FILE, [])
+    return h if isinstance(h, list) else []
+
+
+def _append_disk_test_history(record):
+    try:
+        hist = _load_disk_test_history()
+        hist.append(record)
+        hist = hist[-DISK_TEST_HISTORY_MAX:]
+        _save_json_file(DISK_TEST_HISTORY_FILE, hist)
+    except Exception:
+        pass
 
 
 def _is_standalone_disk(dev):
@@ -2501,6 +2519,33 @@ def _is_standalone_disk(dev):
     return True, ""
 
 
+# 硬盘自检前后的 SMART 关键属性快照：用于历史记录里"重映射/待处理/不可校正"前后对比
+_SMART_HISTORY_IDS = (5, 197, 198)
+def _smart_short_attrs(dev):
+    """读 dev 的 SMART ID 5/197/198 RAW_VALUE，返回 {5:int, 197:int, 198:int}；失败/无值返回 {}。"""
+    if not _safe_token(dev):
+        return {}
+    try:
+        out = sudo_cmd([SMARTCTL, "-n", "standby", "-A", "/dev/%s" % dev], 8)
+    except Exception:
+        return {}
+    result = {}
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        try:
+            aid = int(parts[0])
+        except ValueError:
+            continue
+        if aid in _SMART_HISTORY_IDS:
+            try:
+                result[aid] = int(parts[-1])  # RAW_VALUE 是行末数字
+            except ValueError:
+                pass
+    return result
+
+
 def _set_disk_test_done(dev, message, error=None):
     with DISK_TEST_LOCK:
         job = DISK_TEST_JOBS.get(dev)
@@ -2510,6 +2555,25 @@ def _set_disk_test_done(dev, message, error=None):
         job["message"] = message
         job["error"] = error
         job["elapsed"] = int(time.time() - job["started_at"])
+    # 追加历史记录（写文件放锁外，避免长 IO 卡住自检轮询）
+    try:
+        _append_disk_test_history({
+            "dev": dev,
+            "type": job.get("type", "long"),
+            "state": job["state"],
+            "message": message,
+            "error": error,
+            "elapsed": job["elapsed"],
+            "bad_blocks": len(job.get("bad_blocks") or []),
+            "bad_lbas": (job.get("bad_blocks") or [])[:20],  # 坏块 LBA 位置（最多 20 个，前端可显示）
+            "total_bytes": job.get("total_bytes") or 0,      # 扫描容量（字节）
+            "smart_before": job.get("smart_before") or {},   # 扫描前 SMART 关键属性快照
+            "smart_after": _smart_short_attrs(dev),          # 扫描后 SMART 关键属性快照
+            "result": job.get("result"),
+            "finished_at": int(time.time()),
+        })
+    except Exception:
+        pass
 
 
 def _abort_smart_long(dev):
@@ -2659,6 +2723,7 @@ def _start_badblocks(dev, mode="destructive"):
             "pid": proc.pid,
             "blocksize": blocksize,
             "total_bytes": total_bytes,
+            "smart_before": _smart_short_attrs(dev),  # 扫描前 SMART 关键属性快照（重映射/待处理/不可校正）
             "bad_blocks": [],
             "outfile": outfile,
         }
@@ -5309,6 +5374,17 @@ def api_disks_selftest_get():
         for k, v in DISK_TEST_JOBS.items():
             jobs[k] = {kk: vv for kk, vv in v.items() if kk not in ("pid", "_proc", "outfile")}
     return jsonify({"ok": True, "jobs": jobs})
+
+
+@app.route("/api/disks/selftest/history", methods=["GET"])
+def api_disks_selftest_history():
+    """返回硬盘自检历史记录（新→旧，最多 50 条）。"""
+    hist = _load_disk_test_history()
+    hist = list(reversed(hist))
+    dev = (request.args.get("dev") or "").strip()
+    if dev:
+        hist = [r for r in hist if r.get("dev") == dev]
+    return jsonify({"ok": True, "history": hist})
 
 
 @app.route("/api/disks/selftest", methods=["POST"])
