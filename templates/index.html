@@ -1200,8 +1200,15 @@ function renderDisks(disks){
   ]}) + diskHealthWarning(disks) + diskInfoCard() + '<div class="cards">'+disks.map(d=>{
     let isSAS = d.type==='sas';
     let isNVMe = d.type==='nvme';
-    let healthBadge = d.health_ok ? '<span class="badge b-ok">'+d.health+'</span>' : '<span class="badge b-bad">'+d.health+'</span>';
-    let cls = d.health_ok ? '' : 'bad';
+    let healthBadge, cls;
+    if(d.asleep){
+      // 休眠是正常的省电状态，与温度卡口径统一：灰显「休眠」，不标红
+      healthBadge = '<span class="badge b-muted">休眠</span>';
+      cls = '';
+    } else {
+      healthBadge = d.health_ok ? '<span class="badge b-ok">'+esc(d.health)+'</span>' : '<span class="badge b-bad">'+esc(d.health)+'</span>';
+      cls = d.health_ok ? '' : 'bad';
+    }
     let trip = d.temp_trip||60;
     let tempPct = d.temp!=null ? Math.min(d.temp/trip*100,100) : 0;
     let tempStr = d.temp!=null ? d.temp+'°C' : 'N/A';
@@ -3543,7 +3550,7 @@ function renderDetect(D){
     let chBadge = ch ? ` <span class="ch-tag" title="${esc(chTip(ch))}">${esc(ch)}</span>` : '';
     return `<div class="disk-mini">
       <span>${typeBadge}${daBadge} ${d.dev} · ${d.brand?d.brand+' ':''}${d.vendor?d.vendor+' ':''}${d.model}${chBadge}${featBadge}</span>
-      <span><span style="color:${tempColor(d.temp,d.temp_trip||60)};font-weight:600">${d.temp!=null?d.temp+'°C':'N/A'}</span> · <span class="badge ${d.health_ok?'b-ok':'b-bad'}">${d.health}</span></span>
+      <span><span style="color:${tempColor(d.temp,d.temp_trip||60)};font-weight:600">${d.temp!=null?d.temp+'°C':'N/A'}</span> · <span class="badge ${d.asleep?'b-muted':(d.health_ok?'b-ok':'b-bad')}">${d.asleep?'休眠':esc(d.health)}</span></span>
     </div>`;
   };
   // 复用上方状态栏已声明的 sasDisks/sataDisks（同 filter 逻辑），避免 let 重复声明致 JS 解析崩溃
