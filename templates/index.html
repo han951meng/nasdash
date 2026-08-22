@@ -1771,6 +1771,21 @@ function switchNetLive(idx){
   let el=document.getElementById('netlive-detail-'+idx);
   if(el) el.style.display='block';
   drawNetSpark(idx);   // 切到哪个网口就重绘哪张趋势图
+  updateNetLiveModel(idx);
+}
+function netLiveModelText(n){
+  if(!n) return '—';
+  let model = (n.info && n.info.model) || '';
+  let driver = (n.info && n.info.driver) || '';
+  return (model ? model + (driver ? ' · ' + driver : '') : (driver || '—'));
+}
+function updateNetLiveModel(idx){
+  let n = (window._lnics && window._lnics[idx]) ? window._lnics[idx] : null;
+  let el = document.getElementById('netlive-model');
+  if(!el) return;
+  let txt = netLiveModelText(n);
+  el.textContent = txt;
+  el.setAttribute('title', txt);
 }
 function renderSysNetCard(nics, ts){
   let _sysNics = (nics||[]).filter(n=>{ let nm=(n.name||'').toLowerCase(); return !/^(lo|ovs-system|docker|virbr|br-)|veth/.test(nm); });
@@ -1886,7 +1901,7 @@ function renderSystem(s){
   // 型号/驱动等详细信息从 _nics（s.nics）按名匹配（含 ovs 后缀兜底）
   let _nicInfo={}; (_nics||[]).forEach(n=>{ _nicInfo[n.name]=n; let _p=(n.name||'').replace(/-ovs$/,'')||n.name; _nicInfo[_p]=n; });
   let _netNames=[...new Set(rawNet.filter(n=>{ let _nm=(n.name||''); return !/^(lo|ovs-system|docker|virbr|br-)|veth/.test(_nm) && !/[-.]ovs$/.test(_nm); }).map(n=>n.name).filter(Boolean))];
-  let _lnics=_netNames.map(name=>({name:name, info:_nicInfo[name]||{}}));
+  window._lnics=_netNames.map(name=>({name:name, info:_nicInfo[name]||{}}));
   if(currentNetLiveIdx >= _lnics.length) currentNetLiveIdx = 0;
   window.__lnicNames = _lnics.map(x=>x.name);
   // 过滤虚拟/重复接口：去掉 ovs-system 这类纯虚拟 0 流量管理桥；若同时存在 X 与 X-ovs（OVS 桥接），只留 X-ovs，避免物理口与桥重复合计
@@ -1946,13 +1961,15 @@ function renderSystem(s){
       ${diskHtml||'<div class="loading">采样中…</div>'}
     </div>
     <div class="card sys-area-netlive">
-      <h3 style="margin:0 0 6px;color:var(--text-1)" title="实时上下行速率（每个网口一个标签）">网络</h3>
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin:0 0 6px;gap:8px">
+        <h3 style="margin:0;color:var(--text-1)" title="实时上下行速率（每个网口一个标签）">网络</h3>
+        <span id="netlive-model" style="font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:58%" title=""></span>
+      </div>
       <div class="nic-tabs netlive-tabs">
         ${_lnics.map((n,i)=>`<button class="netlive-tab nic-tab ${i===currentNetLiveIdx?'active':''}" data-netlive-idx="${i}" onclick="switchNetLive(${i})">${esc(n.name)}</button>`).join('')}
       </div>
       ${_lnics.map((n,i)=>`
         <div class="netlive-detail" id="netlive-detail-${i}" style="${i===currentNetLiveIdx?'':'display:none'}">
-          <div style="font-size:12px;color:var(--muted);margin:4px 0 6px">${n.info&&n.info.model?esc(n.info.model):'—'}${n.info&&n.info.driver?(' · '+esc(n.info.driver)):''}</div>
           <div style="display:flex;flex-direction:column;gap:1px;align-items:flex-end;font-size:14px;font-weight:600;line-height:1.25;letter-spacing:0;margin:2px 0 4px">
             <div style="display:flex;align-items:baseline;gap:4px"><span style="color:var(--blue)">↑</span><span data-nic-tx="${esc(n.name)}" style="color:var(--blue);font-variant-numeric:tabular-nums">—</span></div>
             <div style="display:flex;align-items:baseline;gap:4px"><span style="color:var(--green)">↓</span><span data-nic-rx="${esc(n.name)}" style="color:var(--green);font-variant-numeric:tabular-nums">—</span></div>
@@ -1962,7 +1979,6 @@ function renderSystem(s){
           </div>
         </div>
       `).join('')}
-    </div>
   </div>`;
 }
 
@@ -4045,6 +4061,7 @@ function renderAll(isCache){
   smartUpdate(document.getElementById('raid'), renderRaid(DATA.raid, DATA.disks));
   smartUpdate(document.getElementById('disks'), renderDisks(DATA.disks));
   smartUpdate(document.getElementById('system'), renderSystem(DATA.system));
+  updateNetLiveModel(currentNetLiveIdx);
   smartUpdate(document.getElementById('temps'), renderTemps(DATA.system));
   let _fa=document.activeElement;
   let _fanBusy = _fa && (_fa.classList.contains('fan-slider') || _fa.classList.contains('fan-custom-input'));
