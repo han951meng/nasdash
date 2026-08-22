@@ -64,6 +64,21 @@ grep '^version' manifest   # 确认 version = 2.0.1
 
 - `app.py` 的 `get_cpu_usage()` 读 `/proc/stat` 聚合行，与模块级 `_LAST_CPU_STAT` 快照算 idle 差值返回百分比；跨请求保存快照、无阻塞 sleep。首次调用无基准返回 `None`（前端显示「—」），**不要用 load average 冒充使用率**。前端系统资源页用该值。
 
+### 系统资源页网络卡（sys-area-netlive）
+
+> v2.0.6 后多轮修出来的正确形态。改这张卡前先照此实现，别再用旧写法（grid 撑满、型号另起一行、JS 事后补字）。
+
+- **多网口 Tab 正确来源**：Tab 标签名（网卡名）取自**实时速率源 `rawNet`**（即 `RT_NET`/`DATA.net`，物理口如 `eno1`），**不要**从 `s.nics`（`get_system().nics`，其网卡名是 OVS 桥 `eno1-ovs`）筛——两者命名不一致会让 Tab 全空。型号/驱动等静态信息再从 `_nics`（含 `-ovs` 后缀兜底）按名匹配。
+- **过滤清单**：Tab 名排除 `lo` / `ovs-system` / `docker` / `virbr` / `br-` / `veth` 及 `-ovs` / `.ovs` 结尾接口；同时过滤纯虚拟 0 流量管理桥（避免物理口与 OVS 桥重复计入）。最终只留真实物理网卡（如 `eno1`）。
+- **型号显示位置**：型号/驱动放在「网络」标题**右侧同一行**（贴近标题，不占正文两行）；超长用 `white-space:nowrap;overflow:hidden;text-overflow:ellipsis` 截断，鼠标悬停靠 `title` 显示完整 `型号 · 驱动`。
+- **⚠ 型号必须在模板内直接生成文本，不要靠 JS 在 `renderSystem` 之后补 `textContent`**。原因：系统资源页走 `smartUpdate` 的 DOM 复用（结构一致只 patch 文本、不重建），事后 JS 补的字会被**下轮 `smartUpdate` 当作"旧值"覆盖成模板里的空串**，导致型号时有时无。
+  - 正确写法：标题右侧 span 用 `${esc(netLiveModelText(window._lnics[currentNetLiveIdx]))}` 同时写**文本**与 `title`（`netLiveModelText` 是 hoisted 函数声明，可直接在模板字面量调用；`window._lnics` 在 `renderSystem` 内已赋值）。
+  - 切 Tab 再调 `updateNetLiveModel(idx)` 同步右上方型号（该函数复用 `netLiveModelText`）。
+- **速率行（↑↓）紧凑写法**：用 `display:flex;flex-direction:column;align-items:flex-end` 的**两行单列**——`↑ 数值` / `↓ 数值` 各自一行、箭头与数值 `gap:4px` 紧贴，**不要**用 `grid-template-columns:14px auto` 撑满整宽（grid 会把箭头钉左、数值钉右、中间一大段空白，视觉很散）。
+  - 配色：↑ 上行/tx = 蓝 `--blue`，↓ 下行/rx = 绿 `--green`（网络卡国际约定：上行蓝、下行绿；与"绿跌红涨"股票习惯相反，但这是网络通用约定，别改）。
+- **速率实时更新**：每个网口 detail 用 `data-nic-tx` / `data-nic-rx` 属性定位 span，`fetchNetRates` 按网卡名就地 `textContent` 更新；每卡维护独立历史 `NET_SPARK_BY_NIC[name]`（60s），只重绘当前选中网口的趋势图 `drawNetSpark(idx)`（避免全重绘抖动）。
+- **休眠盘不影响网络卡**：SMART 休眠检测（`disk.asleep`）是磁盘卡逻辑，与网络卡无关；两者数据来源不同，改网络卡时注意别误引磁盘状态。
+
 ## 功能清单与实现方式
 
 | 功能 | 实现方式 | 关键接口 |
@@ -162,6 +177,9 @@ grep '^version' manifest   # 确认 version = 2.0.1
 | P7 | 温度三页各跳各的 | 各页各自取值 | 前端 `cpuTempUnified()`：优先实时温度快照，回退首屏快照，三页强制同源 |
 | P8 | 深色模式下 select/input 文字空白（温度源下拉框 2.0 以来论坛反馈） | 深色规则只给控件设深色背景（`background:var(--fill)`）没设文字色；select/input 的 `color` 在部分浏览器/内核（Safari/webview）不继承页面样式 → 深底+系统默认黑字=空白；新版 Chrome 继承正常所以本地试不出来 | ① `:root{color-scheme:light}` + `[data-theme="dark"]{color-scheme:dark}`（让浏览器按主题渲染表单控件 UA 配色）② 深色模式下给被染深背景的表单控件**显式补** `color:var(--text)`（.fan-rule-src/.fan-volt-select/各 input）③ 深色 option 补 `background:var(--card);color:var(--text)` |
 | P9 | 自检预计剩余显示带 17 位小数（"1分37.96761133603286秒"） | `fmtSec(s)` 直接拿 float 型 `_remain`（前端 `elapsedNow*100/job.progress - elapsedNow`）用 `s%60` 拼接秒，浮点小数未取整 | `fmtSec` 开头加 `var n=Math.round(s)`，后续全部用整数 `n`（`Math.floor(n/60)` / `n%60`） |
+| P10 | 系统资源页网络卡型号时有时无（刷新后消失） | 型号靠 JS 在 `renderSystem` 后调函数补 `textContent`，被 `smartUpdate` 的 DOM 复用逻辑覆盖成模板空串 | 型号在模板内用 `${esc(netLiveModelText(window._lnics[currentNetLiveIdx]))}` 直接生成（见"前端架构约定·系统资源页网络卡"）；切 Tab 用 `updateNetLiveModel` 同步 |
+| P11 | 多网口 Tab 全空 / 只剩一个 `ovs-system` | Tab 名从 `s.nics` 筛（网卡名是 OVS 桥 `eno1-ovs`），与实时速率源物理口 `eno1` 命名不一致；且混入 `ovs-system` 虚拟桥（速率恒「—」） | Tab 名取自 `rawNet` 物理口；正则排除 `lo`/`ovs-system`/`docker`/`virbr`/`br-`/`veth` 及 `-ovs`/`.ovs` 结尾 |
+| P12 | 网络卡速率行箭头与数值间距过大（视觉很散） | 用 `grid-template-columns:14px auto` 撑满整宽，箭头钉左、数值钉右、中间一大段空白 | 改 `flex` 两行单列，箭头紧贴数值 `gap:4px`（详见"前端架构约定·系统资源页网络卡"） |
 
 ### 发版 / 打包类（历史已踩，勿再踩）
 
