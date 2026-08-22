@@ -1855,8 +1855,11 @@ function renderSystem(s){
   let netData = rawNet.filter(n=> (n.name!=='ovs-system') && !_ovsBridges.has(n.name) && !((n.rx_rate||0)===0 && (n.tx_rate||0)===0));
   let netRx = netData.reduce((a,n)=>a+((n&&n.rx_rate)||0),0);
   let netTx = netData.reduce((a,n)=>a+((n&&n.tx_rate)||0),0);
-  // 顶部 hero 网络：与飞牛一致 ↑蓝（上传/tx） ↓绿（下载/rx），初始即居中，后续 JS 只更新文本不重建结构，避免跳回左边
-  let netVal = netData.length ? `<div style="display:inline-flex;flex-direction:column;gap:4px;font-size:20px;font-weight:600;line-height:1.2"><span style="display:inline-flex;justify-content:center;align-items:baseline;gap:2px;color:var(--blue)"><span>↑</span><span class="hero-net-up">${fmtSpeed(netTx)}</span></span><span style="display:inline-flex;justify-content:center;align-items:baseline;gap:2px;color:var(--green)"><span>↓</span><span class="hero-net-down">${fmtSpeed(netRx)}</span></span></div>` : '—';
+  // 顶部 hero 网络：与飞牛一致 ↑蓝（上传/tx） ↓绿（下载/rx）。无论有无数据都渲染同一居中结构（含 .hero-net-up/down span），
+  // 空数据时 span 显示「—」；fetchNetRates 永远只更新 span 文本、绝不重建结构，从根上消除「先居中后跳左」的跳动。
+  let netUpTxt = netData.length ? fmtSpeed(netTx) : '—';
+  let netDownTxt = netData.length ? fmtSpeed(netRx) : '—';
+  let netVal = `<div style="display:inline-flex;flex-direction:column;gap:4px;font-size:20px;font-weight:600;line-height:1.2"><span style="display:inline-flex;justify-content:center;align-items:baseline;gap:2px;color:var(--blue)"><span>↑</span><span class="hero-net-up">${netUpTxt}</span></span><span style="display:inline-flex;justify-content:center;align-items:baseline;gap:2px;color:var(--green)"><span>↓</span><span class="hero-net-down">${netDownTxt}</span></span></div>`;
   // CPU 使用率（优先真实 cpu_usage，回退 load 估算）
   let cpuPct = (s.cpu_usage!=null) ? s.cpu_usage : (s.cpu_threads ? Math.min(Math.round(parseFloat((s.load&&s.load[0])||0)/s.cpu_threads*100),100) : 0);
   let cpuColor = cpuPct>85?'var(--red)':cpuPct>60?'var(--orange)':'var(--green)';
@@ -2772,15 +2775,12 @@ async function fetchNetRates(){
     });
     // 合并全部有效网卡的实时上下行速率
     let rx=0, tx=0; netData.forEach(n=>{ rx+=(n.rx_rate||0); tx+=(n.tx_rate||0); });
-    // 同步更新顶部 hero summary 的「网络」格子：只更新文本，避免重建结构导致居中→左对齐跳动
+    // 同步更新顶部 hero summary 的「网络」格子：只更新 span 文本，绝不重建结构（renderSystem 已永远渲染同一居中结构，根上避免跳动）
     let heroNet=document.getElementById('hero-net');
     if(heroNet){
       let up=heroNet.querySelector('.hero-net-up'), down=heroNet.querySelector('.hero-net-down');
-      if(up && down){
-        up.textContent=fmtSpeed(tx); down.textContent=fmtSpeed(rx);
-      } else {
-        heroNet.innerHTML = netData.length ? '<div style="display:inline-flex;flex-direction:column;gap:4px;font-size:20px;font-weight:600;line-height:1.2"><span style="display:inline-flex;justify-content:center;align-items:baseline;gap:2px;color:var(--blue)"><span>↑</span><span class="hero-net-up">'+fmtSpeed(tx)+'</span></span><span style="display:inline-flex;justify-content:center;align-items:baseline;gap:2px;color:var(--green)"><span>↓</span><span class="hero-net-down">'+fmtSpeed(rx)+'</span></span></div>' : '—';
-      }
+      if(up) up.textContent=fmtSpeed(tx);
+      if(down) down.textContent=fmtSpeed(rx);
     }
     // 迷你网络卡：大数字 + 合并总吞吐面积图
     let lrx=document.getElementById('net-live-rx'); if(lrx) lrx.textContent=fmtSpeed(rx);
