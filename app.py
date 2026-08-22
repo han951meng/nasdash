@@ -2894,7 +2894,7 @@ def _collect_disks_full():
         disk = {
             "dev": name, "size": size_str, "rota": info.get("rota", "?"),
             "model": "", "serial": "", "tran": info.get("tran", ""), "vendor": "",
-            "type": "ata", "health": "N/A", "health_ok": False,
+            "type": "ata", "health": "N/A", "health_ok": False, "asleep": False,
             "temp": None, "power_on_hours": None,
         }
         if smart_out:
@@ -2947,7 +2947,18 @@ def _collect_disks_full():
                 disk["rota"] = "0"
             elif "rpm" in disk["rpm"].lower():
                 disk["rota"] = "1"
-        disk["health_ok"] = disk["health"].upper() in ("OK", "PASSED")
+        # 休眠盘修正：smartctl -n standby 不会唤醒休眠盘，返回含 STANDBY 的提示且无健康行。
+        # 此前被兜底成 health="N/A" / health_ok=False，导致健康卡误标红（与温度卡“休眠灰显”矛盾）。
+        # 休眠是正常的省电状态，≠ 坏盘：标 asleep、health=休眠、health_ok=True，避免无谓报警。
+        if smart_out and "STANDBY" in smart_out.upper() \
+           and not re.search(r"overall-health|SMART Health Status|SMART/Health Information", smart_out):
+            disk["asleep"] = True
+            disk["health"] = "休眠"
+            disk["health_ok"] = True
+            disk["temp"] = None
+        else:
+            disk["asleep"] = disk.get("asleep", False)
+            disk["health_ok"] = disk["health"].upper() in ("OK", "PASSED")
         disk["standalone"], disk["standalone_reason"] = _is_standalone_disk(name)
         return disk
 
