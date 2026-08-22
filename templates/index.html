@@ -1963,7 +1963,7 @@ function renderSystem(s){
     <div class="card sys-area-netlive">
       <div style="display:flex;justify-content:space-between;align-items:baseline;margin:0 0 6px;gap:8px">
         <h3 style="margin:0;color:var(--text-1)" title="实时上下行速率（每个网口一个标签）">网络</h3>
-        <span id="netlive-model" style="font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:58%" title=""></span>
+        <span id="netlive-model" style="font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:58%" title="${esc(netLiveModelText(window._lnics[currentNetLiveIdx]))}">${esc(netLiveModelText(window._lnics[currentNetLiveIdx]))}</span>
       </div>
       <div class="nic-tabs netlive-tabs">
         ${_lnics.map((n,i)=>`<button class="netlive-tab nic-tab ${i===currentNetLiveIdx?'active':''}" data-netlive-idx="${i}" onclick="switchNetLive(${i})">${esc(n.name)}</button>`).join('')}
