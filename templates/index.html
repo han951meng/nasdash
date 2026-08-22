@@ -1874,13 +1874,9 @@ function renderSystem(s){
       </div>
       <div style="display:flex;align-items:baseline;gap:10px;margin:6px 0 4px">
         <span id="sys-cpu-val" style="font-size:30px;font-weight:700;color:var(--blue);line-height:1">${cpuPct}%</span>
-        <span style="font-size:11px;color:var(--muted)">使用率</span>
       </div>
       <div style="position:relative">
         <canvas id="cpu-spark" width="600" height="100" style="width:100%;height:80px;display:block"></canvas>
-        <span style="position:absolute;top:3px;right:6px;font-size:10px;color:var(--muted)">100%</span>
-        <span style="position:absolute;bottom:3px;left:6px;font-size:10px;color:var(--muted)">60 秒</span>
-        <span style="position:absolute;bottom:3px;right:6px;font-size:10px;color:var(--muted)">0</span>
       </div>
     </div>
     <div class="card sys-area-mem">
@@ -1893,10 +1889,6 @@ function renderSystem(s){
       </div>
       <div style="position:relative">
         <canvas id="mem-spark" width="600" height="100" style="width:100%;height:80px;display:block"></canvas>
-        <span style="position:absolute;top:3px;left:6px;font-size:10px;color:var(--muted)">使用率</span>
-        <span style="position:absolute;top:3px;right:6px;font-size:10px;color:var(--muted)">100%</span>
-        <span style="position:absolute;bottom:3px;left:6px;font-size:10px;color:var(--muted)">60 秒</span>
-        <span style="position:absolute;bottom:3px;right:6px;font-size:10px;color:var(--muted)">0</span>
       </div>
       <div style="margin-top:8px;font-size:12px">
         <div class="kv"><span class="k">应用占用</span><span class="v" style="font-weight:600">${s.memory.used}</span></div>
@@ -2797,32 +2789,20 @@ let NET_SPARK=[];
 // CPU / 内存使用率的 60s 滚动历史（值域 0-100，每秒一个点）
 let CPU_HISTORY=[];
 let MEM_HISTORY=[];
-// 系统资源页图表通用绘制：单线 + fillArea + 外框 + 网格（飞牛风格）
+// 系统资源页图表通用绘制：单线 + fillArea，无刻度/无网格/无外框（飞牛运行状态风格）
 function drawSingleSpark(canvasId, hist, lineColor, fillColor){
   let cv=document.getElementById(canvasId);
   if(!cv) return;
   let ctx=cv.getContext('2d');
   let W=cv.width, H=cv.height;
   ctx.clearRect(0,0,W,H);
-  let cssVar=function(n,f){ let v=getComputedStyle(document.documentElement).getPropertyValue(n).trim(); return v||f; };
-  let bd=cssVar('--border','rgba(0,0,0,.1)');
-  let padL=6,padR=6,padT=10,padB=10;
+  let padL=0,padR=0,padT=2,padB=2;
   let iw=W-padL-padR, ih=H-padT-padB;
-  // 网格：3 横 + 4 纵
-  ctx.lineWidth=1;
-  ctx.strokeStyle=bd; ctx.globalAlpha=0.45;
-  for(let gi=1; gi<4; gi++){
-    let gy=padT+ih*gi/4;
-    ctx.beginPath(); ctx.moveTo(padL,gy); ctx.lineTo(W-padR,gy); ctx.stroke();
+  if(!hist.length){
+    ctx.strokeStyle=lineColor; ctx.globalAlpha=0.25; ctx.lineWidth=1.5;
+    ctx.beginPath(); ctx.moveTo(padL, padT+ih); ctx.lineTo(W-padR, padT+ih); ctx.stroke();
+    ctx.globalAlpha=1; return;
   }
-  for(let gi=1; gi<5; gi++){
-    let gx=padL+iw*gi/5;
-    ctx.beginPath(); ctx.moveTo(gx,padT); ctx.lineTo(gx,padT+ih); ctx.stroke();
-  }
-  // 外框
-  ctx.globalAlpha=1;
-  ctx.strokeRect(padL-0.5, padT-0.5, iw+1, ih+1);
-  if(!hist.length) return;
   let px=function(i){ return padL + (hist.length===1?0: i*iw/(hist.length-1)); };
   let py=function(v){ return padT + ih - (v/100)*ih; };
   // fillArea：曲线下方到基线
