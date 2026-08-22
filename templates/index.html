@@ -1903,8 +1903,8 @@ function renderSystem(s){
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
         <h3 style="margin:0;color:var(--text-1)" title="实时上下行速率">网络</h3>
         <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end;font-size:13px;font-weight:600;white-space:nowrap">
-          <span style="display:inline-flex;align-items:baseline;justify-content:flex-end;gap:2px;color:var(--green)"><span>↑</span><span id="net-live-tx" style="min-width:84px;text-align:right;font-variant-numeric:tabular-nums">—</span></span>
-          <span style="display:inline-flex;align-items:baseline;justify-content:flex-end;gap:2px;color:var(--blue)"><span>↓</span><span id="net-live-rx" style="min-width:84px;text-align:right;font-variant-numeric:tabular-nums">—</span></span>
+          <span style="display:inline-flex;align-items:baseline;justify-content:flex-end;gap:2px;color:var(--green)"><span>↑</span><span id="net-live-tx" style="min-width:84px;text-align:left;font-variant-numeric:tabular-nums">—</span></span>
+          <span style="display:inline-flex;align-items:baseline;justify-content:flex-end;gap:2px;color:var(--blue)"><span>↓</span><span id="net-live-rx" style="min-width:84px;text-align:left;font-variant-numeric:tabular-nums">—</span></span>
         </div>
       </div>
       <div style="position:relative;flex:1 1 auto;min-width:0">
@@ -2774,7 +2774,7 @@ async function fetchNetRates(){
     // 同步更新顶部 hero summary 的「网络」格子
     let heroNet=document.getElementById('hero-net');
     if(heroNet){
-      heroNet.innerHTML = netData.length ? '<div style="display:flex;flex-direction:column;gap:4px;font-size:20px;font-weight:600;line-height:1.2"><span style="display:inline-flex;align-items:baseline;justify-content:flex-end;gap:2px;color:var(--green)"><span style="color:var(--green)">↑</span><span style="color:var(--green);min-width:140px;text-align:right;font-variant-numeric:tabular-nums">'+fmtSpeed(tx)+'</span></span><span style="display:inline-flex;align-items:baseline;justify-content:flex-end;gap:2px;color:var(--blue)"><span style="color:var(--blue)">↓</span><span style="color:var(--blue);min-width:140px;text-align:right;font-variant-numeric:tabular-nums">'+fmtSpeed(rx)+'</span></span></div>' : '—';
+      heroNet.innerHTML = netData.length ? '<div style="display:flex;flex-direction:column;gap:4px;font-size:20px;font-weight:600;line-height:1.2"><span style="display:inline-flex;align-items:baseline;justify-content:flex-end;gap:2px;color:var(--green)"><span style="color:var(--green)">↑</span><span style="color:var(--green);min-width:140px;text-align:left;font-variant-numeric:tabular-nums">'+fmtSpeed(tx)+'</span></span><span style="display:inline-flex;align-items:baseline;justify-content:flex-end;gap:2px;color:var(--blue)"><span style="color:var(--blue)">↓</span><span style="color:var(--blue);min-width:140px;text-align:left;font-variant-numeric:tabular-nums">'+fmtSpeed(rx)+'</span></span></div>' : '—';
     }
     // 迷你网络卡：大数字 + 合并总吞吐面积图
     let lrx=document.getElementById('net-live-rx'); if(lrx) lrx.textContent=fmtSpeed(rx);
