@@ -1902,7 +1902,7 @@ function renderSystem(s){
     <div class="card sys-area-netlive">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
         <h3 style="margin:0;color:var(--text-1)" title="实时上下行速率">网络</h3>
-        <div style="display:flex;gap:14px;font-size:13px;font-weight:600;white-space:nowrap">
+        <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end;font-size:13px;font-weight:600;white-space:nowrap">
           <span style="display:grid;grid-template-columns:14px auto;gap:2px;align-items:baseline;color:var(--green)"><span>↑</span><span id="net-live-tx">—</span></span>
           <span style="display:grid;grid-template-columns:14px auto;gap:2px;align-items:baseline;color:var(--blue)"><span>↓</span><span id="net-live-rx">—</span></span>
         </div>
@@ -2830,7 +2830,7 @@ function drawMemSpark(){
   // 紫色 #a855f7 + 浅紫 fill（飞牛内存配色）
   drawSingleSpark('mem-spark', MEM_HISTORY, '#a855f7', '#a855f7');
 }
-// 画迷你网络面积图：合并总吞吐（rx+tx），贴卡片底部，无刻度/无网格
+// 画迷你网络折线图：上行(tx)绿、下行(rx)蓝，两条线各自浅色填充，无刻度/无网格
 function drawNetSpark(){
   let cv=document.getElementById('net-spark');
   if(!cv) return;
@@ -2839,30 +2839,35 @@ function drawNetSpark(){
   ctx.clearRect(0,0,W,H);
   let hist=NET_SPARK;
   let cssVar=function(n,f){ let v=getComputedStyle(document.documentElement).getPropertyValue(n).trim(); return v||f; };
-  let g=cssVar('--green','#22c55e');
+  let g=cssVar('--green','#22c55e');   // 上行/上传
+  let b=cssVar('--blue','#2a6fd6');    // 下行/下载
   let padL=0, padR=0, padT=2, padB=2;
   let iw=W-padL-padR, ih=H-padT-padB;
+  let isDark=document.documentElement.getAttribute('data-theme')==='dark';
+  // 空数据时画一条 0 基线（绿）后返回
   if(!hist.length){
     ctx.strokeStyle=g; ctx.globalAlpha=0.25; ctx.lineWidth=1.5;
     ctx.beginPath(); ctx.moveTo(padL, padT+ih); ctx.lineTo(W-padR, padT+ih); ctx.stroke();
     ctx.globalAlpha=1; return;
   }
-  let totals=hist.map(p=>((p.rx||0)+(p.tx||0)));
-  let maxV=Math.max.apply(null, totals.concat(1024));
+  let maxV=0; hist.forEach(p=>{ if((p.rx||0)>maxV)maxV=p.rx; if((p.tx||0)>maxV)maxV=p.tx; });
+  if(maxV<1024) maxV=1024;
   let px=function(i){ return padL + (hist.length===1?0: i*iw/(hist.length-1)); };
   let py=function(v){ return padT + ih - (v/maxV)*ih; };
-  // 填充面积；暗色背景提高透明度，让面积图更明显
-  let isDark=document.documentElement.getAttribute('data-theme')==='dark';
-  ctx.fillStyle=g; ctx.globalAlpha=isDark?0.32:0.18;
-  ctx.beginPath(); ctx.moveTo(padL, padT+ih);
-  totals.forEach((v,i)=> ctx.lineTo(px(i), py(v)));
-  ctx.lineTo(W-padR, padT+ih); ctx.closePath(); ctx.fill();
-  // 描边
-  ctx.globalAlpha=1;
-  ctx.strokeStyle=g; ctx.lineWidth=2; ctx.lineJoin='round'; ctx.lineCap='round';
-  ctx.beginPath();
-  totals.forEach((v,i)=> i?ctx.lineTo(px(i),py(v)):ctx.moveTo(px(i),py(v)));
-  ctx.stroke();
+  // 画一条线（含浅色填充）：key=rx 或 tx，color=对应色
+  function drawLine(key, color){
+    ctx.fillStyle=color; ctx.globalAlpha=isDark?0.30:0.16;
+    ctx.beginPath(); ctx.moveTo(px(0), padT+ih);
+    hist.forEach((p,i)=> ctx.lineTo(px(i), py(p[key]||0)));
+    ctx.lineTo(px(hist.length-1), padT+ih); ctx.closePath(); ctx.fill();
+    ctx.globalAlpha=1;
+    ctx.strokeStyle=color; ctx.lineWidth=1.8; ctx.lineJoin='round'; ctx.lineCap='round';
+    ctx.beginPath();
+    hist.forEach((p,i)=> i?ctx.lineTo(px(i),py(p[key]||0)):ctx.moveTo(px(i),py(p[key]||0)));
+    ctx.stroke();
+  }
+  drawLine('rx', b);   // 下行/下载 蓝（先画，作底）
+  drawLine('tx', g);   // 上行/上传 绿（后画，盖在上层）
 }
 function startNetRateTimer(){ if(!netRateTimer){ fetchNetRates(); netRateTimer=setInterval(fetchNetRates, 1000); } }
 // 网络卡片轻量刷新：每 5s 拉 /api/network（独立接口，不含 /api/system 的 60s 缓存），
