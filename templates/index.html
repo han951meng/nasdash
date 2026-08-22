@@ -1901,7 +1901,7 @@ function renderSystem(s){
     </div>
     <div class="card sys-area-netlive">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-        <h3 style="margin:0" title="实时上下行速率">网络</h3>
+        <h3 style="margin:0;color:var(--text-1)" title="实时上下行速率">网络</h3>
         <div style="display:flex;gap:14px;font-size:13px;font-weight:600;white-space:nowrap">
           <span style="display:grid;grid-template-columns:14px auto;gap:2px;align-items:baseline;color:var(--green)"><span>↑</span><span id="net-live-tx">—</span></span>
           <span style="display:grid;grid-template-columns:14px auto;gap:2px;align-items:baseline;color:var(--blue)"><span>↓</span><span id="net-live-rx">—</span></span>
@@ -2805,8 +2805,9 @@ function drawSingleSpark(canvasId, hist, lineColor, fillColor){
   }
   let px=function(i){ return padL + (hist.length===1?0: i*iw/(hist.length-1)); };
   let py=function(v){ return padT + ih - (v/100)*ih; };
-  // fillArea：曲线下方到基线
-  ctx.fillStyle=fillColor; ctx.globalAlpha=0.18;
+  // fillArea：曲线下方到基线；暗色背景适当提高透明度，避免面积图"闷"掉
+  let isDark=document.documentElement.getAttribute('data-theme')==='dark';
+  ctx.fillStyle=fillColor; ctx.globalAlpha=isDark?0.28:0.18;
   ctx.beginPath();
   ctx.moveTo(padL, padT+ih);
   hist.forEach(function(v,i){ var x=px(i), y=py(v); i?ctx.lineTo(x,y):ctx.lineTo(x,y); });
@@ -2850,8 +2851,9 @@ function drawNetSpark(){
   let maxV=Math.max.apply(null, totals.concat(1024));
   let px=function(i){ return padL + (hist.length===1?0: i*iw/(hist.length-1)); };
   let py=function(v){ return padT + ih - (v/maxV)*ih; };
-  // 填充面积
-  ctx.fillStyle=g; ctx.globalAlpha=0.18;
+  // 填充面积；暗色背景提高透明度，让面积图更明显
+  let isDark=document.documentElement.getAttribute('data-theme')==='dark';
+  ctx.fillStyle=g; ctx.globalAlpha=isDark?0.32:0.18;
   ctx.beginPath(); ctx.moveTo(padL, padT+ih);
   totals.forEach((v,i)=> ctx.lineTo(px(i), py(v)));
   ctx.lineTo(W-padR, padT+ih); ctx.closePath(); ctx.fill();
