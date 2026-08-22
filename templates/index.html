@@ -1953,9 +1953,9 @@ function renderSystem(s){
       ${_lnics.map((n,i)=>`
         <div class="netlive-detail" id="netlive-detail-${i}" style="${i===currentNetLiveIdx?'':'display:none'}">
           <div style="font-size:12px;color:var(--muted);margin:4px 0 6px">${n.info&&n.info.model?esc(n.info.model):'—'}${n.info&&n.info.driver?(' · '+esc(n.info.driver)):''}</div>
-          <div style="display:grid;grid-template-columns:14px auto;gap:1px 4px;align-items:baseline;font-size:14px;font-weight:600;line-height:1.25;letter-spacing:0;margin:2px 0 4px">
-            <span style="color:var(--blue)">↑</span><span data-nic-tx="${esc(n.name)}" style="color:var(--blue);font-variant-numeric:tabular-nums;text-align:right">—</span>
-            <span style="color:var(--green)">↓</span><span data-nic-rx="${esc(n.name)}" style="color:var(--green);font-variant-numeric:tabular-nums;text-align:right">—</span>
+          <div style="display:flex;flex-direction:column;gap:1px;align-items:flex-end;font-size:14px;font-weight:600;line-height:1.25;letter-spacing:0;margin:2px 0 4px">
+            <div style="display:flex;align-items:baseline;gap:4px"><span style="color:var(--blue)">↑</span><span data-nic-tx="${esc(n.name)}" style="color:var(--blue);font-variant-numeric:tabular-nums">—</span></div>
+            <div style="display:flex;align-items:baseline;gap:4px"><span style="color:var(--green)">↓</span><span data-nic-rx="${esc(n.name)}" style="color:var(--green);font-variant-numeric:tabular-nums">—</span></div>
           </div>
           <div style="position:relative">
             <canvas id="netlive-spark-${i}" width="800" height="120" style="width:100%;height:70px;display:block"></canvas>
