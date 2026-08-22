@@ -1908,22 +1908,15 @@ function renderSystem(s){
       ${diskHtml||'<div class="loading">采样中…</div>'}
     </div>
     <div class="card sys-area-netlive">
-      <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:6px;justify-content:space-between">
-        <h3 style="margin:0" title="实时上下行速率（飞牛系统资源页风格）">网络</h3>
-        <span id="net-live-if" style="font-size:12px;color:var(--muted);text-align:right">合并全部网卡</span>
-      </div>
-      <div id="net-live-tabs" style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap"></div>
-      <div style="display:flex;gap:18px;font-size:13px;margin-bottom:10px;flex-wrap:wrap">
-        <div style="display:grid;grid-template-columns:14px auto;gap:2px;align-items:baseline;white-space:nowrap"><span style="color:var(--green);font-weight:600">↑</span><span id="net-live-tx" style="color:var(--green);font-weight:600">—</span></div>
-        <div style="display:grid;grid-template-columns:14px auto;gap:2px;align-items:baseline;white-space:nowrap"><span style="color:var(--blue);font-weight:600">↓</span><span id="net-live-rx" style="color:var(--blue);font-weight:600">—</span></div>
-      </div>
-      <div style="display:flex;gap:6px;align-items:stretch">
-        <div id="net-axis" style="position:relative;width:56px;flex:none;font-size:11px;color:var(--text-2);font-weight:600;line-height:1"></div>
-        <div style="position:relative;flex:1 1 auto;min-width:0">
-          <canvas id="net-spark" width="800" height="180" style="width:100%;height:140px;display:block"></canvas>
-          <span style="position:absolute;top:4px;left:8px;font-size:11px;color:var(--muted)">吞吐量</span>
-          <span style="position:absolute;bottom:4px;left:8px;font-size:11px;color:var(--muted)">60 秒</span>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <h3 style="margin:0" title="实时上下行速率">网络</h3>
+        <div style="display:flex;gap:14px;font-size:13px;font-weight:600;white-space:nowrap">
+          <span style="display:grid;grid-template-columns:14px auto;gap:2px;align-items:baseline;color:var(--green)"><span>↑</span><span id="net-live-tx">—</span></span>
+          <span style="display:grid;grid-template-columns:14px auto;gap:2px;align-items:baseline;color:var(--blue)"><span>↓</span><span id="net-live-rx">—</span></span>
         </div>
+      </div>
+      <div style="position:relative;flex:1 1 auto;min-width:0">
+        <canvas id="net-spark" width="800" height="120" style="width:100%;height:70px;display:block"></canvas>
       </div>
     </div>
   </div>`;
@@ -2784,49 +2777,19 @@ async function fetchNetRates(){
       let tx=(m.tx_rate!=null)?fmtSpeed(m.tx_rate):'—';
       el.textContent='↓ '+rx+' / ↑ '+tx;
     });
-    // 同步更新系统资源页「网络」卡的总下载/上传速率（每 2s 实时，已过滤虚拟/重复口）
+    // 合并全部有效网卡的实时上下行速率
     let rx=0, tx=0; netData.forEach(n=>{ rx+=(n.rx_rate||0); tx+=(n.tx_rate||0); });
-    let rxEl=document.getElementById('net-rx-total'); if(rxEl) rxEl.textContent=fmtSpeed(rx)+'/s';
-    let txEl=document.getElementById('net-tx-total'); if(txEl) txEl.textContent=fmtSpeed(tx)+'/s';
-    // 同步更新顶部 hero summary 的「网络」格子（用户截图箭头所指），避免它只随整页刷新才变
+    // 同步更新顶部 hero summary 的「网络」格子
     let heroNet=document.getElementById('hero-net');
     if(heroNet){
-      // 顺序：上行↑上传在上，下行↓下载在下；箭头列固定14px+gap2px，数字变化不影响箭头位置
-      heroNet.innerHTML = netData.length ? '<div style="display:flex;flex-direction:column;gap:4px;font-size:20px;font-weight:600;line-height:1.2"><span style="display:grid;grid-template-columns:14px auto;gap:2px;align-items:baseline"><span style="color:var(--green)">↑</span><span style="color:var(--green)">'+fmtSpeed(rx)+'</span></span><span style="display:grid;grid-template-columns:14px auto;gap:2px;align-items:baseline"><span style="color:var(--blue)">↓</span><span style="color:var(--blue)">'+fmtSpeed(tx)+'</span></span></div>' : '—';
+      heroNet.innerHTML = netData.length ? '<div style="display:flex;flex-direction:column;gap:4px;font-size:20px;font-weight:600;line-height:1.2"><span style="display:grid;grid-template-columns:14px auto;gap:2px;align-items:baseline"><span style="color:var(--green)">↑</span><span style="color:var(--green)">'+fmtSpeed(tx)+'</span></span><span style="display:grid;grid-template-columns:14px auto;gap:2px;align-items:baseline"><span style="color:var(--blue)">↓</span><span style="color:var(--blue)">'+fmtSpeed(rx)+'</span></span></div>' : '—';
     }
-    // 网络实时速率卡（Windows 任务管理器风格）：累积最近 60 秒历史 + 更新大数字 + 画折线
+    // 迷你网络卡：大数字 + 合并总吞吐面积图
+    let lrx=document.getElementById('net-live-rx'); if(lrx) lrx.textContent=fmtSpeed(rx);
+    let ltx=document.getElementById('net-live-tx'); if(ltx) ltx.textContent=fmtSpeed(tx);
     NET_SPARK.push({rx:rx, tx:tx});
     if(NET_SPARK.length>60) NET_SPARK.shift();
-    // 每张网卡独立 60s 历史（供网口 Tab 切换显示）
-    netData.forEach(n=>{
-      if(!NIC_HISTORY[n.name]) NIC_HISTORY[n.name]=[];
-      NIC_HISTORY[n.name].push({rx:n.rx_rate||0, tx:n.tx_rate||0});
-      if(NIC_HISTORY[n.name].length>60) NIC_HISTORY[n.name].shift();
-    });
-    // 当前 Tab 大数字（用户视角：下行=下载=tx/NAS发送，上行=上传=rx/NAS接收）
-    let curDown = tx, curUp = rx;
-    if(NET_TAB_IDX>0){
-      let t = NET_TAB_LIST[NET_TAB_IDX-1];
-      let m = t ? netData.find(x=>x.name===t.name) : null;
-      if(m){ curDown = m.tx_rate||0; curUp = m.rx_rate||0; }
-    }
-    // id 在内层数字 span，外层 div 是它的 parent。grid 内箭头 span + 数字 span，
-    // 只更新数字 span（外层 div 的 lastElementChild），箭头 span 保留，箭头列固定 14px。
-    let lrxSpan=document.getElementById('net-live-rx');
-    let lrxDiv=lrxSpan ? lrxSpan.parentElement : null;
-    if(lrxDiv && lrxDiv.lastElementChild) lrxDiv.lastElementChild.textContent=fmtSpeed(curDown);
-    let ltxSpan=document.getElementById('net-live-tx');
-    let ltxDiv=ltxSpan ? ltxSpan.parentElement : null;
-    if(ltxDiv && ltxDiv.lastElementChild) ltxDiv.lastElementChild.textContent=fmtSpeed(curUp);
     drawNetSpark();
-    // 网口 Tab 栏：网卡列表变化时重建（首次或数量/名称变化）
-    let tabsEl = document.getElementById('net-live-tabs');
-    if(tabsEl && (!tabsEl.children.length || tabsEl.dataset.key !== netData.map(n=>n.name).join(','))){
-      tabsEl.dataset.key = netData.map(n=>n.name).join(',');
-      renderNetTabs(netData);
-    }
-    // 更新各网卡 model/speed（Tab 重建后型号可能刷新）
-    if(tabsEl && tabsEl.children.length){ updateNetTabHead(); }
   }catch(e){}
 }
 // 网络实时速率卡的 60s 滚动历史（每秒一个点，rx/tx 为合并后总速率 bps）
@@ -2834,70 +2797,6 @@ let NET_SPARK=[];
 // CPU / 内存使用率的 60s 滚动历史（值域 0-100，每秒一个点）
 let CPU_HISTORY=[];
 let MEM_HISTORY=[];
-// 各网卡 60s 折线历史（每个 nic 一个数组，最多 60 个点；key=nic.name）
-let NIC_HISTORY={};
-// 网络卡 Tab 状态：0=全部合并，1..N=第 N 张网卡
-let NET_TAB_IDX = 0;
-let NET_TAB_LIST = [];   // [{name, model, speed}]
-// 渲染"网络"卡的网口 Tab 栏（全部 + 网口1/网口2...）
-function renderNetTabs(netData){
-  let el = document.getElementById('net-live-tabs');
-  if(!el) return;
-  NET_TAB_LIST = (netData||[]).map(n=>{
-    let m = (n.model||'').trim();
-    if(!m && DATA && DATA.system && DATA.system.nics){
-      let full = DATA.system.nics.find(x=>x.name===n.name);
-      if(!full && /-ovs$/.test(n.name)) full = DATA.system.nics.find(x=>x.name===n.name.replace(/-ovs$/,''));
-      if(!full && !/-ovs$/.test(n.name)) full = DATA.system.nics.find(x=>x.name===n.name+'-ovs');
-      m = full ? (full.model||'') : '';
-    }
-    return {name:n.name, model:m, speed:n.speed};
-  });
-  let html = `<button class="nic-tab sys-nic-tab${NET_TAB_IDX===0?' active':''}" data-net-tab="0" onclick="switchNetTab(0)">全部</button>`;
-  NET_TAB_LIST.forEach((t,i)=>{
-    html += `<button class="nic-tab sys-nic-tab${NET_TAB_IDX===i+1?' active':''}" data-net-tab="${i+1}" onclick="switchNetTab(${i+1})" title="${esc(t.name)}">网口${i+1}</button>`;
-  });
-  el.innerHTML = html;
-  updateNetTabHead();
-}
-// 切换网络卡 Tab
-function switchNetTab(idx){
-  NET_TAB_IDX = idx;
-  document.querySelectorAll('#net-live-tabs .nic-tab').forEach(b=>{
-    b.classList.toggle('active', Number(b.dataset.netTab)===idx);
-  });
-  updateNetTabHead();
-  drawNetSpark();
-  // 大数字即时切到对应网卡（用户视角：下行=下载=tx，上行=上传=rx）
-  let netData = (typeof RT_NET!=='undefined' ? RT_NET : []).filter(n=> (n.name!=='ovs-system') && !((n.rx_rate||0)===0 && (n.tx_rate||0)===0));
-  let curDown=0, curUp=0; netData.forEach(n=>{ curDown+=(n.tx_rate||0); curUp+=(n.rx_rate||0); });
-  if(idx>0){
-    let t = NET_TAB_LIST[idx-1];
-    let m = t ? netData.find(x=>x.name===t.name) : null;
-    if(m){ curDown = m.tx_rate||0; curUp = m.rx_rate||0; }
-  }
-  let lrxSpan=document.getElementById('net-live-rx');
-  let lrxDiv=lrxSpan ? lrxSpan.parentElement : null;
-  if(lrxDiv && lrxDiv.lastElementChild) lrxDiv.lastElementChild.textContent=fmtSpeed(curDown);
-  let ltxSpan=document.getElementById('net-live-tx');
-  let ltxDiv=ltxSpan ? ltxSpan.parentElement : null;
-  if(ltxDiv && ltxDiv.lastElementChild) ltxDiv.lastElementChild.textContent=fmtSpeed(curUp);
-}
-// 更新 Tab 标题区：网卡名 + 型号（全部=合并全部网卡）
-function updateNetTabHead(){
-  let ifEl = document.getElementById('net-live-if');
-  if(!ifEl) return;
-  if(NET_TAB_IDX===0){ ifEl.textContent='合并全部网卡'; return; }
-  let t = NET_TAB_LIST[NET_TAB_IDX-1];
-  if(!t){ ifEl.textContent=''; return; }
-  ifEl.textContent = t.model ? (t.name + ' · ' + t.model) : t.name;
-}
-// 当前 Tab 对应的历史数据源（全部=合并，否则=该网卡）
-function netSparkSource(){
-  if(NET_TAB_IDX===0) return NET_SPARK;
-  let t = NET_TAB_LIST[NET_TAB_IDX-1];
-  return (t && NIC_HISTORY[t.name]) || [];
-}
 // 系统资源页图表通用绘制：单线 + fillArea + 外框 + 网格（飞牛风格）
 function drawSingleSpark(canvasId, hist, lineColor, fillColor){
   let cv=document.getElementById(canvasId);
@@ -2950,77 +2849,38 @@ function drawMemSpark(){
   // 紫色 #a855f7 + 浅紫 fill（飞牛内存配色）
   drawSingleSpark('mem-spark', MEM_HISTORY, '#a855f7', '#a855f7');
 }
-// 画 Windows 任务管理器风格的小折线图：绿=下行，蓝=上行，Y 轴按历史最大值自适应
-// 数据源：当前 Tab 对应（全部=合并 NET_SPARK，网口N=该网卡 NIC_HISTORY）
+// 画迷你网络面积图：合并总吞吐（rx+tx），贴卡片底部，无刻度/无网格
 function drawNetSpark(){
   let cv=document.getElementById('net-spark');
   if(!cv) return;
   let ctx=cv.getContext('2d');
   let W=cv.width, H=cv.height;
   ctx.clearRect(0,0,W,H);
-  let hist = netSparkSource();
+  let hist=NET_SPARK;
   let cssVar=function(n,f){ let v=getComputedStyle(document.documentElement).getPropertyValue(n).trim(); return v||f; };
-  // padT=padB=0：曲线贴 canvas 顶/底画，与 HTML 刻度栏 top:0/bottom:0 完全对齐
-  let padL=6, padR=6, padT=0, padB=0;
+  let g=cssVar('--green','#22c55e');
+  let padL=0, padR=0, padT=2, padB=2;
   let iw=W-padL-padR, ih=H-padT-padB;
-  let g=cssVar('--green','#22c55e'), b=cssVar('--blue','#3b82f6');
-  let bd=cssVar('--border','rgba(0,0,0,.1)');
-  // 画格子框（始终画，避免首屏空白）
-  ctx.lineWidth=1;
-  ctx.strokeStyle=bd; ctx.globalAlpha=0.4;
-  for(let gi=1; gi<4; gi++){
-    let gy=padT+ih*gi/4;
-    ctx.beginPath(); ctx.moveTo(padL,gy); ctx.lineTo(W-padR,gy); ctx.stroke();
-  }
-  for(let gi=1; gi<6; gi++){
-    let gx=padL+iw*gi/6;
-    ctx.beginPath(); ctx.moveTo(gx,padT); ctx.lineTo(gx,padT+ih); ctx.stroke();
-  }
-  ctx.globalAlpha=1;
-  ctx.strokeRect(padL-0.5, padT-0.5, iw+1, ih+1);
-  // 历史为空时画一条 0 基线后返回（首屏空数据不显示白板）
   if(!hist.length){
-    ctx.strokeStyle=g; ctx.globalAlpha=0.4; ctx.lineWidth=2;
+    ctx.strokeStyle=g; ctx.globalAlpha=0.25; ctx.lineWidth=1.5;
     ctx.beginPath(); ctx.moveTo(padL, padT+ih); ctx.lineTo(W-padR, padT+ih); ctx.stroke();
-    ctx.globalAlpha=1;
-    return;
+    ctx.globalAlpha=1; return;
   }
-  let maxV=0; hist.forEach(p=>{ if(p.rx>maxV)maxV=p.rx; if(p.tx>maxV)maxV=p.tx; });
-  if(maxV<1024) maxV=1024;                 // 保底刻度，避免全 0 时除零
+  let totals=hist.map(p=>((p.rx||0)+(p.tx||0)));
+  let maxV=Math.max.apply(null, totals.concat(1024));
   let px=function(i){ return padL + (hist.length===1?0: i*iw/(hist.length-1)); };
   let py=function(v){ return padT + ih - (v/maxV)*ih; };
-  function line(arr, color, key){
-    ctx.strokeStyle=color; ctx.lineWidth=2; ctx.lineJoin='round'; ctx.lineCap='round';
-    ctx.beginPath();
-    arr.forEach(function(p,i){
-      let x=px(i), y=py(p[key]);
-      i? ctx.lineTo(x,y) : ctx.moveTo(x,y);
-    });
-    ctx.stroke();
-  }
-  line(hist,g,'rx');
-  line(hist,b,'tx');
-  // 更新 Y 轴最大刻度文字（HTML 刻度栏）
-  let axisEl = document.getElementById('net-axis');
-  if(axisEl){
-    let ticks = [
-      {frac:1,    top:'0px'},
-      {frac:2/3,  top:'33.333%'},
-      {frac:1/3,  top:'66.667%'},
-      {frac:0,    bottom:'0px'}
-    ];
-    axisEl.innerHTML = ticks.map(t=>{
-      let pos = t.top!=null ? `top:${t.top}` : `bottom:${t.bottom}`;
-      return `<span style="position:absolute;${pos};right:2px;transform:translateY(${t.top?'-50%':'50%'})">${fmtAxisSpeed(maxV*t.frac)}</span>`;
-    }).join('');
-  }
-}
-  // 刻度数值精简格式：1.5 KB / 35.0 MB，省空间更清晰
-function fmtAxisSpeed(bps){
-  if(bps==null || isNaN(bps) || bps<=0) return '0';
-  if(bps < 1024) return bps.toFixed(0)+' B';
-  if(bps < 1048576) return (bps/1024).toFixed(1)+' KB';
-  return (bps/1048576).toFixed(1)+' MB';
+  // 填充面积
+  ctx.fillStyle=g; ctx.globalAlpha=0.18;
+  ctx.beginPath(); ctx.moveTo(padL, padT+ih);
+  totals.forEach((v,i)=> ctx.lineTo(px(i), py(v)));
+  ctx.lineTo(W-padR, padT+ih); ctx.closePath(); ctx.fill();
+  // 描边
+  ctx.globalAlpha=1;
+  ctx.strokeStyle=g; ctx.lineWidth=2; ctx.lineJoin='round'; ctx.lineCap='round';
+  ctx.beginPath();
+  totals.forEach((v,i)=> i?ctx.lineTo(px(i),py(v)):ctx.moveTo(px(i),py(v)));
+  ctx.stroke();
 }
 function startNetRateTimer(){ if(!netRateTimer){ fetchNetRates(); netRateTimer=setInterval(fetchNetRates, 1000); } }
 // 网络卡片轻量刷新：每 5s 拉 /api/network（独立接口，不含 /api/system 的 60s 缓存），
