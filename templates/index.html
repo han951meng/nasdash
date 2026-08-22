@@ -1855,7 +1855,8 @@ function renderSystem(s){
   let netData = rawNet.filter(n=> (n.name!=='ovs-system') && !_ovsBridges.has(n.name) && !((n.rx_rate||0)===0 && (n.tx_rate||0)===0));
   let netRx = netData.reduce((a,n)=>a+((n&&n.rx_rate)||0),0);
   let netTx = netData.reduce((a,n)=>a+((n&&n.tx_rate)||0),0);
-  let netVal = netData.length ? `<div style="display:inline-flex;flex-direction:column;gap:4px;font-size:20px;font-weight:600;line-height:1.2"><span style="display:inline-flex;justify-content:center;align-items:baseline;gap:2px;color:var(--green)"><span>↑</span><span>${fmtSpeed(netRx)}</span></span><span style="display:inline-flex;justify-content:center;align-items:baseline;gap:2px;color:var(--blue)"><span>↓</span><span>${fmtSpeed(netTx)}</span></span></div>` : '—';
+  // 顶部 hero 网络：与飞牛一致 ↑蓝（上传/tx） ↓绿（下载/rx），初始即居中，后续 JS 只更新文本不重建结构，避免跳回左边
+  let netVal = netData.length ? `<div style="display:inline-flex;flex-direction:column;gap:4px;font-size:20px;font-weight:600;line-height:1.2"><span style="display:inline-flex;justify-content:center;align-items:baseline;gap:2px;color:var(--blue)"><span>↑</span><span class="hero-net-up">${fmtSpeed(netTx)}</span></span><span style="display:inline-flex;justify-content:center;align-items:baseline;gap:2px;color:var(--green)"><span>↓</span><span class="hero-net-down">${fmtSpeed(netRx)}</span></span></div>` : '—';
   // CPU 使用率（优先真实 cpu_usage，回退 load 估算）
   let cpuPct = (s.cpu_usage!=null) ? s.cpu_usage : (s.cpu_threads ? Math.min(Math.round(parseFloat((s.load&&s.load[0])||0)/s.cpu_threads*100),100) : 0);
   let cpuColor = cpuPct>85?'var(--red)':cpuPct>60?'var(--orange)':'var(--green)';
@@ -1900,11 +1901,11 @@ function renderSystem(s){
       ${diskHtml||'<div class="loading">采样中…</div>'}
     </div>
     <div class="card sys-area-netlive">
-      <div style="display:flex;align-items:center;justify-content:flex-start;gap:12px;margin-bottom:8px;flex-wrap:nowrap">
-        <h3 style="margin:0;color:var(--text-1);flex:none" title="实时上下行速率">网络</h3>
-        <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-start;font-size:13px;font-weight:600;white-space:nowrap;min-width:0">
-          <span style="display:inline-flex;align-items:baseline;gap:2px;color:var(--green)"><span>↑</span><span id="net-live-tx" style="font-variant-numeric:tabular-nums">—</span></span>
-          <span style="display:inline-flex;align-items:baseline;gap:2px;color:var(--blue)"><span>↓</span><span id="net-live-rx" style="font-variant-numeric:tabular-nums">—</span></span>
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:6px">
+        <h3 style="margin:0;color:var(--text-1)" title="实时上下行速率">网络</h3>
+        <div style="display:grid;grid-template-columns:14px auto;gap:2px 6px;align-items:baseline;font-size:13px;font-weight:600;line-height:1.3">
+          <span style="color:var(--blue)">↑</span><span id="net-live-tx" style="color:var(--blue);font-variant-numeric:tabular-nums;text-align:right">—</span>
+          <span style="color:var(--green)">↓</span><span id="net-live-rx" style="color:var(--green);font-variant-numeric:tabular-nums;text-align:right">—</span>
         </div>
       </div>
       <div style="position:relative;flex:1 1 auto;min-width:0">
@@ -2771,10 +2772,15 @@ async function fetchNetRates(){
     });
     // 合并全部有效网卡的实时上下行速率
     let rx=0, tx=0; netData.forEach(n=>{ rx+=(n.rx_rate||0); tx+=(n.tx_rate||0); });
-    // 同步更新顶部 hero summary 的「网络」格子
+    // 同步更新顶部 hero summary 的「网络」格子：只更新文本，避免重建结构导致居中→左对齐跳动
     let heroNet=document.getElementById('hero-net');
     if(heroNet){
-      heroNet.innerHTML = netData.length ? '<div style="display:flex;flex-direction:column;gap:4px;font-size:20px;font-weight:600;line-height:1.2"><span style="display:inline-flex;align-items:baseline;justify-content:flex-end;gap:2px;color:var(--green)"><span style="color:var(--green)">↑</span><span style="color:var(--green);min-width:140px;text-align:left;font-variant-numeric:tabular-nums">'+fmtSpeed(tx)+'</span></span><span style="display:inline-flex;align-items:baseline;justify-content:flex-end;gap:2px;color:var(--blue)"><span style="color:var(--blue)">↓</span><span style="color:var(--blue);min-width:140px;text-align:left;font-variant-numeric:tabular-nums">'+fmtSpeed(rx)+'</span></span></div>' : '—';
+      let up=heroNet.querySelector('.hero-net-up'), down=heroNet.querySelector('.hero-net-down');
+      if(up && down){
+        up.textContent=fmtSpeed(tx); down.textContent=fmtSpeed(rx);
+      } else {
+        heroNet.innerHTML = netData.length ? '<div style="display:inline-flex;flex-direction:column;gap:4px;font-size:20px;font-weight:600;line-height:1.2"><span style="display:inline-flex;justify-content:center;align-items:baseline;gap:2px;color:var(--blue)"><span>↑</span><span class="hero-net-up">'+fmtSpeed(tx)+'</span></span><span style="display:inline-flex;justify-content:center;align-items:baseline;gap:2px;color:var(--green)"><span>↓</span><span class="hero-net-down">'+fmtSpeed(rx)+'</span></span></div>' : '—';
+      }
     }
     // 迷你网络卡：大数字 + 合并总吞吐面积图
     let lrx=document.getElementById('net-live-rx'); if(lrx) lrx.textContent=fmtSpeed(rx);
@@ -2830,7 +2836,7 @@ function drawMemSpark(){
   // 紫色 #a855f7 + 浅紫 fill（飞牛内存配色）
   drawSingleSpark('mem-spark', MEM_HISTORY, '#a855f7', '#a855f7');
 }
-// 画迷你网络折线图：上行(tx)绿、下行(rx)蓝，两条线各自浅色填充，无刻度/无网格
+// 画迷你网络折线图：与飞牛一致 ↑蓝（上传/tx）、↓绿（下载/rx），两条线各自浅色填充，无刻度/无网格
 function drawNetSpark(){
   let cv=document.getElementById('net-spark');
   if(!cv) return;
@@ -2839,14 +2845,14 @@ function drawNetSpark(){
   ctx.clearRect(0,0,W,H);
   let hist=NET_SPARK;
   let cssVar=function(n,f){ let v=getComputedStyle(document.documentElement).getPropertyValue(n).trim(); return v||f; };
-  let g=cssVar('--green','#22c55e');   // 上行/上传
-  let b=cssVar('--blue','#2a6fd6');    // 下行/下载
+  let b=cssVar('--blue','#2a6fd6');    // 上行/上传 ↑ 蓝
+  let g=cssVar('--green','#22c55e');   // 下行/下载 ↓ 绿
   let padL=0, padR=0, padT=2, padB=2;
   let iw=W-padL-padR, ih=H-padT-padB;
   let isDark=document.documentElement.getAttribute('data-theme')==='dark';
-  // 空数据时画一条 0 基线（绿）后返回
+  // 空数据时画一条 0 基线（蓝）后返回
   if(!hist.length){
-    ctx.strokeStyle=g; ctx.globalAlpha=0.25; ctx.lineWidth=1.5;
+    ctx.strokeStyle=b; ctx.globalAlpha=0.25; ctx.lineWidth=1.5;
     ctx.beginPath(); ctx.moveTo(padL, padT+ih); ctx.lineTo(W-padR, padT+ih); ctx.stroke();
     ctx.globalAlpha=1; return;
   }
@@ -2866,8 +2872,8 @@ function drawNetSpark(){
     hist.forEach((p,i)=> i?ctx.lineTo(px(i),py(p[key]||0)):ctx.moveTo(px(i),py(p[key]||0)));
     ctx.stroke();
   }
-  drawLine('rx', b);   // 下行/下载 蓝（先画，作底）
-  drawLine('tx', g);   // 上行/上传 绿（后画，盖在上层）
+  drawLine('tx', b);   // 上行/上传 蓝（先画，作底）
+  drawLine('rx', g);   // 下行/下载 绿（后画，盖在上层）
 }
 function startNetRateTimer(){ if(!netRateTimer){ fetchNetRates(); netRateTimer=setInterval(fetchNetRates, 1000); } }
 // 网络卡片轻量刷新：每 5s 拉 /api/network（独立接口，不含 /api/system 的 60s 缓存），
