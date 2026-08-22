@@ -1760,6 +1760,18 @@ function fmtSpeed(bps){
   return (bps/1048576).toFixed(2) + ' MB/s';
 }
 var currentSysNicIdx = 0;
+var currentNetLiveIdx = 0;          // 系统资源页底部网络卡当前选中的网口
+var NET_SPARK_BY_NIC = {};          // 每网卡独立的 60s 速率历史（name -> [{rx,tx}]）
+function switchNetLive(idx){
+  currentNetLiveIdx = idx;
+  document.querySelectorAll('.netlive-tab').forEach(x=>x.classList.remove('active'));
+  let tb=document.querySelector('.netlive-tab[data-netlive-idx="'+idx+'"]');
+  if(tb) tb.classList.add('active');
+  document.querySelectorAll('.netlive-detail').forEach(d=>d.style.display='none');
+  let el=document.getElementById('netlive-detail-'+idx);
+  if(el) el.style.display='block';
+  drawNetSpark(idx);   // 切到哪个网口就重绘哪张趋势图
+}
 function renderSysNetCard(nics, ts){
   let _sysNics = (nics||[]).filter(n=>{ let nm=(n.name||'').toLowerCase(); return !/^(lo|ovs-system|docker|virbr|br-)|veth/.test(nm); });
   if(!_sysNics.length){
@@ -1803,6 +1815,8 @@ function renderSystem(s){
   let _nics = (s.nics||[]).filter(n=>!/^(lo|ovs-system|docker|virbr|br-)|veth/.test((n.name||'').toLowerCase()));
   let _mn = _nics.filter(n=>(n.state||'').toUpperCase()==='UP')[0] || _nics[0];
   let nicModelText = _mn ? esc(_mn.name) + (_mn.model?(' · '+esc(_mn.model)):'') + (_nics.length>1?(' 等'+_nics.length+'块'):'') : '—';
+  // 系统资源页底部网络卡的多网口 Tab：用与 netData 完全一致的口径排除 OVS 桥（eno1-ovs 等）与虚拟口，避免重复
+  // 底部网络卡的多网口 Tab（_lnics）改在 rawNet 定义之后、基于实时速率源计算，见下方
   let memPct = s.memory.percent;
   let memColor = memPct>85?'var(--red)':memPct>70?'var(--orange)':'var(--green)';
   let sens = s.sensors || {};
@@ -1868,6 +1882,13 @@ function renderSystem(s){
   let pwTip = pw ? 'CPU+内存实时功耗（RAPL 硬件测量）。G5400 TDP 58W，日常通常 10~30W。' : '该设备不支持 RAPL 功耗测量（需 Intel CPU + powercap 内核支持）';
   // 网络速率：优先用每 2s 实时刷新的 RT_NET（fetchNetRates 维护），首屏未就绪时回退 DATA.net（首屏 /api/all 快照）
   let rawNet = (RT_NET && RT_NET.length) ? RT_NET : ((DATA&&DATA.net)||[]);
+  // 底部网络卡多网口 Tab：网卡名取自实时速率源 rawNet（与 fetchNetRates 完全一致，避免 OVS 桥名 eno1-ovs 与物理口 eno1 命名不一致导致 Tab 为空）；
+  // 型号/驱动等详细信息从 _nics（s.nics）按名匹配（含 ovs 后缀兜底）
+  let _nicInfo={}; (_nics||[]).forEach(n=>{ _nicInfo[n.name]=n; let _p=(n.name||'').replace(/-ovs$/,'')||n.name; _nicInfo[_p]=n; });
+  let _netNames=[...new Set(rawNet.filter(n=>{ let _nm=(n.name||''); return !/^(lo|ovs-system|docker|virbr|br-)|veth/.test(_nm) && !/[-.]ovs$/.test(_nm); }).map(n=>n.name).filter(Boolean))];
+  let _lnics=_netNames.map(name=>({name:name, info:_nicInfo[name]||{}}));
+  if(currentNetLiveIdx >= _lnics.length) currentNetLiveIdx = 0;
+  window.__lnicNames = _lnics.map(x=>x.name);
   // 过滤虚拟/重复接口：去掉 ovs-system 这类纯虚拟 0 流量管理桥；若同时存在 X 与 X-ovs（OVS 桥接），只留 X-ovs，避免物理口与桥重复合计
   let _ovsBridges = new Set(rawNet.filter(n=>/[-.]ovs$/.test(n.name||'')).map(n=>(n.name||'').replace(/[-.]ovs$/,'')));
   let netData = rawNet.filter(n=> (n.name!=='ovs-system') && !_ovsBridges.has(n.name) && !((n.rx_rate||0)===0 && (n.tx_rate||0)===0));
@@ -1925,19 +1946,22 @@ function renderSystem(s){
       ${diskHtml||'<div class="loading">采样中…</div>'}
     </div>
     <div class="card sys-area-netlive">
-      <div style="margin-bottom:6px">
-        <div style="display:flex;align-items:flex-start;justify-content:space-between">
-          <h3 style="margin:0;color:var(--text-1)" title="实时上下行速率">网络</h3>
-          <div style="display:grid;grid-template-columns:14px auto;gap:2px 6px;align-items:baseline;font-size:13px;font-weight:600;line-height:1.3">
-            <span style="color:var(--blue)">↑</span><span id="net-live-tx" style="color:var(--blue);font-variant-numeric:tabular-nums;text-align:right">—</span>
-            <span style="color:var(--green)">↓</span><span id="net-live-rx" style="color:var(--green);font-variant-numeric:tabular-nums;text-align:right">—</span>
+      <h3 style="margin:0 0 6px;color:var(--text-1)" title="实时上下行速率（每个网口一个标签）">网络</h3>
+      <div class="nic-tabs netlive-tabs">
+        ${_lnics.map((n,i)=>`<button class="netlive-tab nic-tab ${i===currentNetLiveIdx?'active':''}" data-netlive-idx="${i}" onclick="switchNetLive(${i})">${esc(n.name)}</button>`).join('')}
+      </div>
+      ${_lnics.map((n,i)=>`
+        <div class="netlive-detail" id="netlive-detail-${i}" style="${i===currentNetLiveIdx?'':'display:none'}">
+          <div style="display:grid;grid-template-columns:14px auto;gap:2px 6px;align-items:baseline;font-size:15px;font-weight:600;line-height:1.3;margin:4px 0 2px">
+            <span style="color:var(--blue)">↑</span><span data-nic-tx="${esc(n.name)}" style="color:var(--blue);font-variant-numeric:tabular-nums;text-align:right">—</span>
+            <span style="color:var(--green)">↓</span><span data-nic-rx="${esc(n.name)}" style="color:var(--green);font-variant-numeric:tabular-nums;text-align:right">—</span>
+          </div>
+          <div style="font-size:12px;color:var(--muted);margin:2px 0 4px">${esc(n.name)}${n.info&&n.info.model?(' · '+esc(n.info.model)):''}${n.info&&n.info.driver?(' · '+esc(n.info.driver)):''}</div>
+          <div style="position:relative">
+            <canvas id="netlive-spark-${i}" width="800" height="120" style="width:100%;height:70px;display:block"></canvas>
           </div>
         </div>
-        <div id="net-live-model" style="font-size:12px;color:var(--muted);margin-top:3px">${nicModelText}</div>
-      </div>
-      <div style="position:relative;flex:1 1 auto;min-width:0">
-        <canvas id="net-spark" width="800" height="120" style="width:100%;height:70px;display:block"></canvas>
-      </div>
+      `).join('')}
     </div>
   </div>`;
 }
@@ -2785,37 +2809,34 @@ async function fetchNetRates(){
     let netData = RT_NET.filter(n=> (n.name!=='ovs-system') && !_ovsBridges.has(n.name) && !((n.rx_rate||0)===0 && (n.tx_rate||0)===0));
     let rates={};
     netData.forEach(n=>{ rates[n.name]=n; });
-    document.querySelectorAll('[data-nic]').forEach(el=>{
-      let name=el.getAttribute('data-nic');
-      let m=rates[name];
-      if(!m){
-        // OVS 桥（如 eno1-ovs）的流量实际记在物理口 eno1 上；按名称兜底匹配
-        m=rates[name.replace(/-ovs$/,'')] || rates[name.replace(/\.ovs$/,'')];
-      }
-      if(!m) return;
-      let rx=(m.rx_rate!=null)?fmtSpeed(m.rx_rate):'—';
-      let tx=(m.tx_rate!=null)?fmtSpeed(m.tx_rate):'—';
-      el.textContent='↓ '+rx+' / ↑ '+tx;
-    });
-    // 合并全部有效网卡的实时上下行速率
+    // 每网口 detail 的 ↑蓝↓绿 速率分别更新（data-nic-tx / data-nic-rx）
+    let _upd=function(attr, key){
+      document.querySelectorAll('['+attr+']').forEach(el=>{
+        let nm=el.getAttribute(attr);
+        let m=rates[nm]||rates[nm.replace(/-ovs$/,'')]||rates[nm.replace(/\.ovs$/,'')];
+        if(m) el.textContent=fmtSpeed(m[key]);
+      });
+    };
+    _upd('data-nic-tx','tx_rate');
+    _upd('data-nic-rx','rx_rate');
+    // 合并全部有效网卡的实时上下行速率（顶部 hero 用）
     let rx=0, tx=0; netData.forEach(n=>{ rx+=(n.rx_rate||0); tx+=(n.tx_rate||0); });
-    // 同步更新顶部 hero summary 的「网络」格子：只更新 span 文本，绝不重建结构（renderSystem 已永远渲染同一居中结构，根上避免跳动）
     let heroNet=document.getElementById('hero-net');
     if(heroNet){
       let up=heroNet.querySelector('.hero-net-up'), down=heroNet.querySelector('.hero-net-down');
       if(up) up.textContent=fmtSpeed(tx);
       if(down) down.textContent=fmtSpeed(rx);
     }
-    // 迷你网络卡：大数字 + 合并总吞吐面积图
-    let lrx=document.getElementById('net-live-rx'); if(lrx) lrx.textContent=fmtSpeed(rx);
-    let ltx=document.getElementById('net-live-tx'); if(ltx) ltx.textContent=fmtSpeed(tx);
-    NET_SPARK.push({rx:rx, tx:tx});
-    if(NET_SPARK.length>60) NET_SPARK.shift();
-    drawNetSpark();
+    // 每网卡独立的 60s 速率历史（用于各网口趋势图）
+    netData.forEach(n=>{
+      if(!NET_SPARK_BY_NIC[n.name]) NET_SPARK_BY_NIC[n.name]=[];
+      NET_SPARK_BY_NIC[n.name].push({rx:(n.rx_rate||0), tx:(n.tx_rate||0)});
+      if(NET_SPARK_BY_NIC[n.name].length>60) NET_SPARK_BY_NIC[n.name].shift();
+    });
+    drawNetSpark(currentNetLiveIdx);   // 只重绘当前选中的网口，不每秒重画所有隐藏图
   }catch(e){}
 }
-// 网络实时速率卡的 60s 滚动历史（每秒一个点，rx/tx 为合并后总速率 bps）
-let NET_SPARK=[];
+// 网络实时速率历史已改为每网卡独立（见 NET_SPARK_BY_NIC），不再用合并单一数组
 // CPU / 内存使用率的 60s 滚动历史（值域 0-100，每秒一个点）
 let CPU_HISTORY=[];
 let MEM_HISTORY=[];
@@ -2861,13 +2882,15 @@ function drawMemSpark(){
   drawSingleSpark('mem-spark', MEM_HISTORY, '#a855f7', '#a855f7');
 }
 // 画迷你网络折线图：与飞牛一致 ↑蓝（上传/tx）、↓绿（下载/rx），两条线各自浅色填充，无刻度/无网格
-function drawNetSpark(){
-  let cv=document.getElementById('net-spark');
+// idx 指向当前选中的网口（对应 NET_SPARK_BY_NIC[name] 的历史）
+function drawNetSpark(idx){
+  let name = (window.__lnicNames && window.__lnicNames[idx]) || null;
+  let cv=document.getElementById('netlive-spark-'+idx);
   if(!cv) return;
   let ctx=cv.getContext('2d');
   let W=cv.width, H=cv.height;
   ctx.clearRect(0,0,W,H);
-  let hist=NET_SPARK;
+  let hist = (name && NET_SPARK_BY_NIC[name]) || [];
   let cssVar=function(n,f){ let v=getComputedStyle(document.documentElement).getPropertyValue(n).trim(); return v||f; };
   let b=cssVar('--blue','#2a6fd6');    // 上行/上传 ↑ 蓝
   let g=cssVar('--green','#22c55e');   // 下行/下载 ↓ 绿
