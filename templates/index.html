@@ -1230,11 +1230,15 @@ function renderDisks(disks){
         <div class="kv"><span class="k" title="${esc(smartTip('读取量'))}">读取量</span><span class="v">${d.data_units_read||'N/A'}</span></div>
         <div class="kv"><span class="k" title="${esc(smartTip('写入量'))}">写入量</span><span class="v">${d.data_units_written||'N/A'}</span></div>`;
     } else {
+      // ATA 细节：休眠盘 smartctl 未唤醒，字段为空；统一兜底显示「—」，不再出现 undefined
+      let reallocatedVal = d.reallocated!=null ? d.reallocated : '—';
+      let pendingVal = d.pending!=null ? d.pending : '—';
+      let uncorrectableVal = d.uncorrectable!=null ? d.uncorrectable : '—';
       detail = `
         <div class="kv"><span class="k" title="${esc(smartTip('已用时长'))}">已用时长</span><span class="v">${fmtHours(d.power_on_hours)}</span></div>
-        <div class="kv"><span class="k" title="${esc(smartTip('重映射扇区'))}">重映射扇区</span><span class="v" style="color:${d.reallocated>0?'var(--red)':'var(--text)'}">${d.reallocated}</span></div>
-        <div class="kv"><span class="k" title="${esc(smartTip('待处理扇区'))}">待处理扇区</span><span class="v" style="color:${d.pending>0?'var(--orange)':'var(--text)'}">${d.pending}</span></div>
-        <div class="kv"><span class="k" title="${esc(smartTip('不可纠正扇区'))}">不可纠正扇区</span><span class="v" style="color:${d.uncorrectable>0?'var(--red)':'var(--text)'}">${d.uncorrectable}</span></div>
+        <div class="kv"><span class="k" title="${esc(smartTip('重映射扇区'))}">重映射扇区</span><span class="v" style="color:${d.reallocated>0?'var(--red)':'var(--text)'}">${reallocatedVal}</span></div>
+        <div class="kv"><span class="k" title="${esc(smartTip('待处理扇区'))}">待处理扇区</span><span class="v" style="color:${d.pending>0?'var(--orange)':'var(--text)'}">${pendingVal}</span></div>
+        <div class="kv"><span class="k" title="${esc(smartTip('不可纠正扇区'))}">不可纠正扇区</span><span class="v" style="color:${d.uncorrectable>0?'var(--red)':'var(--text)'}">${uncorrectableVal}</span></div>
         <div class="kv"><span class="k" title="${esc(smartTip('UDMA CRC 错误'))}">UDMA CRC 错误</span><span class="v">${d.udma_crc||0}</span></div>`;
     }
     return `<div class="card disk-card ${cls}">
@@ -1242,10 +1246,10 @@ function renderDisks(disks){
         <span class="name">${d.dev}</span>
         ${healthBadge}
       </div>
-      <div class="kv"><span class="k" title="${esc(smartTip('型号'))}">型号</span><span class="v">${d.brand?d.brand+' ':''}${d.vendor?d.vendor+' ':''}${d.model}</span></div>
+      <div class="kv"><span class="k" title="${esc(smartTip('型号'))}">型号</span><span class="v">${d.model?(d.brand?d.brand+' ':'')+(d.vendor?d.vendor+' ':'')+d.model:'—'}</span></div>
       <div class="kv"><span class="k" title="${esc(smartTip('容量 / 类型'))}">容量 / 类型</span><span class="v">${d.size} · ${isNVMe?'NVMe':(isSAS?'SAS':'SATA')} · ${d.rota=='1'?'HDD':'SSD'}${diskFeatureClean(d.feature,d.dual_actuator)?' · '+esc(diskFeatureClean(d.feature,d.dual_actuator)):''}</span></div>
       <div class="kv"><span class="k" title="${esc(smartTip('转速'))}">转速</span><span class="v">${d.rpm||(d.rota=='1'||isSAS?'—':'固态(SSD)')}</span></div>
-      <div class="kv"><span class="k" title="${esc(smartTip('序列号'))}">序列号</span><span class="v" style="font-size:12px">${d.serial}</span></div>
+      <div class="kv"><span class="k" title="${esc(smartTip('序列号'))}">序列号</span><span class="v" style="font-size:12px">${d.serial||'—'}</span></div>
       <div style="margin-top:8px" title="${esc(smartTip('温度'))}"><span style="font-size:13px;color:var(--muted)">温度 ${tempStr}</span><div class="temp-bar"><div class="temp-fill" style="width:${tempPct}%;background:${tempColor(d.temp,trip)}"></div></div></div>
       ${detail}
       ${renderDiskTest(d)}
