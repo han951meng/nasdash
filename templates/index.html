@@ -1855,7 +1855,7 @@ function renderSystem(s){
   let netData = rawNet.filter(n=> (n.name!=='ovs-system') && !_ovsBridges.has(n.name) && !((n.rx_rate||0)===0 && (n.tx_rate||0)===0));
   let netRx = netData.reduce((a,n)=>a+((n&&n.rx_rate)||0),0);
   let netTx = netData.reduce((a,n)=>a+((n&&n.tx_rate)||0),0);
-  let netVal = netData.length ? `<div style="display:flex;flex-direction:column;gap:4px;font-size:20px;font-weight:600;line-height:1.2"><span style="display:grid;grid-template-columns:14px auto;gap:2px;align-items:baseline"><span style="color:var(--green)">↑</span><span style="color:var(--green)">${fmtSpeed(netRx)}</span></span><span style="display:grid;grid-template-columns:14px auto;gap:2px;align-items:baseline"><span style="color:var(--blue)">↓</span><span style="color:var(--blue)">${fmtSpeed(netTx)}</span></span></div>` : '—';
+  let netVal = netData.length ? `<div style="display:inline-flex;flex-direction:column;gap:4px;font-size:20px;font-weight:600;line-height:1.2"><span style="display:inline-flex;justify-content:center;align-items:baseline;gap:2px;color:var(--green)"><span>↑</span><span>${fmtSpeed(netRx)}</span></span><span style="display:inline-flex;justify-content:center;align-items:baseline;gap:2px;color:var(--blue)"><span>↓</span><span>${fmtSpeed(netTx)}</span></span></div>` : '—';
   // CPU 使用率（优先真实 cpu_usage，回退 load 估算）
   let cpuPct = (s.cpu_usage!=null) ? s.cpu_usage : (s.cpu_threads ? Math.min(Math.round(parseFloat((s.load&&s.load[0])||0)/s.cpu_threads*100),100) : 0);
   let cpuColor = cpuPct>85?'var(--red)':cpuPct>60?'var(--orange)':'var(--green)';
@@ -1900,11 +1900,11 @@ function renderSystem(s){
       ${diskHtml||'<div class="loading">采样中…</div>'}
     </div>
     <div class="card sys-area-netlive">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-        <h3 style="margin:0;color:var(--text-1)" title="实时上下行速率">网络</h3>
-        <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end;font-size:13px;font-weight:600;white-space:nowrap">
-          <span style="display:inline-flex;align-items:baseline;justify-content:flex-end;gap:2px;color:var(--green)"><span>↑</span><span id="net-live-tx" style="min-width:84px;text-align:left;font-variant-numeric:tabular-nums">—</span></span>
-          <span style="display:inline-flex;align-items:baseline;justify-content:flex-end;gap:2px;color:var(--blue)"><span>↓</span><span id="net-live-rx" style="min-width:84px;text-align:left;font-variant-numeric:tabular-nums">—</span></span>
+      <div style="display:flex;align-items:center;justify-content:flex-start;gap:12px;margin-bottom:8px;flex-wrap:nowrap">
+        <h3 style="margin:0;color:var(--text-1);flex:none" title="实时上下行速率">网络</h3>
+        <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-start;font-size:13px;font-weight:600;white-space:nowrap;min-width:0">
+          <span style="display:inline-flex;align-items:baseline;gap:2px;color:var(--green)"><span>↑</span><span id="net-live-tx" style="font-variant-numeric:tabular-nums">—</span></span>
+          <span style="display:inline-flex;align-items:baseline;gap:2px;color:var(--blue)"><span>↓</span><span id="net-live-rx" style="font-variant-numeric:tabular-nums">—</span></span>
         </div>
       </div>
       <div style="position:relative;flex:1 1 auto;min-width:0">
