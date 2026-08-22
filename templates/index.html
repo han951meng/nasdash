@@ -232,13 +232,9 @@
   .hs-uptime .hs-v{white-space:normal;word-break:break-all;font-size:20px;line-height:1.25}
   .hs.bad .hs-v{color:#E5484D;background:rgba(229,72,77,.12);padding:1px 8px;border-radius:6px;display:inline-block}
   .hs.warn .hs-v{color:#B45309;background:rgba(180,83,9,.12);padding:1px 8px;border-radius:6px;display:inline-block}
-  /* 网络卡：仿飞牛参考图，↑蓝(tx) ↓绿(rx)，整体居中。
-     居中只用 .hs-v 默认的 text-align:center，不嵌套 flex，从根上避免任何跳动。 */
+  /* 网络卡：与下方 sys-area-netlive 同款 grid 写法；inline-grid 在 .hs-v(text-align:center) 内居中，
+     不嵌套 flex，从根上避免任何跳动。颜色与字号由 netVal 内联样式控制。 */
   .hs.net .hs-v{font-size:22px;line-height:1.3;padding:2px 0}
-  .hs.net .hs-v .nr-up{color:var(--blue)}
-  .hs.net .hs-v .nr-down{color:var(--green)}
-  [data-theme="dark"] .hs.net .hs-v .nr-up{color:var(--blue)}
-  [data-theme="dark"] .hs.net .hs-v .nr-down{color:var(--green)}
   /* 暗色主题：hero 用和页面卡片一致的深色卡，只留一条飞牛蓝左边条做标识，不再用高饱和蓝渐变 */
   [data-theme="dark"] .hero{background:var(--c-card);border:1px solid var(--c-border);box-shadow:var(--c-shadow);border-left:3px solid var(--c-primary);color:var(--c-text-0)}
   [data-theme="dark"] .hero::after{display:none}
@@ -1862,12 +1858,14 @@ function renderSystem(s){
   let netData = rawNet.filter(n=> (n.name!=='ovs-system') && !_ovsBridges.has(n.name) && !((n.rx_rate||0)===0 && (n.tx_rate||0)===0));
   let netRx = netData.reduce((a,n)=>a+((n&&n.rx_rate)||0),0);
   let netTx = netData.reduce((a,n)=>a+((n&&n.tx_rate)||0),0);
-  // 顶部 hero 网络：完全按飞牛参考图重做——↑蓝(tx) ↓绿(rx)，两行居中。
-  // 结构恒定（无论有无数据都是两行 div + 含 hero-net-up/down 的 span），fetchNetRates 永远只改 span 文本、不重建结构。
+  // 顶部 hero 网络：与下方 sys-area-netlive 用完全相同的 grid 写法（14px auto 双列、↑蓝↓绿），
+  // 仅用 inline-grid 让其在 .hs-v 内居中。结构恒定（两行 span），fetchNetRates 永远只改 span 文本、不重建。
   let netUpTxt = netData.length ? fmtSpeed(netTx) : '—';
   let netDownTxt = netData.length ? fmtSpeed(netRx) : '—';
-  let netVal = '<div><div class="nr-up">↑ <span class="hero-net-up">'+esc(netUpTxt)+'</span></div>'+
-               '<div class="nr-down">↓ <span class="hero-net-down">'+esc(netDownTxt)+'</span></div></div>';
+  let netVal = '<div style="display:inline-grid;grid-template-columns:14px auto;gap:2px 6px;align-items:baseline;font-size:22px;font-weight:600;line-height:1.3">'
+    + '<span style="color:var(--blue)">↑</span><span class="hero-net-up" style="color:var(--blue)">'+esc(netUpTxt)+'</span>'
+    + '<span style="color:var(--green)">↓</span><span class="hero-net-down" style="color:var(--green)">'+esc(netDownTxt)+'</span>'
+    + '</div>';
   // CPU 使用率（优先真实 cpu_usage，回退 load 估算）
   let cpuPct = (s.cpu_usage!=null) ? s.cpu_usage : (s.cpu_threads ? Math.min(Math.round(parseFloat((s.load&&s.load[0])||0)/s.cpu_threads*100),100) : 0);
   let cpuColor = cpuPct>85?'var(--red)':cpuPct>60?'var(--orange)':'var(--green)';
