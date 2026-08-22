@@ -1799,6 +1799,10 @@ function switchSysNic(idx){
 
 function renderSystem(s){
   window.__cpuThreads = s.cpu_threads || 1;
+  // 系统资源页底部网络卡（sys-area-netlive）的网卡型号子标题：取主网卡（优先 UP）的 名·型号，多网卡标数量
+  let _nics = (s.nics||[]).filter(n=>!/^(lo|ovs-system|docker|virbr|br-)|veth/.test((n.name||'').toLowerCase()));
+  let _mn = _nics.filter(n=>(n.state||'').toUpperCase()==='UP')[0] || _nics[0];
+  let nicModelText = _mn ? esc(_mn.name) + (_mn.model?(' · '+esc(_mn.model)):'') + (_nics.length>1?(' 等'+_nics.length+'块'):'') : '—';
   let memPct = s.memory.percent;
   let memColor = memPct>85?'var(--red)':memPct>70?'var(--orange)':'var(--green)';
   let sens = s.sensors || {};
@@ -1921,12 +1925,15 @@ function renderSystem(s){
       ${diskHtml||'<div class="loading">采样中…</div>'}
     </div>
     <div class="card sys-area-netlive">
-      <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:6px">
-        <h3 style="margin:0;color:var(--text-1)" title="实时上下行速率">网络</h3>
-        <div style="display:grid;grid-template-columns:14px auto;gap:2px 6px;align-items:baseline;font-size:13px;font-weight:600;line-height:1.3">
-          <span style="color:var(--blue)">↑</span><span id="net-live-tx" style="color:var(--blue);font-variant-numeric:tabular-nums;text-align:right">—</span>
-          <span style="color:var(--green)">↓</span><span id="net-live-rx" style="color:var(--green);font-variant-numeric:tabular-nums;text-align:right">—</span>
+      <div style="margin-bottom:6px">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between">
+          <h3 style="margin:0;color:var(--text-1)" title="实时上下行速率">网络</h3>
+          <div style="display:grid;grid-template-columns:14px auto;gap:2px 6px;align-items:baseline;font-size:13px;font-weight:600;line-height:1.3">
+            <span style="color:var(--blue)">↑</span><span id="net-live-tx" style="color:var(--blue);font-variant-numeric:tabular-nums;text-align:right">—</span>
+            <span style="color:var(--green)">↓</span><span id="net-live-rx" style="color:var(--green);font-variant-numeric:tabular-nums;text-align:right">—</span>
+          </div>
         </div>
+        <div id="net-live-model" style="font-size:12px;color:var(--muted);margin-top:3px">${nicModelText}</div>
       </div>
       <div style="position:relative;flex:1 1 auto;min-width:0">
         <canvas id="net-spark" width="800" height="120" style="width:100%;height:70px;display:block"></canvas>
