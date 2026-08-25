@@ -208,7 +208,22 @@
   .sys-grid > .sys-area-cpu{grid-column:1;grid-row:1}
   .sys-grid > .sys-area-mem{grid-column:1;grid-row:2}
   .sys-grid > .sys-area-netlive{grid-column:1;grid-row:3}
-  .sys-grid > .sys-area-disk{grid-column:2;grid-row:1 / span 3}
+  .sys-grid > .sys-area-disk{grid-column:2;grid-row:1 / span 4}
+  .sys-grid > .sys-area-gpu{grid-column:1;grid-row:4}
+  /* 系统资源页显卡卡片：精简为 温度 + 显存占用（避免多指标卡拥挤） */
+  .gpu-block{display:flex;flex-direction:column;gap:6px}
+  .gpu-name{font-size:13px;font-weight:600;color:var(--text-1);margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .gpu-arch{font-size:11px;font-weight:400;color:var(--muted);margin-left:4px}
+  .gpu-legend{display:flex;gap:16px;font-size:11px;color:var(--muted)}
+  .gpu-legend-item{display:flex;align-items:center;gap:5px}
+  .gpu-dot{width:10px;height:3px;border-radius:2px;display:inline-block}
+  .gpu-dot.temp{background:var(--orange,#fb923c)}
+  .gpu-dot.mem{background:var(--blue,#38bdf8)}
+  .gpu-combo{width:100%}
+  .gpu-combo canvas{width:100%;height:90px;display:block}
+  .gpu-head-row{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:2px}
+  .gpu-head-row h3{margin:0}
+  .gpu-select{font-size:12px;padding:3px 6px;border-radius:var(--r-md);border:1px solid var(--border);background:var(--fill);color:var(--text-1);max-width:62%;cursor:pointer}
   .detect-title{font-size:16px;font-weight:500;margin-bottom:2px;color:var(--text-1)}
   .detect-sub{font-size:13px;color:var(--text-3);margin-bottom:14px}
   /* ===== hero 横幅（对齐飞牛虚拟机概览页）===== */
@@ -869,6 +884,8 @@ function switchTab(id, btn){
   if(id==='manual'){ initManual(); }  // 操作手册：拉取 /manual?embed=1 片段就地渲染
   if(id==='about'){ renderAbout(); }
   refreshPanel(id);  // 切换导航即拉取该板块最新数据（点哪个刷哪个）
+  // Docker 专属 8s 定时器：进 docker 起、离 docker 停（跟随自动刷新开关）
+  if(id === 'docker'){ startDockerTimer(); } else { stopDockerTimer(); }
   closeSidebar();  // 手机端选完模块自动收起抽屉
   window.scrollTo({top:0, left:0, behavior:'smooth'});  // 切换板块后内容回到顶部
 }
@@ -974,6 +991,19 @@ async function refreshPanel(id){
   }catch(e){}
   finally{ document.querySelectorAll('.spin').forEach(spin=>spin.style.display='none'); }
 }
+// ===================== Docker 页专属更快刷新 =====================
+// 全站自动刷新是 30s 节流（省资源），但 Docker 资源占用需更跟手，故给 docker tab 单独起一个 8s 定时器。
+// 规则：仅当自动刷新开启「且」当前在 docker tab 时才跑；离开 docker 或关自动刷新即停。
+var dockerTimer = null;
+function startDockerTimer(){
+  if(!autoRefreshEnabled) return;            // 跟随自动刷新开关
+  if(currentTab() !== 'docker') return;      // 只在 Docker 页活跃时刷
+  if(dockerTimer) return;                    // 避免重复起
+  dockerTimer = setInterval(function(){ refreshPanel('docker'); }, 8000);
+}
+function stopDockerTimer(){
+  if(dockerTimer){ clearInterval(dockerTimer); dockerTimer = null; }
+}
 // 只重渲指定板块（不碰其他面板 DOM）
 function renderPanel(id){
   if(!DATA || DATA.error) return;
@@ -1005,6 +1035,8 @@ function setAutoRefresh(on){
   if(timer){ clearInterval(timer); timer = null; }
   if(autoRefreshEnabled){ timer = setInterval(autoRefreshTick, 30000); }
   try{ localStorage.setItem('nasdash_autorefresh', autoRefreshEnabled ? '1':'0'); }catch(e){}
+  // Docker 专属定时器跟随开关：开且当前在 docker 才起；关则停
+  if(autoRefreshEnabled){ startDockerTimer(); } else { stopDockerTimer(); }
 }
 function heroControls(){
   var icon=themeIcon();
@@ -1760,8 +1792,8 @@ function fmtSpeed(bps){
   return (bps/1048576).toFixed(2) + ' MB/s';
 }
 var currentSysNicIdx = 0;
-var currentNetLiveIdx = 0;          // 系统资源页底部网络卡当前选中的网口
-var NET_SPARK_BY_NIC = {};          // 每网卡独立的 60s 速率历史（name -> [{rx,tx}]）
+var currentNetLiveIdx = 0;          // 系统资源页底部网络卡当前选中的网口（融合版已不再使用，保留兼容）
+var NET_HIST = [];                  // 融合全部网口的 60s 速率历史（[{rx,tx}]），每秒一个点
 function switchNetLive(idx){
   currentNetLiveIdx = idx;
   document.querySelectorAll('.netlive-tab').forEach(x=>x.classList.remove('active'));
@@ -1920,6 +1952,26 @@ function renderSystem(s){
   // CPU 使用率（优先真实 cpu_usage，回退 load 估算）
   let cpuPct = (s.cpu_usage!=null) ? s.cpu_usage : (s.cpu_threads ? Math.min(Math.round(parseFloat((s.load&&s.load[0])||0)/s.cpu_threads*100),100) : 0);
   let cpuColor = cpuPct>85?'var(--red)':cpuPct>60?'var(--orange)':'var(--green)';
+  // —— 系统资源页显卡卡片：精简为 温度 + 显存占用（用户要求，避免多指标卡拥挤）。
+  // 详细指标（利用率/Video/Render/频率/功耗）在「硬件配置检测」页，这里只放实时温度与显存占用。
+  // —— 系统资源页显卡卡片：一张合并折线图（像网络卡的上传/下载），两条线 = 温度(橙) + 显存占用(蓝)。
+  // 不单独显示温度数字（温度监控页已有）与显存进度条（占空间），只留趋势图。
+  let gpuCardSys = `
+  <div class="card sys-area-gpu">
+    <div class="gpu-head-row">
+      <h3>显卡</h3>
+      ${(s.gpus&&s.gpus.length>1)?`<select id="gpu-select" class="gpu-select" onchange="gpuSelectChanged(this.value)">${s.gpus.map((g,i)=>`<option value="${i}" ${(typeof selectedGpu==='number'&&selectedGpu===i)?'selected':''}>${esc(g.name||g.type||'显卡')}${g.type?(' · '+esc(g.type)):''}</option>`).join('')}</select>`:''}
+    </div>
+    ${(s.gpus&&s.gpus.length)?`
+      <div class="gpu-block">
+        <div class="gpu-name" id="gpu-name-label" title="${esc((s.gpus[selectedGpu]||s.gpus[0]).name_full||(s.gpus[selectedGpu]||s.gpus[0]).name||'')}">${esc((s.gpus[selectedGpu]||s.gpus[0]).name||'显卡')}</div>
+        <div class="gpu-legend">
+          <span class="gpu-legend-item"><i class="gpu-dot temp"></i>温度</span>
+          <span class="gpu-legend-item"><i class="gpu-dot mem"></i>显存</span>
+        </div>
+        <div class="gpu-combo"><canvas id="gpu-spark-combo" width="600" height="90"></canvas></div>
+      </div>`:'<div class="loading">未检测到核显 / 独显，或 BIOS 已禁用</div>'}
+  </div>`;
   return `
   ${panelHero({icon:ICON_SYSTEM,title:'系统资源',sub:'CPU / 内存 / 网络实时状态',stats:[
     {v:(s.cpu_usage!=null?s.cpu_usage+'%':'—'),k:'CPU 使用率', id:'hero-cpu'},
@@ -1929,11 +1981,8 @@ function renderSystem(s){
   ]})}
   <div class="sys-grid">
     <div class="card sys-area-cpu">
-      <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:6px;justify-content:space-between">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;justify-content:space-between">
         <h3 style="margin:0" title="CPU 实时使用率（飞牛系统资源页风格）">CPU</h3>
-        <span style="font-size:12px;color:var(--muted)">${esc(s.cpu_model||((s.cpu_cores||0)+'核 / '+(s.cpu_threads||0)+'线程'))}</span>
-      </div>
-      <div style="display:flex;align-items:baseline;gap:10px;margin:6px 0 4px">
         <span id="sys-cpu-val" style="font-size:30px;font-weight:700;color:var(--blue);line-height:1">${cpuPct}%</span>
       </div>
       <div style="position:relative">
@@ -1941,11 +1990,8 @@ function renderSystem(s){
       </div>
     </div>
     <div class="card sys-area-mem">
-      <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:6px;justify-content:space-between">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;justify-content:space-between">
         <h3 style="margin:0" title="内存实时使用率（飞牛系统资源页风格）">内存</h3>
-        <span style="font-size:12px;color:var(--muted)">${s.memory.total}</span>
-      </div>
-      <div style="display:flex;align-items:baseline;gap:10px;margin:6px 0 4px">
         <span id="sys-mem-val" style="font-size:30px;font-weight:700;color:#a855f7;line-height:1">${memPct}%</span>
       </div>
       <div style="position:relative">
@@ -1962,23 +2008,21 @@ function renderSystem(s){
     </div>
     <div class="card sys-area-netlive">
       <div style="display:flex;justify-content:space-between;align-items:baseline;margin:0 0 6px;gap:8px">
-        <h3 style="margin:0;color:var(--text-1)" title="实时上下行速率（每个网口一个标签）">网络</h3>
-        <span id="netlive-model" style="font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:58%" title="${esc(netLiveModelText(window._lnics[currentNetLiveIdx]))}">${esc(netLiveModelText(window._lnics[currentNetLiveIdx]))}</span>
-      </div>
-      <div class="nic-tabs netlive-tabs">
-        ${_lnics.map((n,i)=>`<button class="netlive-tab nic-tab ${i===currentNetLiveIdx?'active':''}" data-netlive-idx="${i}" onclick="switchNetLive(${i})">${esc(n.name)}</button>`).join('')}
-      </div>
-      ${_lnics.map((n,i)=>`
-        <div class="netlive-detail" id="netlive-detail-${i}" style="${i===currentNetLiveIdx?'':'display:none'}">
-          <div style="display:flex;flex-direction:column;gap:1px;align-items:flex-end;font-size:14px;font-weight:600;line-height:1.25;letter-spacing:0;margin:2px 0 4px">
-            <div style="display:flex;align-items:baseline;gap:4px"><span style="color:var(--blue)">↑</span><span data-nic-tx="${esc(n.name)}" style="color:var(--blue);font-variant-numeric:tabular-nums">—</span></div>
-            <div style="display:flex;align-items:baseline;gap:4px"><span style="color:var(--green)">↓</span><span data-nic-rx="${esc(n.name)}" style="color:var(--green);font-variant-numeric:tabular-nums">—</span></div>
-          </div>
-          <div style="position:relative">
-            <canvas id="netlive-spark-${i}" width="800" height="120" style="width:100%;height:70px;display:block"></canvas>
-          </div>
+        <h3 style="margin:0;color:var(--text-1)" title="实时上下行速率（合并全部网口）">网络</h3>
+        <div class="gpu-legend">
+          <span class="gpu-legend-item"><i style="width:10px;height:3px;border-radius:2px;display:inline-block;background:var(--blue)"></i>↑ 上传</span>
+          <span class="gpu-legend-item"><i style="width:10px;height:3px;border-radius:2px;display:inline-block;background:var(--green)"></i>↓ 下载</span>
         </div>
-      `).join('')}
+      </div>
+      <div style="position:relative">
+        <canvas id="net-spark" width="800" height="120" style="width:100%;height:80px;display:block"></canvas>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:13px;font-weight:600;margin-top:4px">
+        <span style="color:var(--blue)">↑ <span id="net-tx-val">—</span></span>
+        <span style="color:var(--green)">↓ <span id="net-rx-val">—</span></span>
+      </div>
+  </div>
+  ${gpuCardSys}
   </div>`;
 }
 
@@ -2819,6 +2863,21 @@ async function fetchNetRates(){
     // CPU / 内存折线图历史（每 1s 一个点，60s 滚动，Y 轴 0-100 固定）
     if(d.cpu_usage!=null){ CPU_HISTORY.push(Math.min(100,Math.max(0,parseFloat(d.cpu_usage)||0))); if(CPU_HISTORY.length>60) CPU_HISTORY.shift(); drawCpuSpark(); }
     if(d.mem_percent!=null){ MEM_HISTORY.push(Math.min(100,Math.max(0,parseFloat(d.mem_percent)||0))); if(MEM_HISTORY.length>60) MEM_HISTORY.shift(); drawMemSpark(); }
+    // GPU 卡：一张合并折线图（温度 + 显存占用），不单独显示温度数字与显存进度条
+    if(Array.isArray(d.gpu)){
+      RT_GPUS = d.gpu;
+      d.gpu.forEach(function(g, i){
+        if(!GPU_HIST[i]) GPU_HIST[i]={temp:[],mem:[]};
+        let tempVal = (g.temp!=null)? Math.min(120,Math.max(0,parseFloat(g.temp)||0)) : null;
+        GPU_HIST[i].temp.push(tempVal);
+        if(GPU_HIST[i].temp.length>60) GPU_HIST[i].temp.shift();
+        let memPct = (g.mem_total!=null && g.mem_total>0)?
+          ((g.mem_pct!=null)? g.mem_pct : Math.round((g.mem_used||0)/g.mem_total*100)) : null;
+        GPU_HIST[i].mem.push(memPct);
+        if(GPU_HIST[i].mem.length>60) GPU_HIST[i].mem.shift();
+      });
+      drawGpuSparks();
+    }
     RT_NET = (d.net||[]);
     // 与 renderSystem 完全一致的虚拟/重复口过滤，避免总速率重复合计（物理口 eno1 与 OVS 桥 eno1-ovs 二留一）
     let _ovsBridges = new Set(RT_NET.filter(n=>/[-.]ovs$/.test(n.name||'')).map(n=>(n.name||'').replace(/[-.]ovs$/,'')));
@@ -2843,19 +2902,24 @@ async function fetchNetRates(){
       if(up) up.textContent=fmtSpeed(tx);
       if(down) down.textContent=fmtSpeed(rx);
     }
-    // 每网卡独立的 60s 速率历史（用于各网口趋势图）
-    netData.forEach(n=>{
-      if(!NET_SPARK_BY_NIC[n.name]) NET_SPARK_BY_NIC[n.name]=[];
-      NET_SPARK_BY_NIC[n.name].push({rx:(n.rx_rate||0), tx:(n.tx_rate||0)});
-      if(NET_SPARK_BY_NIC[n.name].length>60) NET_SPARK_BY_NIC[n.name].shift();
-    });
-    drawNetSpark(currentNetLiveIdx);   // 只重绘当前选中的网口，不每秒重画所有隐藏图
+    // 融合全部网口的上下行速率历史（单图双线），并刷新实时数字
+    NET_HIST.push({rx:rx, tx:tx});
+    if(NET_HIST.length>60) NET_HIST.shift();
+    let _txEl=document.getElementById('net-tx-val'); if(_txEl) _txEl.textContent=fmtSpeed(tx);
+    let _rxEl=document.getElementById('net-rx-val'); if(_rxEl) _rxEl.textContent=fmtSpeed(rx);
+    drawNetSpark();   // 重绘融合图
   }catch(e){}
 }
-// 网络实时速率历史已改为每网卡独立（见 NET_SPARK_BY_NIC），不再用合并单一数组
+// 网络实时速率历史已改为融合全部网口（NET_HIST），单图双线（见 drawNetSpark）
 // CPU / 内存使用率的 60s 滚动历史（值域 0-100，每秒一个点）
 let CPU_HISTORY=[];
 let MEM_HISTORY=[];
+// GPU 卡合并折线历史：每个显卡索引存 {temp:[], mem:[]}，每秒一个点，60s 滚动（温度°C / 显存% 均 0-100）
+let GPU_HIST=[];
+// 当前下拉选中的显卡索引（多显卡时用户可切换；单显卡恒为 0）
+let selectedGpu=0;
+// 最近一次后端返回的显卡列表快照（下拉切换时更新名称标签用）
+let RT_GPUS=[];
 // 系统资源页图表通用绘制：单线 + fillArea，无刻度/无网格/无外框（飞牛运行状态风格）
 function drawSingleSpark(canvasId, hist, lineColor, fillColor){
   let cv=document.getElementById(canvasId);
@@ -2897,16 +2961,69 @@ function drawMemSpark(){
   // 紫色 #a855f7 + 浅紫 fill（飞牛内存配色）
   drawSingleSpark('mem-spark', MEM_HISTORY, '#a855f7', '#a855f7');
 }
-// 画迷你网络折线图：与飞牛一致 ↑蓝（上传/tx）、↓绿（下载/rx），两条线各自浅色填充，无刻度/无网格
-// idx 指向当前选中的网口（对应 NET_SPARK_BY_NIC[name] 的历史）
-function drawNetSpark(idx){
-  let name = (window.__lnicNames && window.__lnicNames[idx]) || null;
-  let cv=document.getElementById('netlive-spark-'+idx);
+// GPU 卡合并折线图：一张图两条线 —— 温度(橙) + 显存占用(蓝)，风格对齐网络卡的上传/下载双线
+// 只画当前下拉选中的显卡（selectedGpu）；多显卡时切换下拉即自动接管刷新。
+function drawGpuSpark(){
+  let i = (typeof selectedGpu==='number')? selectedGpu : 0;
+  if(!GPU_HIST[i]) return;
+  let cv=document.getElementById('gpu-spark-combo');
   if(!cv) return;
   let ctx=cv.getContext('2d');
   let W=cv.width, H=cv.height;
   ctx.clearRect(0,0,W,H);
-  let hist = (name && NET_SPARK_BY_NIC[name]) || [];
+  let cssVal=function(n,f){ let v=getComputedStyle(document.documentElement).getPropertyValue(n).trim(); return v||f; };
+  let tempC=cssVal('--orange','#fb923c');
+  let memC=cssVal('--blue','#38bdf8');
+  let padL=0,padR=0,padT=2,padB=2;
+  let iw=W-padL-padR, ih=H-padT-padB;
+  let isDark=document.documentElement.getAttribute('data-theme')==='dark';
+  let arrT=GPU_HIST[i].temp||[], arrM=GPU_HIST[i].mem||[];
+  if(!arrT.length && !arrM.length){
+    ctx.strokeStyle=memC; ctx.globalAlpha=0.25; ctx.lineWidth=1.5;
+    ctx.beginPath(); ctx.moveTo(padL, padT+ih); ctx.lineTo(W-padR, padT+ih); ctx.stroke();
+    ctx.globalAlpha=1; return;
+  }
+  // 固定 0-100（温度°C 与 显存% 同处 0-100 自然量程，便于对比趋势）
+  let maxV=100;
+  let px=function(idx,len){ return padL + (len===1?0: idx*iw/(len-1)); };
+  let py=function(v){ return padT + ih - (v/maxV)*ih; };
+  function drawLine(arr,color){
+    if(!arr.length) return;
+    ctx.fillStyle=color; ctx.globalAlpha=isDark?0.28:0.16;
+    ctx.beginPath(); ctx.moveTo(px(0,arr.length), padT+ih);
+    arr.forEach((v,idx)=> ctx.lineTo(px(idx,arr.length), py(v==null?0:v)));
+    ctx.lineTo(px(arr.length-1,arr.length), padT+ih); ctx.closePath(); ctx.fill();
+    ctx.globalAlpha=1;
+    ctx.strokeStyle=color; ctx.lineWidth=1.8; ctx.lineJoin='round'; ctx.lineCap='round';
+    ctx.beginPath();
+    arr.forEach((v,idx)=>{ let x=px(idx,arr.length), y=py(v==null?0:v); idx?ctx.lineTo(x,y):ctx.moveTo(x,y); });
+    ctx.stroke();
+  }
+  drawLine(arrM, memC);   // 显存占用 蓝（先画作底）
+  drawLine(arrT, tempC);  // 温度 橙（后画盖上层）
+}
+// 只重绘当前选中的那张显卡（实时轮询每秒都会调一次）
+function drawGpuSparks(){ drawGpuSpark(); }
+// 下拉切换显卡：更新选中索引、同步名称标签、立即重绘
+function gpuSelectChanged(val){
+  selectedGpu = parseInt(val,10)||0;
+  let g = (RT_GPUS && RT_GPUS[selectedGpu]) || null;
+  let lbl = document.getElementById('gpu-name-label');
+  if(lbl){
+    lbl.textContent = (g && (g.name||g.type)) || '显卡';
+    lbl.setAttribute('title', (g && (g.name_full||g.name)) || '');
+  }
+  drawGpuSpark();
+}
+// 画迷你网络折线图：与飞牛一致 ↑蓝（上传/tx）、↓绿（下载/rx），两条线各自浅色填充，无刻度/无网格
+// 融合全部网口的上下行速率历史（NET_HIST），无 idx 参数
+function drawNetSpark(){
+  let cv=document.getElementById('net-spark');
+  if(!cv) return;
+  let ctx=cv.getContext('2d');
+  let W=cv.width, H=cv.height;
+  ctx.clearRect(0,0,W,H);
+  let hist = NET_HIST || [];
   let cssVar=function(n,f){ let v=getComputedStyle(document.documentElement).getPropertyValue(n).trim(); return v||f; };
   let b=cssVar('--blue','#2a6fd6');    // 上行/上传 ↑ 蓝
   let g=cssVar('--green','#22c55e');   // 下行/下载 ↓ 绿
@@ -4061,7 +4178,6 @@ function renderAll(isCache){
   smartUpdate(document.getElementById('raid'), renderRaid(DATA.raid, DATA.disks));
   smartUpdate(document.getElementById('disks'), renderDisks(DATA.disks));
   smartUpdate(document.getElementById('system'), renderSystem(DATA.system));
-  updateNetLiveModel(currentNetLiveIdx);
   smartUpdate(document.getElementById('temps'), renderTemps(DATA.system));
   let _fa=document.activeElement;
   let _fanBusy = _fa && (_fa.classList.contains('fan-slider') || _fa.classList.contains('fan-custom-input'));
