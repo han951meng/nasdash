@@ -195,6 +195,21 @@
   .sk-line{height:13px;margin:12px 0;border-radius:6px}
   pre{background:#1e293b;color:#e2e8f0;padding:14px;border-radius:8px;font-size:12px;overflow-x:auto;max-height:400px;white-space:pre-wrap}
   .section-title{font-size:15px;font-weight:600;margin:18px 0 10px;color:var(--text)}
+  .cc-schedule{margin-top:8px}
+  .cc-sched-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:6px}
+  .switch-row{display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer}
+  .lvl-matrix{display:flex;flex-direction:column;gap:6px;margin-top:8px}
+  .lvl-row{display:grid;grid-template-columns:120px repeat(4,1fr);align-items:center;gap:8px;font-size:13px}
+  .lvl-row.lvl-head{font-weight:600;color:var(--muted)}
+  .hs-list{display:flex;flex-direction:column;gap:4px;margin-top:6px}
+  .hs-row{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:13px}
+  .hs-add{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:8px;font-size:13px}
+  .cb-block{margin-top:6px;font-size:13px}
+  .cb-row{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+  .cb-status{display:flex;flex-direction:column;gap:4px;margin-top:6px}
+  .cb-active{font-size:12px;color:var(--danger);font-weight:600}
+  .cb-needed{font-size:12px;color:var(--orange)}
+  .cb-add{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:8px}
   .pill{display:inline-block;padding:1px 8px;border-radius:6px;font-size:11px;margin-left:6px}
   .pill.gray{background:var(--fill);color:var(--text-3)}
   .pill.red{background:rgba(245,63,63,.12);color:var(--danger)}
@@ -3498,6 +3513,48 @@ function startCCPoll(vd){
   }, 3000);
 }
 function stopCCPoll(vd){ if(_ccTimers[vd]){ clearInterval(_ccTimers[vd]); _ccTimers[vd]=null; } }
+function saveCCSchedule(){
+  let t = document.getElementById('ccsched-time').value || '00:00';
+  let parts = t.split(':');
+  let data = {
+    enabled: document.getElementById('ccsched-enable').checked,
+    period: document.getElementById('ccsched-period').value,
+    hour: parseInt(parts[0],10)||0,
+    minute: parseInt(parts[1],10)||0,
+    weekday: parseInt(document.getElementById('ccsched-weekday').value,10)||0
+  };
+  fetch('/api/raid/cc/schedule', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)})
+    .then(function(r){ return r.json(); })
+    .then(function(j){ if(!j.ok) alert('保存失败：'+(j.error||'未知')); else alert('定时巡检调度已保存'); })
+    .catch(function(e){ alert('请求失败：'+e.message); });
+}
+function raidHotspare(slot, action){
+  if(!slot){ slot = (document.getElementById('hs-slot')||{}).value; }
+  if(!slot){ alert('请先选择一块盘'); return; }
+  if(action!=='remove' && !confirm('将 '+slot+' 设为'+(action==='add_dedicated'?'专用':'全局')+'热备？该盘数据将被清空。')) return;
+  fetch('/api/raid/hotspare', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({slot:slot, action:action})})
+    .then(function(r){ return r.json(); })
+    .then(function(j){ if(!j.ok) alert('操作失败：'+(j.error||'未知')); else { alert('操作成功'); location.reload(); } })
+    .catch(function(e){ alert('请求失败：'+e.message); });
+}
+
+function saveCopyBack(){
+  var el = document.getElementById('cb-enable');
+  var action = el && el.checked ? 'enable' : 'disable';
+  fetch('/api/raid/copyback', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({action:action})})
+    .then(function(r){ return r.json(); })
+    .then(function(j){ if(!j.ok) alert('操作失败：'+(j.error||'未知')); else { alert('已'+(action==='enable'?'开启':'关闭')+'自动 CopyBack'); location.reload(); } })
+    .catch(function(e){ alert('请求失败：'+e.message); });
+}
+function raidCopyBack(slot, action){
+  if(!slot){ slot = (document.getElementById('cb-slot')||{}).value; }
+  if(!slot){ alert('请先在上方选择一块故障盘'); return; }
+  if(!confirm('将对 '+slot+' 手动触发 CopyBack 换盘？该操作须已配置热备盘。')) return;
+  fetch('/api/raid/copyback', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({slot:slot, action:action})})
+    .then(function(r){ return r.json(); })
+    .then(function(j){ if(!j.ok) alert('操作失败：'+(j.error||'未知')); else { alert('已触发 CopyBack'); location.reload(); } })
+    .catch(function(e){ alert('请求失败：'+e.message); });
+}
 
 function renderDetect(D){
   if(!D) return '';
@@ -3746,6 +3803,11 @@ function renderDetect(D){
       return `<tr><td>${esc(v.name||'')}${v.dgvd?(' ('+esc(v.dgvd)+')'):''}</td><td>${esc(v.type||'-')}</td><td>${esc(v.size||'-')}</td><td>${esc(v.state||'-')}</td><td>${esc(v.access||'-')}</td><td>${wpBadge}</td></tr>`;
     }).join('');
   }
+  let ccSched = r.cc_schedule || {};
+  let cb = (r.auto_copyback || '').toLowerCase();
+  let cbActiveList = (r.drives && r.drives.length) ? r.drives.filter(function(d){return d.copyback_active;}).map(function(d){return d.slot;}) : [];
+  let cbNeeded = r.copyback_needed || [];
+  let cbFailedDrives = (r.drives && r.drives.length) ? r.drives.filter(function(d){return d.failed && !d.copyback_active;}) : [];
   let raidCardsHtml;
   if(r.mode==='mega'){
     raidCardsHtml = `
@@ -3794,6 +3856,52 @@ function renderDetect(D){
         }).join('')}
       </div>
       <div style="margin-top:6px;font-size:12px;color:var(--muted)">一致性检查会扫描逻辑盘校验数据一致性，期间磁盘负载升高；可随时暂停/恢复/停止。仅当存在硬件 RAID 逻辑盘时可用。</div>
+      <div class="section-title" style="margin-top:14px">定时巡检调度</div>
+      <div class="cc-schedule">
+        <label class="switch-row"><input type="checkbox" id="ccsched-enable" ${ccSched.enabled?'checked':''}/> 启用自动一致性检查</label>
+        <div class="cc-sched-row">
+          <select id="ccsched-period" onchange="document.getElementById('ccsched-weekday-wrap').style.display = this.value==='weekly'?'inline':'none'">
+            <option value="daily" ${ccSched.period==='daily'?'selected':''}>每天</option>
+            <option value="weekly" ${ccSched.period==='weekly'?'selected':''}>每周</option>
+          </select>
+          <span id="ccsched-weekday-wrap" style="display:${ccSched.period==='weekly'?'inline':'none'}">
+            <select id="ccsched-weekday">
+              ${['周一','周二','周三','周四','周五','周六','周日'].map((w,i)=>`<option value="${i}" ${ccSched.weekday==i?'selected':''}>${w}</option>`).join('')}
+            </select>
+          </span>
+          <input type="time" id="ccsched-time" value="${String(ccSched.hour).padStart(2,'0')}:${String(ccSched.minute).padStart(2,'0')}"/>
+          <button class="btn-mini" onclick="saveCCSchedule()">保存</button>
+        </div>
+        <div style="margin-top:4px;font-size:12px;color:var(--muted)">到点后由后台对所有硬件逻辑盘自动执行一次一致性检查；仅当存在硬件 RAID 逻辑盘时生效。</div>
+      </div>
+      <div class="section-title" style="margin-top:14px">热备盘（Hot Spare）</div>
+      <div class="hs-list">
+        ${r.hotspares && r.hotspares.length ? r.hotspares.map(function(h){
+          return `<div class="hs-row"><span>${esc(h.slot)} · ${esc(h.model||'-')} · ${h.hs_type==='global'?'全局':'专用'}</span><button class="btn-mini" onclick="raidHotspare('${esc(h.slot)}','remove')">移除</button></div>`;
+        }).join('') : '<div style="font-size:12px;color:var(--muted)">当前无热备盘。可在下方把某块盘设为热备（设为热备会清空该盘数据）。</div>'}
+      </div>
+      <div class="hs-add">
+        <span>将盘设为热备：</span>
+        <select id="hs-slot"><option value="">选择盘</option>${r.drives&&r.drives.length?r.drives.filter(function(d){return !/(GHS|DHS)/i.test(d.state||'');}).map(function(d){return `<option value="${esc(d.slot)}">${esc(d.slot)} · ${esc(d.model||'-')}</option>`;}).join(''):''}</select>
+        <button class="btn-mini" onclick="raidHotspare(null,'add')">全局热备</button>
+        <button class="btn-mini" onclick="raidHotspare(null,'add_dedicated')">专用热备</button>
+      </div>
+      <div class="section-title" style="margin-top:14px">CopyBack 自动换盘</div>
+      <div class="cb-block">
+        <div class="cb-row">
+          <span>控制器自动 CopyBack（某盘故障且有热备盘时，自动把数据复制到热备盘完成换盘）</span>
+          <label class="switch-row"><input type="checkbox" id="cb-enable" ${cb==='enabled'?'checked':''} onchange="saveCopyBack()"/> ${cb==='enabled'?'已开启':'已关闭'}</label>
+        </div>
+        <div class="cb-status">
+          ${cbActiveList.length ? cbActiveList.map(function(s){return `<div class="cb-active">盘 ${esc(s)} 正在执行 CopyBack 自动换盘…</div>`;}).join('') : (cbNeeded.length ? cbNeeded.map(function(d){return `<div class="cb-needed">盘 ${esc(d.slot)} 已故障，待自动 CopyBack 换盘到热备盘</div>`;}).join('') : '<div style="font-size:12px;color:var(--muted)">当前无故障盘需要换盘。</div>')}
+        </div>
+        <div class="cb-add">
+          <span>手动对故障盘触发 CopyBack：</span>
+          <select id="cb-slot"><option value="">选择故障盘</option>${cbFailedDrives.map(function(d){return `<option value="${esc(d.slot)}">${esc(d.slot)} · ${esc(d.model||'-')}</option>`;}).join('')}</select>
+          <button class="btn-mini" onclick="raidCopyBack(null,'start')">手动触发</button>
+        </div>
+        <div style="margin-top:4px;font-size:12px;color:var(--muted)">CopyBack 须已配置热备盘。建议保持「自动 CopyBack」开启：某盘故障时阵列卡会自动换盘，无需人工干预；也可在故障发生时点「手动触发」。</div>
+      </div>
       `:''}
     </div>`:''}
   `;
@@ -3943,6 +4051,16 @@ function renderAutomation(){
         <div class="auto-field"><label>接收地址</label><input type="text" id="au-em-to"></div>
       </div>
     </div>
+    <div class="chan" style="grid-column:1/-1">
+      <h4><svg class="ico" viewBox="0 0 24 24"><use href="#i-bell"/></svg> 按严重级别选通知渠道</h4>
+      <div class="lvl-matrix">
+        <div class="lvl-row lvl-head"><span>级别</span><span>面板日志</span><span>Telegram</span><span>Bark</span><span>邮件</span></div>
+        <div class="lvl-row"><span>严重 (danger)</span><input type="checkbox" id="lc-danger-system"><input type="checkbox" id="lc-danger-telegram"><input type="checkbox" id="lc-danger-bark"><input type="checkbox" id="lc-danger-email"></div>
+        <div class="lvl-row"><span>警告 (warn)</span><input type="checkbox" id="lc-warn-system"><input type="checkbox" id="lc-warn-telegram"><input type="checkbox" id="lc-warn-bark"><input type="checkbox" id="lc-warn-email"></div>
+        <div class="lvl-row"><span>信息 (info)</span><input type="checkbox" id="lc-info-system"><input type="checkbox" id="lc-info-telegram"><input type="checkbox" id="lc-info-bark"><input type="checkbox" id="lc-info-email"></div>
+      </div>
+      <div style="font-size:12px;color:var(--muted);margin-top:6px">严重事件默认通知所有渠道；可单独关闭某级别的某个渠道（面板日志始终记录，便于事后排查）。</div>
+    </div>
     <div class="auto-actions">
       <button class="btn-mini" onclick="saveAutomationConfig()"><svg class="ico" viewBox="0 0 24 24"><use href="#i-save"/></svg> 保存配置</button>
       <button class="btn-mini" onclick="testNotify()"><svg class="ico" viewBox="0 0 24 24"><use href="#i-upload"/></svg> 发送测试通知</button>
@@ -3990,7 +4108,14 @@ function fillAutomationConfig(c){
   el=document.getElementById('au-em-port'); if(el) el.value=(em.smtp_port!=null?em.smtp_port:465);
   el=document.getElementById('au-em-user'); if(el) el.value=(em.user||'');
   el=document.getElementById('au-em-pass'); if(el) el.value=(em.pass||'');
-  el=document.getElementById('au-em-to'); if(el) el.value=(em.to||'');
+        el=document.getElementById('au-em-to'); if(el) el.value=(em.to||'');
+  var lc=c.level_channels||{};
+  ['danger','warn','info'].forEach(function(lvl){
+    ['system','telegram','bark','email'].forEach(function(ch){
+      var el2=document.getElementById('lc-'+lvl+'-'+ch);
+      if(el2) el2.checked = ((lc[lvl]||[]).indexOf(ch)>=0);
+    });
+  });
 }
 function renderAutomationAlerts(alerts){
   var ul=document.getElementById('auto-alert-list');
@@ -4109,7 +4234,16 @@ async function saveAutomationConfig(){
       telegram:{enabled:g('au-tg-en'), bot_token:v('au-tg-token'), chat_id:v('au-tg-chat')},
       bark:{enabled:g('au-bark-en'), url:v('au-bark-url')},
       email:{enabled:g('au-em-en'), smtp_host:v('au-em-host'), smtp_port:parseInt(v('au-em-port'))||465, user:v('au-em-user'), pass:v('au-em-pass'), to:v('au-em-to')}
-    }
+    },
+    level_channels:(function(){
+      var lc={};
+      ['danger','warn','info'].forEach(function(lvl){
+        lc[lvl]=['system','telegram','bark','email'].filter(function(ch){
+          var el=document.getElementById('lc-'+lvl+'-'+ch); return el&&el.checked;
+        });
+      });
+      return lc;
+    })()
   };
   if(st){ st.textContent='保存中…'; st.className='dt-save-state'; }
   try{
