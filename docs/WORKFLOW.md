@@ -4,7 +4,7 @@
 > 覆盖：开发/发版工作流、前端架构约定、功能实现方式、数据采集架构、**踩坑与修复记录**、开发守则。
 > 目的：改代码前先查文档，避免"修一个 bug 冒一个 bug"。**动手前先看 §5 踩坑记录 与 §6 开发守则。**
 
-基于 `v2.0.1` 基线。所有修改一律从干净基线出发，绝不用旧包 / 旧图标当母版。
+基于 `v2.0.8` 基线（HEAD 即最新发版 commit）。所有修改一律从干净基线出发，绝不用旧包 / 旧图标当母版。
 
 ## Step 0 · 明确需求（先想清楚再动手）
 
@@ -25,8 +25,8 @@
 
 ```bash
 git fetch
-git checkout v2.0.1        # 或 git pull 到最新 main（HEAD 即 v2.0.1 发版 commit）
-grep '^version' manifest   # 确认 version = 2.0.1
+git checkout v2.0.8        # 或 git pull 到最新 main（HEAD 即 v2.0.8 发版 commit）
+grep '^version' manifest   # 确认 version = 2.0.8
 ```
 
 ## Step 2 · 编码 / 改图标
@@ -184,7 +184,7 @@ grep '^version' manifest   # 确认 version = 2.0.1
 | P14 | Docker 页占用率「不会变」（改完 P13 后显示 25.3% 但长时间纹丝不动） | `get_docker()` 套了 `@_ttl_cache(60)`（函数级缓存，按参数哈希；无参→一份全局缓存锁 60 秒），而前端自动刷新仅 30s 一次。后端 60s 才重算 → 前端拉到的永远是 60s 前的旧值 | 把 `@_ttl_cache(60)` 改为 `@_ttl_cache(5)`。`docker stats --no-stream` 是轻量命令，5s 一次毫无压力；前端 30s 拉一次时每次都能拿到真实新快照，占用率随负载正常波动 |
 | P15 | Docker 页仍嫌慢（改完 P14 后用户仍觉得刷新不够跟手） | 全站自动刷新节流 30s 是设计权衡（省资源），即便后端已 5s 重算，前端 30s 才来拉一次 → Docker 占用率视觉上跳得慢 | 给 Docker tab 单独起 **8 秒专属定时器**：新增 `dockerTimer`/`startDockerTimer()`/`stopDockerTimer()`，进 docker tab 调 `startDockerTimer()`、离开调 `stopDockerTimer()`（在 `switchTab` 里），并跟随自动刷新开关（`setAutoRefresh` 关闭或切到非 docker 时停）。定时器体即 `refreshPanel('docker')`，8s 一次。离开 Docker 后不影响全站 30s 节流 |
 | P16 | 系统资源页缺显卡卡片（显卡只在「硬件配置检测」页显示） | 后端 `get_system()` 早已采集 `d["gpus"]`（NVIDIA/AMD/核显全覆盖，app.py ~3898–4400），且 `/api/all` 的 `system` 段已带 `gpus` → `DATA.system.gpus` 系统资源页**本来就有**；只是前端 `renderSystem()` 没渲染 | 在 `renderSystem()` 内新增 `gpuCardSys`（字段逻辑与「硬件配置检测」页显卡卡**逐行一致**，复用 `gpuRow`/`tempColor`/`pcieLocText`），作为 `sys-grid` 左列第 4 行卡片；CSS `.sys-grid > .sys-area-gpu{grid-column:1;grid-row:4}`，并把 `.sys-area-disk` 跨行由 `1/span 3` 改为 `1/span 4` 给 GPU 让位。纯前端改动，后端零改动。GPU 温度随面板刷新（30s）更新，未进 1s 增量刷新（够用） |
-| P17 | 系统资源页 GPU 卡利用率恒为 null / 不随负载变化 | Intel 核显（UHD 610）无 `/sys/class/drm/card*/device/gt_*` 频率文件，旧 `_intel_igpu_util()` 走 `intel_gpu_top -J -n 1` 失败（fnOS 自带 `intel_gpu_top` 不支持 `-n`），退化为 sysfs 频率也取不到 → util 恒 null | 改为 `Popen` 跑 `intel_gpu_top -J -s 200 -o -` 读第一个 JSON 对象；解析 `engines` 得 `busy`（均值）/`render`（Render/3D）/`video`（Video），并补频率/功耗/rc6。系统资源页 GPU 卡对齐飞牛 GPU Tab：大字号利用率 + 利用率折线 + 显存进度条 + GPU/显存/Video/Render 四指标卡。核显显存用 `/proc/meminfo` 近似共享内存 |
+| P17 | 系统资源页 GPU 卡利用率恒为 null / 不随负载变化 | Intel 核显（UHD 610）无 `/sys/class/drm/card*/device/gt_*` 频率文件，旧 `_intel_igpu_util()` 走 `intel_gpu_top -J -n 1` 失败（fnOS 自带 `intel_gpu_top` 不支持 `-n`），退化为 sysfs 频率也取不到 → util 恒 null | 改为 `Popen` 跑 `intel_gpu_top -J -s 200 -o -` 读第一个 JSON 对象；解析 `engines` 得 `busy`（均值）/`render`（Render/3D）/`video`（Video），并补频率/功耗/rc6。系统资源页 GPU 卡最终落地 = 温度 + 显存占用 两条合并折线（精简卡，避免多指标拥挤，由 `gpuCardSys` 渲染）；利用率 / Video / Render 等更详细指标是飞牛系统自带的「资源管理器」功能，nasdash 未复刻这部分。核显显存用 `/proc/meminfo` 近似共享内存 |
 
 ### 发版 / 打包类（历史已踩，勿再踩）
 
@@ -289,21 +289,43 @@ ps -o user= -p $(pgrep -f com.dashboard.nasdash)   # 运行用户为 root
 发布资产必须是**带向导完整版**（`bash build.sh --with-wizard` 产物，fpk 根含 `wizard/`），绝不能用无向导测试版当发布物。
 
 ```bash
+# 0) 发版前先确认版本号三处一致（manifest / 使用手册头部 / 代码）
+grep '^version' manifest            # 确认 version = X.Y.Z
+head -5 docs/使用手册.md            # 头部声明须为 vX.Y.Z
+
 # 1) 构建带向导发布版，并复制成发布资产名
 bash build.sh --with-wizard
 cp nasdash.fpk nasdash-release-vX.Y.Z.fpk
 
 # 2) 提交源码 + 发布说明（fpk 本身是 Release 资产、不入库）
-git add README.md app.py "docs/使用手册.md" manifest templates/index.html release_notes_vX.Y.Z.md
+git add README.md app.py "docs/使用手册.md" manifest templates/index.html
 git commit -m "release: vX.Y.Z"
-git tag vX.Y.Z && git push origin main && git push origin vX.Y.Z
 
-# 3) 建 Release（发布说明作 -F，fpk 作位置参数放末尾）
-gh release create vX.Y.Z -F release_notes_vX.Y.Z.md -t "nasdash vX.Y.Z" --latest nasdash-release-vX.Y.Z.fpk
+# 3) 推临时分支 → 开 PR → 等 CI(build.yml) 绿 → rebase 合并到 main
+#    沙箱 SSH remote 无 key，且本机未装 gh，统一走 HTTPS + 钥匙串 PAT + GitHub API
+PAT=$(security find-internet-password -s github.com -a han951meng -w)
+REMOTE="https://x-access-token:${PAT}@github.com/han951meng/nasdash.git"
+git push "$REMOTE" "main:refs/heads/release/vX.Y.Z"   # 先 git ls-remote 查重名
+# 用 API 开 PR（base=main, head=release/vX.Y.Z），轮询 check-runs 直到 build.yml 全绿
+# 全绿后 API PUT /pulls/<n>/merge（merge_method=rebase），GitHub 自动 push main 并关闭 PR
+
+# 4) 打 tag 并推送（打在合并后的 main head）
+git tag -f vX.Y.Z
+git push "$REMOTE" vX.Y.Z
+
+# 5) 建 Release 并上传 fpk 资产（走 API，不用 gh）
+#    POST /repos/.../releases 创建（用户视角表格说明）
+#    POST uploads.github.com/repos/.../releases/<id>/assets?name=nasdash.fpk
+#    ⚠ 上传须 --http1.1 + uploads.github.com 域名（HTTP/2 报 92）
+#    ⚠ 创建 Release 的 201 响应 JSON 可能含控制字符，本地 json 解析会误报失败；
+#      务必先 GET /releases 确认是否已存在，再补传资产，避免重复建 Release
+
+# 6) 删除临时分支（本地只用 refspec 推送，删远程即可）
+git push "$REMOTE" --delete release/vX.Y.Z
 ```
 
-- 发版后改了任何会进包的内容（手册/app.py/模板/配置），必须**重建带向导版 → `gh release delete-asset` 旧资产 → `gh release upload` 新资产**，并比对 GitHub 资产字节数 = 本地 fpk 字节数确认无误。
-- 发布说明（`release_notes_*.md`）与操作手册面向最终用户，**禁止出现 build.sh / trim-cli / 无向导版 / 带向导版 / wizard / fnos-fpk-dev.md 等内部部署话术**。
+- 发版后改了任何会进包的内容（手册/app.py/模板/配置），必须**重建带向导版 → 用 API 删除旧资产（`DELETE /releases/assets/<asset_id>`）→ 重新上传新资产**，并比对 GitHub 资产字节数 = 本地 fpk 字节数确认无误（下载大文件在本环境会被沙箱杀进程，用大小比对代替下载校验）。
+- 发布说明与操作手册面向最终用户，**禁止出现 build.sh / trim-cli / 无向导版 / 带向导版 / wizard / fnos-fpk-dev.md 等内部部署话术**。
 
 ## 附：回滚预案
 
@@ -326,3 +348,5 @@ git checkout main && git merge fix/xxx && git tag vX.Y.Z
 | v2.0.4 | CPU 缓存修复 / 负载两位小数 / 阵列卡温度入温度 tab / 网络卡 5s 刷新 |
 | v2.0.5 | 全局告警去硬盘 SMART / 温度 chip 分类对齐 / 移除系统风扇服务状态框 |
 | v2.0.6（未发布） | 风扇页防闪烁（F1/F2）/ 统一温度采集（T1-T6）/ 硬盘+系统统一缓存（C1-C4）/ CPU 温度平滑取整（T3/T4） |
+| v2.0.7 | 系统资源页网络卡重做（P10-P12：多网口 Tab 取实时速率源 / 型号模板内生成 / flex 速率行）/ 休眠盘 SMART 不再误标红 / hero 网络格抖动修复 / 图表精简为飞牛极简风 / 硬盘自检历史与进度精度 |
+| v2.0.8 | 统一更新批（GPU 卡新增·温度+显存双线图；Docker 监控修复 P13-P15；CPU/内存/网络卡片精简；安装向导文案修正）+ 阵列卡增强全套 7 项（物理盘定位闪灯 / 一致性检查 / 告警分级+按级别选渠道 / 定时巡检 / SMART 错误 CopyBack 换盘 / 热备分配 / 缓存策略展示）；GPU 详细指标（利用率/Video/Render）为飞牛自带资源管理器，nasdash 未复刻 |
