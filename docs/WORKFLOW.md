@@ -331,14 +331,17 @@ git push "$REMOTE" --delete release/vX.Y.Z
 
 - 部署前留底：`cp nasdash.fpk /tmp/nasdash_v<上一版>.fpk`。
 - 出问题：新机 `uninstall → install-fpk /tmp/nasdash_v<上一版>.fpk --volume 1 → start`。
-- git 角度：每个发版 commit 即回滚点，`git checkout v1.7.8` 重建即可。
+- git 角度：每个发版 commit 即回滚点，可按对应版本 tag 重建：`git checkout vX.Y.Z`。
 
 ## 附：大改动用分支
 
 ```bash
-git checkout -b fix/xxx v1.7.8
+# 从最新 main 切功能/修复分支（不要从老 tag 起手）
+git checkout -b fix/xxx main
 # ... 开发验证 ...
-git checkout main && git merge fix/xxx && git tag vX.Y.Z
+# 推临时分支 → 开 PR → 等 CI(build.yml) 绿 → rebase 合并到 main（流程同 Step 8 第 3~4 步）
+git push "$REMOTE" "HEAD:refs/heads/fix/xxx"
+# 合并与打 tag 一律走 Step 8 的 PR + CI + rebase 流程，禁止本地直接 merge 回 main
 ```
 
 ## 版本演进速记（v2.0.x）
