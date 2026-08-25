@@ -324,6 +324,16 @@
   .gpu-detail .detail-body .kv:first-child{border-top:none}
   .disk-mini{display:flex;justify-content:space-between;padding:5px 0;font-size:13px;border-bottom:1px solid var(--divider);gap:10px}
   .disk-mini:last-child{border-bottom:none}
+  .disk-locate-row{display:flex;justify-content:space-between;align-items:center;padding:6px 0;font-size:13px;border-bottom:1px solid var(--divider);gap:10px}
+  .disk-locate-row:last-child{border-bottom:none}
+  .disk-locate-row span{display:flex;align-items:center;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .cc-list{display:flex;flex-direction:column;gap:8px;margin-top:4px}
+  .cc-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:13px}
+  .cc-name{font-weight:500;min-width:140px}
+  .cc-state{color:var(--muted);min-width:54px}
+  .cc-bar{flex:1;min-width:80px;height:8px;background:var(--divider);border-radius:4px;overflow:hidden}
+  .cc-bar-fill{display:block;height:100%;width:0;background:var(--blue);transition:width .4s}
+  .cc-pct{min-width:42px;text-align:right;color:var(--muted)}
   .disk-group-title{font-size:12px;font-weight:600;color:#6b7280;margin:10px 0 4px;padding-left:2px}
   .disk-group-title:first-child{margin-top:0}
 .b-sas{background:#1e40af;color:#fff}
@@ -1147,6 +1157,13 @@ function renderRaid(r, disks){
   }
   // MegaRAID (IR 模式)：现有展示逻辑
   let ct = r.controller_temp;
+  let vds = (r.virtual_drives||[]).map(v=>{
+    let wp = v.write_policy || '';
+    let wpBadge = wp === 'WriteBack' ? '<span class="badge b-ok" title="写回：先写阵列卡缓存再刷盘，性能更好（依赖 CacheVault/电池保护）">写回 (WB)</span>'
+                : (wp === 'WriteThrough' ? '<span class="badge b-info" title="直写：直接写盘，不经由阵列卡缓存，最稳">直写 (WT)</span>' : esc(v.cache_raw||'-'));
+    let nm = v.name ? (esc(v.name)+' · ') : '';
+    return `<tr><td>${nm}${v.dgvd}</td><td>${v.type||'-'}</td><td>${v.size||'-'}</td><td><span class="badge ${v.state==='Optl'?'b-ok':'b-warn'}">${v.state||'-'}</span></td><td>${v.access||'-'}</td><td>${wpBadge}</td></tr>`;
+  }).join('');
   let ctStr = ct != null ? ct + '°C' : 'N/A';
   let ctCol = tempColor(ct, 85);
   let drives = r.drives.map(d=>{ var fclean=diskFeatureClean(d.feature,d.dual_actuator); return `<tr><td>${d.slot}</td><td>${d.brand||'-'}</td><td>${d.model}${fclean?` <span class="badge b-info">${esc(fclean)}</span>`:''}</td><td>${d.intf} ${d.media}</td><td>${d.size}${d.size_note?`<br><span style="font-size:11px;color:var(--muted)">${d.size_note}</span>`:''}</td><td><span class="badge ${d.state==='JBOD'||d.state==='Onln'?'b-ok':'b-warn'}">${d.state}${d.sp==='D'?' · 已停转':''}</span></td><td>${d.rpm||'-'}</td></tr>`;}).join('');
@@ -1275,8 +1292,11 @@ function renderDisks(disks){
     }
     return `<div class="card disk-card ${cls}">
       <div class="disk-head">
-        <span class="name">${d.dev}</span>
-        ${healthBadge}
+        <div style="display:flex;align-items:center;gap:8px;min-width:0">
+          <span class="name">${d.dev}</span>
+          ${healthBadge}
+        </div>
+        ${(d.locate_supported && d.slot) ? `<button class="btn-mini" data-locate-slot="${esc(d.slot)}" onclick="raidLocate('${esc(d.slot)}')">定位闪灯</button>` : ''}
       </div>
       <div class="kv"><span class="k" title="${esc(smartTip('型号'))}">型号</span><span class="v">${d.model?(d.brand?d.brand+' ':'')+(d.vendor?d.vendor+' ':'')+d.model:'—'}</span></div>
       <div class="kv"><span class="k" title="${esc(smartTip('容量 / 类型'))}">容量 / 类型</span><span class="v">${d.size} · ${isNVMe?'NVMe':(isSAS?'SAS':'SATA')} · ${d.rota=='1'?'HDD':'SSD'}${diskFeatureClean(d.feature,d.dual_actuator)?' · '+esc(diskFeatureClean(d.feature,d.dual_actuator)):''}</span></div>
@@ -3418,6 +3438,67 @@ function renderStorage(st){
   <div class="card"><pre>${(st.topology||'').replace(/</g,'&lt;')}</pre></div>`;
 }
 
+// 物理盘定位（locate LED 闪烁）：仅当后端 locate_supported 时按钮才出现
+let _locateOn = {};
+function raidLocate(slot){
+  let on = !_locateOn[slot];
+  let action = on ? 'start' : 'stop';
+  let btn = null;
+  try { btn = document.querySelector('[data-locate-slot="'+slot+'"]'); } catch(e){}
+  if (btn) { btn.disabled = true; btn.textContent = '定位中…'; }
+  fetch('/api/raid/locate', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({slot: slot, action: action})})
+    .then(function(r){ return r.json(); })
+    .then(function(j){
+      if (btn) btn.disabled = false;
+      if (j.ok){
+        _locateOn[slot] = on;
+        if (btn) btn.textContent = on ? '停止闪灯' : '定位闪灯';
+      } else {
+        if (btn) btn.textContent = '定位闪灯';
+        alert('定位失败：' + (j.error || (j.out ? j.out.slice(0,120) : '未知')));
+      }
+    })
+    .catch(function(e){ if (btn){ btn.disabled=false; btn.textContent='定位闪灯'; } alert('请求失败：' + e.message); });
+}
+
+// 一致性检查（Consistency Check）：start/pause/resume/stop + 进度轮询
+let _ccTimers = {};
+function _ccId(vd){ return vd.replace('/', '_'); }
+function raidCC(vd, action){
+  if(action==='start' && !confirm('一致性检查会在后台扫描「'+vd+'」，期间磁盘负载升高，是否继续？')) return;
+  fetch('/api/raid/cc', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({vd: vd, action: action})})
+    .then(function(r){ return r.json(); })
+    .then(function(j){
+      if(!j.ok){ alert('操作失败：' + (j.error || '未知')); return; }
+      if(action==='start') startCCPoll(vd);
+      else if(action==='stop') stopCCPoll(vd);
+      else { startCCPoll(vd); } // pause/resume 继续轮询
+    })
+    .catch(function(e){ alert('请求失败：' + e.message); });
+}
+function startCCPoll(vd){
+  stopCCPoll(vd);
+  let id = _ccId(vd);
+  _ccTimers[vd] = setInterval(function(){
+    fetch('/api/raid/cc?vd=' + encodeURIComponent(vd), {credentials:'same-origin'})
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        if(!j.ok){ stopCCPoll(vd); return; }
+        let st = document.getElementById('cc-state-'+id);
+        let bar = document.getElementById('cc-bar-'+id);
+        let pct = document.getElementById('cc-pct-'+id);
+        if(st) st.textContent = ({idle:'空闲', running:'运行中', paused:'已暂停'}[j.state] || j.state);
+        if(bar) bar.style.width = (j.progress||0) + '%';
+        if(pct) pct.textContent = (j.progress!=null ? j.progress + '%' : '—');
+        if(j.state==='idle') stopCCPoll(vd);
+      })
+      .catch(function(){ stopCCPoll(vd); });
+  }, 3000);
+}
+function stopCCPoll(vd){ if(_ccTimers[vd]){ clearInterval(_ccTimers[vd]); _ccTimers[vd]=null; } }
+
 function renderDetect(D){
   if(!D) return '';
   let r = D.raid||{}, disks = D.disks||[], s = D.system||{}, dk = D.docker||{};
@@ -3657,6 +3738,14 @@ function renderDetect(D){
     ${memCard}
   </div>`;
   // 阵列卡 & 磁盘
+  let vdRows = '';
+  if(r.mode==='mega' && r.virtual_drives && r.virtual_drives.length){
+    vdRows = r.virtual_drives.map(v=>{
+      let wp = v.write_policy||'';
+      let wpBadge = wp==='WriteBack' ? '<span class="badge b-ok" title="写回：先写阵列卡缓存再刷盘，性能更好（依赖 CacheVault/电池保护）">写回 (WB)</span>' : (wp==='WriteThrough' ? '<span class="badge b-info" title="直写：直接写盘，不经由阵列卡缓存，最稳">直写 (WT)</span>' : esc(v.cache_raw||'-'));
+      return `<tr><td>${esc(v.name||'')}${v.dgvd?(' ('+esc(v.dgvd)+')'):''}</td><td>${esc(v.type||'-')}</td><td>${esc(v.size||'-')}</td><td>${esc(v.state||'-')}</td><td>${esc(v.access||'-')}</td><td>${wpBadge}</td></tr>`;
+    }).join('');
+  }
   let raidCardsHtml;
   if(r.mode==='mega'){
     raidCardsHtml = `
@@ -3682,7 +3771,32 @@ function renderDetect(D){
       <div class="kv"><span class="k" title="阵列卡的掉电保护缓存，断电也能保住数据">CacheVault</span><span class="v">${r.cachevault||'-'}</span></div>
       <div class="kv"><span class="k" title="直接透传给系统、不走阵列的硬盘数量">JBOD 盘数</span><span class="v">${r.jbod_count||0}</span></div>
       <div class="kv"><span class="k">物理盘</span><span class="v">${r.drives?r.drives.length:0} 块</span></div>
-    </div>`;
+    </div>
+    ${r.mode==='mega' && r.virtual_drives && r.virtual_drives.length?`<div class="card">
+      <h3>逻辑盘（Virtual Drive）· 缓存策略</h3>
+      <div style="overflow-x:auto"><table class="table"><thead><tr><th>名称/ID</th><th>级别</th><th>容量</th><th>状态</th><th>访问</th><th>缓存策略（写回/直写）</th></tr></thead><tbody>${vdRows}</tbody></table></div>
+      <div style="margin-top:8px;font-size:12px;color:var(--muted)">写回(WB)：数据先写入阵列卡缓存再异步刷盘，速度更快，但依赖 CacheVault/电池在断电时保护缓存；直写(WT)：直接写入硬盘，最稳妥但稍慢。</div>
+      ${r.virtual_drives&&r.virtual_drives.length?`
+      <div class="section-title" style="margin-top:14px">一致性检查（Consistency Check）</div>
+      <div class="cc-list">
+        ${r.virtual_drives.map(function(v){
+          let vid=v.dgvd||''; let id=vid.replace('/','_');
+          return `<div class="cc-row" data-vd="${esc(vid)}">
+            <span class="cc-name">${esc(v.name||'')} (${esc(vid)})</span>
+            <span class="cc-state" id="cc-state-${id}">空闲</span>
+            <span class="cc-bar"><span class="cc-bar-fill" id="cc-bar-${id}"></span></span>
+            <span class="cc-pct" id="cc-pct-${id}">—</span>
+            <button class="btn-mini" onclick="raidCC('${esc(vid)}','start')">开始</button>
+            <button class="btn-mini" onclick="raidCC('${esc(vid)}','pause')">暂停</button>
+            <button class="btn-mini" onclick="raidCC('${esc(vid)}','resume')">恢复</button>
+            <button class="btn-mini" onclick="raidCC('${esc(vid)}','stop')">停止</button>
+          </div>`;
+        }).join('')}
+      </div>
+      <div style="margin-top:6px;font-size:12px;color:var(--muted)">一致性检查会扫描逻辑盘校验数据一致性，期间磁盘负载升高；可随时暂停/恢复/停止。仅当存在硬件 RAID 逻辑盘时可用。</div>
+      `:''}
+    </div>`:''}
+  `;
   } else if(r.mode==='hba'){
     raidCardsHtml = `
     <div class="card">
@@ -3715,9 +3829,10 @@ function renderDetect(D){
     let featBadge = feat ? ` <span class="badge b-info">${esc(feat)}</span>` : '';
     let ch = d.channel||'';
     let chBadge = ch ? ` <span class="ch-tag" title="${esc(chTip(ch))}">${esc(ch)}</span>` : '';
+    let locateBtn = (d.locate_supported && d.slot) ? ` <button class="btn-mini" data-locate-slot="${esc(d.slot)}" onclick="raidLocate('${esc(d.slot)}')" title="让对应硬盘指示灯闪烁，便于在机箱里找到它">定位闪灯</button>` : '';
     return `<div class="disk-mini">
       <span>${typeBadge}${daBadge} ${d.dev} · ${d.brand?d.brand+' ':''}${d.vendor?d.vendor+' ':''}${d.model}${chBadge}${featBadge}</span>
-      <span><span style="color:${tempColor(d.temp,d.temp_trip||60)};font-weight:600">${d.temp!=null?d.temp+'°C':'N/A'}</span> · <span class="badge ${d.asleep?'b-muted':(d.health_ok?'b-ok':'b-bad')}">${d.asleep?'休眠':esc(d.health)}</span></span>
+      <span><span style="color:${tempColor(d.temp,d.temp_trip||60)};font-weight:600">${d.temp!=null?d.temp+'°C':'N/A'}</span> · <span class="badge ${d.asleep?'b-muted':(d.health_ok?'b-ok':'b-bad')}">${d.asleep?'休眠':esc(d.health)}</span>${locateBtn}</span>
     </div>`;
   };
   // 复用上方状态栏已声明的 sasDisks/sataDisks（同 filter 逻辑），避免 let 重复声明致 JS 解析崩溃

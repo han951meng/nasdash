@@ -2228,6 +2228,118 @@ def _parse_roc_temp(text):
     return int(m.group(1)) if m else None
 
 
+def _parse_vds_from_topology(out):
+    """从 storcli /c0 show 的 TOPOLOGY 表解析 Virtual Drive（逻辑盘）元信息。"""
+    vds = []
+    in_topo = False
+    for line in out.splitlines():
+        s = line.strip()
+        if 'DG/VD' in s and 'TYPE' in s and 'State' in s:
+            in_topo = True
+            continue
+        if not in_topo:
+            continue
+        if re.match(r'^-+$', s):
+            in_topo = False
+            continue
+        if not s:
+            continue
+        parts = s.split()
+        if len(parts) < 6 or not re.match(r'^\d+/\d+$', parts[0]):
+            continue
+        dgvd, vtype, state, access = parts[0], parts[1], parts[2], parts[3]
+        consist, cache_code = parts[4], parts[5]
+        cac = parts[6] if len(parts) > 6 else ''
+        scc = parts[7] if len(parts) > 7 else ''
+        rest = parts[8:]
+        size, name = '', ''
+        if rest:
+            if re.match(r'^[\d.]+$', rest[0]):
+                unit = rest[1] if len(rest) > 1 and re.match(r'^[TGMK]B?$', rest[1]) else ''
+                size = rest[0] + ((' ' + unit) if unit else '')
+                name = ' '.join(rest[2:]) if len(rest) > 2 else ''
+            else:
+                name = ' '.join(rest)
+        vds.append({
+            "dgvd": dgvd, "type": vtype, "state": state, "access": access,
+            "consist": consist, "cache_code": cache_code, "cac": cac, "scc": scc,
+            "size": size, "name": name,
+            "write_policy": "", "read_policy": "", "read_cache": "", "wb": None, "cache_raw": ""
+        })
+    return vds
+
+
+def _parse_vd_cache_policies(vd_out):
+    """从 storcli /c0/vall show 按 DG/VD 块解析每个 VD 的 Cache Policy 文本。"""
+    res = {}
+    if not vd_out:
+        return res
+    anchors = [(m.start(), m.group(1)) for m in re.finditer(r"DG/VD:\s*(\d+/\d+)", vd_out)]
+    if not anchors:
+        anchors = [(m.start(), m.group(1)) for m in re.finditer(r"Virtual Drive:\s*(\d+)", vd_out)]
+    for i, (pos, key) in enumerate(anchors):
+        end = anchors[i + 1][0] if i + 1 < len(anchors) else len(vd_out)
+        block = vd_out[pos:end]
+        cp = re.search(r"Default Cache Policy\s*:\s*(.+)", block)
+        res[key] = cp.group(1).strip() if cp else ""
+    return res
+
+
+@_ttl_cache(3600)
+def _probe_locate_support(rc_raw=""):
+    """只读判断阵列卡/背板是否支持物理盘定位（locate LED 闪烁）。
+
+    关键修正（v2.0.8）：早期版本误把 enclosure 行里出现的 "SGPIO" 字样当作
+    「背板支持定位」。但 SGPIO/SES 只是控制器/expander 固件声明的**协议能力**，
+    不代表机箱背板的 LED 真的接了定位信号线。实测 NAS-3 V2.5 被动背板：
+    enclosure 行 SIM=1、ProdID 占位为 "SGPIO"，storcli start locate 返回
+    Succeeded，但机箱盘位灯实际不闪（背板仅接 SATA 活动 LED）。
+
+    因此本函数收紧判据：
+      - 必须有 SES 带内管理接口（SIM 列 == 1）
+      - 且背板上报了**真实型号**（ProdID 非空、且不是 SGPIO/SES 这类协议占位名）
+    二者同时满足才认为「用户点了真能看见灯闪」，否则隐藏定位按钮，
+    避免给用户一个「点了没反应」的假功能。
+
+    本函数**绝不触发真实闪灯**。
+    """
+    if not rc_raw:
+        try:
+            rc_raw = sudo_cmd([STORCLI, "/c0", "show"], 30) or ""
+        except Exception:
+            return False
+    if not rc_raw:
+        return False
+    # 解析 Enclosure LIST 块：列序 EID State Slots PD PS Fans TSs Alms SIM Port# ProdID VendorSpecific
+    lines = rc_raw.splitlines()
+    in_list = False
+    for ln in lines:
+        s = ln.strip()
+        if "Enclosure LIST" in ln:
+            in_list = True
+            continue
+        if not in_list:
+            continue
+        if not s:
+            break  # Enclosure 块结束
+        if s.startswith("EID") or s.startswith("---"):
+            continue
+        if not s[0].isdigit():
+            continue
+        parts = ln.split()
+        if len(parts) < 10:
+            continue
+        try:
+            sim = parts[8]
+            prod = parts[10] if len(parts) > 10 else ""
+        except Exception:
+            continue
+        # 需要真有 SES 管理接口，且背板上报了真实型号（非 SGPIO/SES 这类协议占位）
+        if sim == "1" and prod and prod not in ("-", "SGPIO", "SES", "SES2", "VendorSpecific"):
+            return True
+    return False
+
+
 @_ttl_cache(60)
 def get_raid_card():
     data = {"ok": False, "mode": "none", "model": "未检测到",
@@ -2321,6 +2433,31 @@ def get_raid_card():
                     "brand": brand, "feature": feature,
                 })
         data["drives"] = drives
+        # ---- Virtual Drives（逻辑盘）+ 缓存策略 ----
+        try:
+            vds = _parse_vds_from_topology(out)
+            if vds:
+                vd_out = sudo_cmd([STORCLI, "/c0", "/vall", "show"], 30)
+                cp_map = _parse_vd_cache_policies(vd_out)
+                for v in vds:
+                    raw = cp_map.get(v["dgvd"], "")
+                    up = raw.upper()
+                    if up:
+                        v["cache_raw"] = raw
+                        v["write_policy"] = "WriteBack" if "WRITEBACK" in up else ("WriteThrough" if "WRITETHROUGH" in up else "")
+                        v["read_policy"] = "NoReadAhead" if "NOREADAHEAD" in up else ("ReadAhead" if "READAHEAD" in up else "")
+                        v["read_cache"] = "Cached" if "CACHED" in up else ("Direct" if "DIRECT" in up else "")
+                        v["wb"] = (v["write_policy"] == "WriteBack")
+                    else:
+                        code = (v.get("cache_code") or "").upper()
+                        v["cache_raw"] = code
+                        v["write_policy"] = "WriteBack" if len(code) > 1 and code[1] == "W" else ("WriteThrough" if len(code) > 1 and code[1] == "T" else "")
+                        v["wb"] = (v["write_policy"] == "WriteBack")
+            data["virtual_drives"] = vds
+        except Exception as e:
+            data["virtual_drives"] = []
+            _debug("parse VD cache failed: " + str(e))
+        data["locate_supported"] = _probe_locate_support(data.get("raw", ""))
         return data
     # ---- 非 MegaRAID：判断是否为 HBA 直通卡 / 纯 SATA ----
     controllers = detect_storage_controllers()
@@ -5589,11 +5726,15 @@ def _enrich_disk_channels(disks, raid):
             sn = (dv.get("sn") or "").strip().upper()
             if sn:
                 raid_sn[sn] = dv.get("slot", "")
+    locate_ok = bool(raid.get("locate_supported")) if raid else False
     for d in disks:
         sn = (d.get("serial") or "").strip().upper()
         if sn and sn in raid_sn:
             d["channel"] = f"阵列卡通道 c0:{raid_sn[sn]}"
             d["channel_type"] = "raid"
+            # 把阵列卡 slot 与定位支持状态挂到盘上，供前端「物理硬盘信息」卡直接显示定位按钮
+            d["slot"] = raid_sn[sn]
+            d["locate_supported"] = locate_ok
         else:
             t = (d.get("type") or "").lower()
             if t == "nvme":
@@ -5729,6 +5870,93 @@ def api_raid():
                         "time": _panel_time(), "elapsed": round(time.time() - t0, 2)})
     except Exception as e:
         return jsonify({"error": str(e), "time": _panel_time()})
+
+@app.route("/api/raid/locate", methods=["POST"])
+def api_raid_locate():
+    """物理盘定位（locate LED 闪烁）。仅当控制器/背板支持时可用（locate_supported）。"""
+    try:
+        body = request.get_json(force=True, silent=True) or {}
+        slot = str(body.get("slot", "")).strip()
+        action = str(body.get("action", "")).strip().lower()
+        if not re.match(r"^\d+:\d+$", slot):
+            return jsonify({"ok": False, "error": "invalid slot"})
+        if action not in ("start", "stop"):
+            return jsonify({"ok": False, "error": "invalid action"})
+        rc = get_raid_card()
+        if not rc.get("locate_supported"):
+            return jsonify({"ok": False, "error": "本机阵列卡/背板不支持定位闪灯"})
+        valid = {d.get("slot") for d in (rc.get("drives") or [])}
+        if slot not in valid:
+            return jsonify({"ok": False, "error": "slot 不在阵列卡接管盘列表中"})
+        e, s = slot.split(":")
+        verb = "start" if action == "start" else "stop"
+        out = sudo_cmd([STORCLI, "/c0", "/e" + e, "/s" + s, verb, "locate"], 20)
+        ok = bool(out and "Succeeded" in out)
+        return jsonify({"ok": ok, "action": action, "slot": slot, "out": out})
+    except Exception as ex:
+        return jsonify({"ok": False, "error": str(ex)})
+
+def _raid_cc_vnum(vd_arg, vds):
+    """把前端传入的 vd 参数（纯数字或 dgvd 如 0/0）解析为 storcli 可用的 vX 序号，并校验存在。"""
+    if vd_arg is None:
+        return None
+    vd_arg = str(vd_arg).strip()
+    vnum = vd_arg.split("/")[1] if re.match(r"^\d+/\d+$", vd_arg) else vd_arg
+    if not re.match(r"^\d+$", vnum):
+        return None
+    if 0 <= int(vnum) < len(vds):
+        return vnum
+    valid = set()
+    for v in vds:
+        dgvd = v.get("dgvd", "")
+        if re.match(r"^\d+/\d+$", dgvd):
+            valid.add(dgvd.split("/")[1])
+    return vnum if vnum in valid else None
+
+@app.route("/api/raid/cc", methods=["GET", "POST"])
+def api_raid_cc():
+    """阵列卡一致性检查（Consistency Check）。
+
+    仅对存在的硬件 RAID 逻辑盘（VD）执行；本机为 JBOD 直通时无 VD，接口直接返回明确错误（不崩溃）。
+    - GET  ?vd=0         ：查询该 VD 的 CC 进度与状态（idle/running/paused + 百分比）
+    - POST {vd, action}  ：action = start|pause|resume|stop（stop 后不可恢复）
+    CC 为只读扫描（不改数据），但会抬升磁盘负载，前端在开始前需二次确认。
+    """
+    try:
+        rc = get_raid_card()
+        vds = rc.get("virtual_drives") or []
+        if not vds:
+            return jsonify({"ok": False,
+                            "error": "本机无硬件 RAID 逻辑盘（VD），无法执行一致性检查（当前为 JBOD 直通模式，阵列由系统层 mdadm 管理）"})
+        if request.method == "GET":
+            vnum = _raid_cc_vnum(request.args.get("vd"), vds)
+            if vnum is None:
+                return jsonify({"ok": False, "error": "invalid vd"})
+            out = sudo_cmd([STORCLI, "/c0", "/v" + vnum, "show", "cc"], 15) or ""
+            prog = re.search(r"Progress\s*=?\s*(\d+)%", out)
+            pct = int(prog.group(1)) if prog else None
+            state = "idle"
+            if re.search(r"running|In progress|Active", out, re.I):
+                state = "running"
+            elif re.search(r"paused|suspended", out, re.I):
+                state = "paused"
+            return jsonify({"ok": True, "vd": vnum, "state": state, "progress": pct, "raw": out})
+        body = request.get_json(force=True, silent=True) or {}
+        vnum = _raid_cc_vnum(body.get("vd"), vds)
+        if vnum is None:
+            return jsonify({"ok": False, "error": "invalid vd"})
+        action = str(body.get("action", "")).strip().lower()
+        if action not in ("start", "pause", "resume", "stop"):
+            return jsonify({"ok": False, "error": "invalid action (start|pause|resume|stop)"})
+        force = bool(body.get("force", False))
+        cmd = [STORCLI, "/c0", "/v" + vnum, action, "cc"]
+        if action == "start" and force:
+            cmd.append("force")
+        out = sudo_cmd(cmd, 30) or ""
+        ok = ("Succeeded" in out) or ("Status = Success" in out)
+        return jsonify({"ok": ok, "vd": vnum, "action": action, "out": out})
+    except Exception as ex:
+        return jsonify({"ok": False, "error": str(ex)})
 
 @app.route("/api/disks")
 def api_disks():
