@@ -2433,6 +2433,34 @@ def get_raid_card():
                     "brand": brand, "feature": feature,
                 })
         data["drives"] = drives
+        # 热备盘（全局 GHS / 专用 DHS）
+        hot = []
+        for d in drives:
+            st = (d.get("state") or "").upper()
+            if "GHS" in st:
+                d2 = dict(d); d2["hs_type"] = "global"; hot.append(d2)
+            elif "DHS" in st:
+                d2 = dict(d); d2["hs_type"] = "dedicated"; hot.append(d2)
+        data["hotspares"] = hot
+        # ---- CopyBack 自动换盘状态 ----
+        # Auto CopyBack 是阵列卡固件能力：某盘故障且已配热备盘时，自动把数据复制到热备盘完成换盘。
+        # 面板负责「监控状态 + 开关自动 CopyBack + 手动触发」，真正换盘由阵列卡固件执行。
+        cb_out = sudo_cmd([STORCLI, "/c0", "show", "copyback"], 10)
+        if cb_out and "Auto CopyBack" in cb_out:
+            m = re.search(r"Auto\s+CopyBack\s*:\s*(\w+)", cb_out)
+            data["auto_copyback"] = m.group(1).strip().lower() if m else "unknown"
+        else:
+            data["auto_copyback"] = "unknown"
+        for d in drives:
+            st = (d.get("state") or "").upper()
+            d["copyback_active"] = "COPYBACK" in st
+            d["failed"] = ("FAILED" in st) or ("RBAD" in st)
+        # 待 CopyBack 换盘的盘：已故障 + 存在热备盘 + 已开启自动 CopyBack
+        data["copyback_needed"] = [
+            {"slot": d["slot"], "model": d.get("model", "")}
+            for d in drives
+            if d.get("failed") and data["hotspares"] and data["auto_copyback"] == "enabled"
+        ]
         # ---- Virtual Drives（逻辑盘）+ 缓存策略 ----
         try:
             vds = _parse_vds_from_topology(out)
@@ -5201,7 +5229,7 @@ def metrics_collect_loop():
     """daemon 线程：每 ~1s 采样一次，计算速率/功率/CPU 使用率并写入 _metrics_cur。
     采样窗口固定（net/disk 用真实间隔 dt，CPU 用相邻两次迭代差），不随请求并发抖动，
     因此 /api/metrics 高频拉取也不会把 CPU 窗口压成毫秒级而出现瞬时 100%/50% 尖刺。"""
-    global _CPU_POWER_EMA
+    global _CPU_POWER_EMA, _cc_sched_last_check
     while True:
         try:
             t_now = time.time()
@@ -5211,6 +5239,10 @@ def metrics_collect_loop():
             # 历史趋势：每 30s 聚合写一行 SQLite（免维护，超 30 天自动清理）
             if now - _db_last_write >= 30:
                 _write_history_sample()
+            # 一致性检查定时调度：每 60s 在后台线程检查是否到点触发 CC（无 VD 时静默跳过）
+            if now - _cc_sched_last_check >= 60:
+                _cc_sched_last_check = now
+                threading.Thread(target=_check_cc_schedule, daemon=True).start()
             # 网络吞吐
             net_now = _read_net_bytes()
             net_out = []
@@ -5867,6 +5899,7 @@ def api_raid():
     t0 = time.time()
     try:
         return jsonify({"raid": get_raid_card(), "disks": get_disks(),
+                        "cc_schedule": _load_cc_schedule(),
                         "time": _panel_time(), "elapsed": round(time.time() - t0, 2)})
     except Exception as e:
         return jsonify({"error": str(e), "time": _panel_time()})
@@ -5957,6 +5990,192 @@ def api_raid_cc():
         return jsonify({"ok": ok, "vd": vnum, "action": action, "out": out})
     except Exception as ex:
         return jsonify({"ok": False, "error": str(ex)})
+
+
+# ===================== 一致性检查定时调度 =====================
+import threading  # 后台线程触发 CC（模块级重复导入无害）
+
+
+_CC_SCHEDULE_FILE = os.path.join(_config_dir(), "cc_schedule.json")
+_cc_sched_last_check = 0
+
+
+def _load_cc_schedule():
+    """读取一致性检查定时调度配置（JSON），缺失字段补默认值。"""
+    try:
+        with open(_CC_SCHEDULE_FILE) as f:
+            d = json.load(f)
+        if not isinstance(d, dict):
+            d = {}
+    except Exception:
+        d = {}
+    d.setdefault("enabled", False)
+    d.setdefault("period", "daily")      # daily | weekly
+    d.setdefault("hour", 3)
+    d.setdefault("minute", 0)
+    d.setdefault("weekday", 0)           # 0=周一 … 6=周日（仅 weekly 用）
+    d.setdefault("vd", "all")            # all | 特定 dgvd 如 "0/0"
+    d.setdefault("last_run", None)       # 上次触发的周期键，防重复触发
+    return d
+
+
+def _save_cc_schedule(cfg):
+    try:
+        with open(_CC_SCHEDULE_FILE, "w") as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception:
+        return False
+
+
+def _check_cc_schedule():
+    """由 metrics_collect_loop 周期调用：到点则对硬件逻辑盘触发一致性检查。
+    无 VD（如 JBOD 直通）或配置未启用时静默返回，绝不抛异常。"""
+    try:
+        cfg = _load_cc_schedule()
+        if not cfg.get("enabled"):
+            return
+        now = time.localtime()
+        if int(cfg.get("hour", 3)) != now.tm_hour or int(cfg.get("minute", 0)) != now.tm_min:
+            return
+        if cfg.get("period") == "weekly" and int(cfg.get("weekday", 0)) != now.tm_wday:
+            return
+        cycle_key = time.strftime("%Y-W%W") if cfg.get("period") == "weekly" else time.strftime("%Y-%m-%d")
+        if cfg.get("last_run") == cycle_key:
+            return  # 本周期已触发
+        try:
+            rc = get_raid_card()
+            vds = rc.get("virtual_drives") or []
+        except Exception:
+            vds = []
+        if not vds:
+            # 无 VD（JBOD 直通等）：更新 last_run 避免反复尝试，不报错
+            cfg["last_run"] = cycle_key
+            _save_cc_schedule(cfg)
+            return
+        targets = vds
+        sel = cfg.get("vd")
+        if sel not in ("all", None, ""):
+            targets = [v for v in vds if v.get("dgvd") == sel]
+        for v in targets:
+            vnum = _raid_cc_vnum(v.get("dgvd") or "0/0", vds)
+            if vnum is None:
+                continue
+            try:
+                sudo_cmd([STORCLI, "/c0", "/v" + vnum, "start", "cc"], 30)
+            except Exception:
+                pass
+        cfg["last_run"] = cycle_key
+        _save_cc_schedule(cfg)
+    except Exception:
+        pass
+
+
+@app.route("/api/raid/cc/schedule", methods=["GET", "POST"])
+def api_raid_cc_schedule():
+    """一致性检查定时调度配置。
+    GET：返回当前配置；POST {enabled, period, hour, minute, weekday, vd}：保存。
+    配置本身与是否存在 VD 无关（保存合法）；真正触发由 _check_cc_schedule 按时执行，
+    无 VD 时静默跳过。前端仅在存在硬件逻辑盘时展示该配置 UI。"""
+    if request.method == "GET":
+        return jsonify(_load_cc_schedule())
+    try:
+        body = request.get_json(force=True, silent=True) or {}
+        cfg = _load_cc_schedule()
+        if "enabled" in body:
+            cfg["enabled"] = bool(body["enabled"])
+        if "period" in body:
+            cfg["period"] = "weekly" if str(body["period"]) == "weekly" else "daily"
+        if "hour" in body:
+            cfg["hour"] = max(0, min(23, int(body["hour"])))
+        if "minute" in body:
+            cfg["minute"] = max(0, min(59, int(body["minute"])))
+        if "weekday" in body:
+            cfg["weekday"] = max(0, min(6, int(body["weekday"])))
+        if "vd" in body:
+            cfg["vd"] = body["vd"]
+        _save_cc_schedule(cfg)
+        return jsonify({"ok": True, "config": cfg})
+    except Exception as ex:
+        return jsonify({"ok": False, "error": str(ex)})
+
+
+@app.route("/api/raid/hotspare", methods=["GET", "POST"])
+def api_raid_hotspare():
+    """阵列卡热备盘分配（全局 GHS / 专用 DHS）。
+    仅对存在的硬件 RAID 环境有效；本机 JBOD 直通无 VD 时接口返回明确错误（不崩溃）。
+    - GET            ：返回当前热备盘列表（含类型 global/dedicated）
+    - POST {slot, action}：action = add(全局) | add_dedicated(专用) | remove
+    """
+    try:
+        rc = get_raid_card()
+        if rc.get("mode") != "mega":
+            return jsonify({"ok": False, "error": "当前非 MegaRAID 模式，无法管理热备盘"})
+        if request.method == "GET":
+            return jsonify({"ok": True, "hotspares": rc.get("hotspares", [])})
+        body = request.get_json(force=True, silent=True) or {}
+        slot = str(body.get("slot", "")).strip()
+        m = re.match(r"^(\d+):(\d+)$", slot)
+        if not m:
+            return jsonify({"ok": False, "error": "invalid slot (需形如 252:0)"})
+        e, s = m.group(1), m.group(2)
+        action = str(body.get("action", "")).strip().lower()
+        if action not in ("add", "add_dedicated", "remove"):
+            return jsonify({"ok": False, "error": "invalid action (add|add_dedicated|remove)"})
+        if action == "remove":
+            cmd = [STORCLI, "/c0", "/e" + e, "/s" + s, "delete", "hotsparedrive"]
+        else:
+            cmd = [STORCLI, "/c0", "/e" + e, "/s" + s, "add", "hotsparedrive"]
+            if action == "add_dedicated":
+                cmd.append("dedicated")
+        out = sudo_cmd(cmd, 30) or ""
+        ok = ("Succeeded" in out) or ("Status = Success" in out)
+        return jsonify({"ok": ok, "action": action, "slot": slot, "out": out})
+    except Exception as ex:
+        return jsonify({"ok": False, "error": str(ex)})
+
+
+@app.route("/api/raid/copyback", methods=["GET", "POST"])
+def api_raid_copyback():
+    """阵列卡 CopyBack 自动换盘（监控 + 触发）。
+    仅对硬件 RAID（存在 VD）环境有效；本机 JBOD 直通无 VD 时接口返回明确错误（不崩溃）。
+    - GET                  ：返回自动 CopyBack 开关状态 + 当前正在/待换盘的盘
+    - POST {action}        ：action = enable | disable（开/关控制器自动 CopyBack）
+    - POST {slot, action}  ：action = start（手动对故障盘触发 CopyBack，须先配热备盘）
+    """
+    try:
+        rc = get_raid_card()
+        if rc.get("mode") != "mega":
+            return jsonify({"ok": False, "error": "当前非 MegaRAID 模式，无 CopyBack 能力"})
+        if not rc.get("virtual_drives"):
+            return jsonify({"ok": False, "error": "当前无硬件 RAID 逻辑盘（VD），CopyBack 仅在已配置热备盘的阵列环境下生效"})
+        if request.method == "GET":
+            return jsonify({
+                "ok": True,
+                "auto_copyback": rc.get("auto_copyback", "unknown"),
+                "copyback_active": [d["slot"] for d in rc.get("drives", []) if d.get("copyback_active")],
+                "copyback_needed": rc.get("copyback_needed", []),
+            })
+        body = request.get_json(force=True, silent=True) or {}
+        action = str(body.get("action", "")).strip().lower()
+        if action in ("enable", "disable"):
+            val = "on" if action == "enable" else "off"
+            out = sudo_cmd([STORCLI, "/c0", "set", "copyback=" + val], 30) or ""
+            ok = ("Succeeded" in out) or ("Status = Success" in out)
+            return jsonify({"ok": ok, "action": action, "auto_copyback": val, "out": out})
+        if action == "start":
+            slot = str(body.get("slot", "")).strip()
+            m = re.match(r"^(\d+):(\d+)$", slot)
+            if not m:
+                return jsonify({"ok": False, "error": "invalid slot (需形如 252:0)"})
+            e, s = m.group(1), m.group(2)
+            out = sudo_cmd([STORCLI, "/c0", "/e" + e, "/s" + s, "start", "copyback"], 30) or ""
+            ok = ("Succeeded" in out) or ("Status = Success" in out)
+            return jsonify({"ok": ok, "action": "start", "slot": slot, "out": out})
+        return jsonify({"ok": False, "error": "invalid action (enable|disable|start)"})
+    except Exception as ex:
+        return jsonify({"ok": False, "error": str(ex)})
+
 
 @app.route("/api/disks")
 def api_disks():
@@ -7009,6 +7228,11 @@ def _load_alerts():
         "bark": {"enabled": False, "url": ""},
         "email": {"enabled": False, "smtp_host": "", "smtp_port": 465, "user": "", "pass": "", "to": ""},
     })
+    d.setdefault("level_channels", {
+        "danger": ["system", "telegram", "bark", "email"],
+        "warn": ["system", "telegram"],
+        "info": ["system"],
+    })
     return d
 
 def _save_alerts(cfg):
@@ -7073,6 +7297,28 @@ def _evaluate_alerts(system, disks, docker=None):
             alerts.append({"level": "warn", "title": "内存占用过高", "detail": "内存使用率 %s%%，超过阈值 %s%%" % (mem["percent"], mm)})
     except (TypeError, ValueError):
         pass
+    # 阵列卡告警（无硬件 VD 时 virtual_drives/drives 为空，自然不产生告警；本机 JBOD 直通降级安全）
+    try:
+        raid = get_raid_card()
+    except Exception:
+        raid = {}
+    if raid and raid.get("mode") in ("mega", "hba"):
+        cv = (raid.get("cachevault") or "").lower()
+        if cv and cv not in ("optimal", "ok", "", "-", "none") and "optimal" not in cv:
+            alerts.append({"level": "warn", "title": "CacheVault 状态异常", "detail": "阵列卡掉电保护缓存状态：%s（断电时缓存数据可能丢失）" % raid.get("cachevault")})
+        for v in (raid.get("virtual_drives") or []):
+            st = (v.get("state") or "").lower()
+            if st and st not in ("optl", "optimal", "ok", ""):
+                alerts.append({"level": "danger", "title": "逻辑盘状态异常", "detail": "%s 状态：%s" % (v.get("name") or v.get("dgvd"), v.get("state"))})
+        # CopyBack 自动换盘监控：故障盘时提示换盘进度 / 待处理
+        for d in (raid.get("drives") or []):
+            if d.get("copyback_active"):
+                alerts.append({"level": "danger", "title": "正在执行 CopyBack 换盘", "detail": "盘 %s 已故障并正在自动复制到热备盘（CopyBack 换盘中）" % d.get("slot")})
+            elif d.get("failed"):
+                hs = [h.get("slot") for h in (raid.get("hotspares") or [])]
+                if hs:
+                    tip = "开启自动 CopyBack 后将自动换盘" if raid.get("auto_copyback") == "enabled" else "需手动触发 CopyBack 换盘"
+                    alerts.append({"level": "warn", "title": "硬盘故障待换盘", "detail": "盘 %s 已故障，已配置热备盘 %s，%s" % (d.get("slot"), "、".join(hs), tip)})
     return alerts
 
 def _notify_log(msg):
@@ -7119,20 +7365,23 @@ def _send_email(cfg, text):
     except Exception as e:
         return str(e)
 
-def _dispatch_notifications(text, cfg):
-    """按配置把告警文本推送到各启用渠道，返回 {channel: ok|error}。"""
+def _dispatch_notifications(text, cfg, level="danger"):
+    """按「严重级别」把告警文本推送到该级别启用的渠道，返回 {channel: ok|error}。
+    level_channels 决定每个级别走哪些渠道（danger/warn/info）；system 本地日志始终记录。"""
     res = {}
     ch = cfg.get("channels", {}) or {}
-    if ch.get("telegram", {}).get("enabled"):
+    lc = cfg.get("level_channels", {}) or {}
+    allowed = lc.get(level, ["system"])
+    if "telegram" in allowed and ch.get("telegram", {}).get("enabled"):
         t = ch["telegram"]
         res["telegram"] = _send_telegram(t.get("bot_token", ""), t.get("chat_id", ""), text)
-    if ch.get("bark", {}).get("enabled"):
+    if "bark" in allowed and ch.get("bark", {}).get("enabled"):
         res["bark"] = _send_bark(ch["bark"].get("url", ""), text)
-    if ch.get("email", {}).get("enabled"):
+    if "email" in allowed and ch.get("email", {}).get("enabled"):
         res["email"] = _send_email(ch["email"], text)
-    if ch.get("system", True):
-        _notify_log("通知：" + text)
-        res["system"] = True
+    # system 本地日志始终记录（最低保障，不受级别过滤）
+    _notify_log("通知[" + level + "]：" + text)
+    res["system"] = True
     return res
 
 def _read_app_log(max_lines=60):
@@ -7617,6 +7866,14 @@ def api_alerts_config_set():
                 ch[name] = cur
         if "system" in nc:
             ch["system"] = bool(nc["system"])
+    if "level_channels" in data and isinstance(data["level_channels"], dict):
+        lc = cfg.get("level_channels", {})
+        for lvl in ("danger", "warn", "info"):
+            if lvl in data["level_channels"]:
+                val = data["level_channels"][lvl]
+                if isinstance(val, list):
+                    lc[lvl] = [c for c in val if c in ("system", "telegram", "bark", "email")]
+        cfg["level_channels"] = lc
     if _save_alerts(cfg):
         return jsonify({"ok": True, "config": cfg})
     return jsonify({"ok": False, "error": "写配置失败"}), 500
@@ -7626,7 +7883,7 @@ def api_alerts_config_set():
 def api_alerts_test():
     cfg = _load_alerts()
     text = "这是一条来自 nasdash 的测试通知（当前版本 %s）。若收到说明通知渠道配置正确。" % APP_VERSION
-    res = _dispatch_notifications(text, cfg)
+    res = _dispatch_notifications(text, cfg, "danger")
     return jsonify({"ok": True, "results": res})
 
 @app.route("/api/report")
