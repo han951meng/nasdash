@@ -1988,7 +1988,7 @@ function renderSystem(s){
   let cpuPct = (s.cpu_usage!=null) ? s.cpu_usage : (s.cpu_threads ? Math.min(Math.round(parseFloat((s.load&&s.load[0])||0)/s.cpu_threads*100),100) : 0);
   let cpuColor = cpuPct>85?'var(--red)':cpuPct>60?'var(--orange)':'var(--green)';
   // —— 系统资源页显卡卡片：精简为 温度 + 显存占用（用户要求，避免多指标卡拥挤）。
-  // 详细指标（利用率/Video/Render/频率/功耗）在「硬件配置检测」页，这里只放实时温度与显存占用。
+  // nasdash 未复刻利用率/Video/Render 等详细指标（那是飞牛自带资源管理器功能）。系统资源页显卡卡只放实时温度与显存占用。
   // —— 系统资源页显卡卡片：一张合并折线图（像网络卡的上传/下载），两条线 = 温度(橙) + 显存占用(蓝)。
   // 不单独显示温度数字（温度监控页已有）与显存进度条（占空间），只留趋势图。
   let gpuCardSys = `
