@@ -4221,36 +4221,7 @@ def _collect_system_full():
                 "gen_sta": _gen(sta.group(1)) if sta else None,
                 "width_sta": sta.group(2) if sta else None}
 
-    def _clean_gpu_name(raw):
-        """把 lspci/nvidia-smi 给的长设备名精简成「主市场名 + 架构代号」。
-        例：'Intel Corporation CoffeeLake-S GT1 [UHD Graphics 610]'
-            -> ('UHD Graphics 610', 'CoffeeLake-S GT1')
-        'NVIDIA GeForce RTX 3080' -> ('GeForce RTX 3080', '')
-        'Advanced Micro Devices, Inc. [AMD/ATI] Navi 23 [Radeon RX 6600 XT]'
-            -> ('Radeon RX 6600 XT', 'Navi 23')
-        中文兜底名（如 '未启用（BIOS 可能已禁用）'）原样返回。"""
-        if not raw or not str(raw).strip():
-            return raw, ""
-        n = str(raw).strip()
-        # 1) 去掉厂商前缀（含 APU 的 [AMD/ATI] 标记）
-        n = re.sub(r'^(Intel Corporation|Intel|NVIDIA Corporation|NVIDIA|'
-                   r'Advanced Micro Devices,?\s*Inc\.?\s*(\[AMD/ATI\])?|AMD/ATI|AMD)\s*',
-                   '', n, flags=re.I)
-        n = n.strip()
-        # 2) 取方括号里的市场名（跳过 [AMD/ATI] 这种非市场名标记）
-        mkt = None
-        for mm in re.finditer(r'\[([^\]]+)\]', n):
-            cand = mm.group(1).strip()
-            if cand.lower() in ('amd/ati',):
-                continue
-            mkt = cand
-            break
-        # 3) 剩余部分当作架构/技术代号
-        arch = re.sub(r'\[[^\]]+\]', '', n).strip()
-        arch = re.sub(r'\s{2,}', ' ', arch).strip()
-        if mkt and mkt.lower() not in ('device',):
-            return mkt, arch
-        return (n or str(raw)), ''
+    # _clean_gpu_name 已提升到模块级（见下方函数定义），此处不再内联定义。
 
     lspci = run_cmd(["lspci", "-nn"], 5)
     gpus = []
@@ -4394,7 +4365,7 @@ def _collect_system_full():
     for _g in gpus:
         if _g.get("name"):
             _sn, _sa = _clean_gpu_name(_g["name"])
-            _g["name_full"] = _g["name"]
+            _g["name_full"] = (_sn + (" (" + _sa + ")" if _sa else "")) or _g["name"]
             _g["name"] = _sn
             _g["name_arch"] = _sa
     d["gpus"] = gpus
@@ -4609,6 +4580,19 @@ def _parse_docker_pct(s):
     m = re.search(r"([\d.]+)", s)
     return float(m.group(1)) if m else None
 
+def _host_cpu_threads():
+    """逻辑核数（含超线程），用于把 docker 单核% 归一化为整机%所占比例。
+    读取 /proc/cpuinfo 的 processor 行数，失败兜底返回 1。"""
+    try:
+        n = 0
+        with open("/proc/cpuinfo") as f:
+            for line in f:
+                if line.lower().startswith("processor"):
+                    n += 1
+        return n or 1
+    except Exception:
+        return 1
+
 def _docker_size_to_bytes(s):
     """'120MiB' / '1.2kB' -> int 字节数 ; 无效 -> None"""
     if not s or not isinstance(s, str):
@@ -4648,7 +4632,7 @@ def _docker_net_rate(name, rx, tx):
     _DOCKER_NET_PREV[name] = {"rx": rx, "tx": tx, "ts": now}
     return rate
 
-@_ttl_cache(60)
+@_ttl_cache(5)
 def get_docker():
     """统计 Docker 容器数（运行中/总数），并自动探测每个容器真实监听端口与资源占用"""
     try:
@@ -4704,6 +4688,11 @@ def get_docker():
                 pass
         # 运行中容器的资源占用（docker stats 仅对运行中容器有数据）：CPU% / 内存% / 内存字节 / 网络 RX-TX
         try:
+            # fnOS 的 docker stats {{.CPUPerc}} 返回的是「单逻辑核百分比」（未除总核数），
+            # 而飞牛原生 Docker 面板显示的是「整机占比百分比」。
+            # 例：G5400 双核四线程，容器占满 1 核时 {{.CPUPerc}}≈100%，飞牛原生≈25%。
+            # 为与飞牛原生一致，这里把单核%除以逻辑核数做归一化（_threads）。
+            _threads = _host_cpu_threads()
             stat = sudo_cmd(["docker", "stats", "--no-stream", "--format",
                              "{{.Name}}|{{.CPUPerc}}|{{.MemPerc}}|{{.MemUsage}}|{{.NetIO}}"], 12)
             for line in stat.splitlines():
@@ -4719,7 +4708,9 @@ def get_docker():
                 rrx, rtx = _docker_net_rate(cname, rx, tx)
                 for c in containers:
                     if c["name"] == cname:
-                        c["cpu"] = _parse_docker_pct(cpu_s)
+                        _raw = _parse_docker_pct(cpu_s)
+                        c["cpu"] = _raw / _threads if (_raw is not None and _threads > 1) else _raw
+                        c["cpu_raw"] = _raw  # 保留归一化前的单核%，便于排查
                         c["mem_pct"] = _parse_docker_pct(memp_s)
                         c["mem"] = mem_s.strip()
                         c["mem_bytes"] = _docker_size_to_bytes(mem_s.split("/")[0].strip()) if "/" in mem_s else _docker_size_to_bytes(mem_s.strip())
@@ -5174,6 +5165,395 @@ _metrics_thread.start()
 _temp_thread = _threading.Thread(target=_temp_collect_loop, daemon=True, name="temp-snap")
 _temp_thread.start()
 
+# ---------------------------------------------------------------------------
+# GPU 实时占用（温度 + 使用率）：供系统资源页折线图。
+# 与 get_gpu（重采集，含 lspci -vvv/modinfo/显存识别）分离——这里只取"会秒级跳动"的
+# 两个值，尽量走 sysfs / nvidia-smi，不在 1s 轮询里重跑重型命令。
+# 身份列表(lspci)缓存 5 分钟；temp/util 采样 2 秒 memo，api_metrics 每秒读缓存即可。
+# 核显使用率依赖 intel_gpu_top（fnOS 未必预装）：取不到就 util=None，前端显示"暂不可用"，不造假数据。
+# ---------------------------------------------------------------------------
+_GPU_IDENT_CACHE = {"t": 0.0, "data": None}
+_GPU_LIVE_CACHE = {"t": 0.0, "data": []}
+
+def _clean_gpu_name(raw):
+    """把 lspci/nvidia-smi 给的长设备名精简成「主市场名 + 架构代号」。
+    兼容多种真实形态：
+      '00:02.0 VGA compatible controller [0300]: Intel Corporation UHD Graphics 610 (Coffee Lake-S GT1) [8086:3e90] (rev 02)'
+          -> ('UHD Graphics 610', 'Coffee Lake-S GT1')
+      'Intel Corporation CoffeeLake-S GT1 [UHD Graphics 610]'
+          -> ('UHD Graphics 610', 'CoffeeLake-S GT1')
+      'NVIDIA GeForce RTX 3080' -> ('GeForce RTX 3080', '')
+      'Advanced Micro Devices, Inc. [AMD/ATI] Navi 23 [Radeon RX 6600 XT]'
+          -> ('Radeon RX 6600 XT', 'Navi 23')
+    中文兜底名（如 '未启用（BIOS 可能已禁用）'）原样返回。"""
+    if not raw or not str(raw).strip():
+        return raw, ""
+    n = str(raw).strip()
+    # 0) 去掉 lspci 整行前缀：'00:02.0 VGA compatible controller [0300]: '
+    n = re.sub(r'^\s*[0-9a-f]{2}:[0-9a-f]{2}\.\d\s+(?:VGA compatible controller|3D controller|Display controller)\s*\[[0-9a-f]{4}\]:\s*', '', n, flags=re.I)
+    # 1) 去掉厂商前缀（含 APU 的 [AMD/ATI] 标记）
+    n = re.sub(r'^(Intel Corporation|Intel|NVIDIA Corporation|NVIDIA|'
+               r'Advanced Micro Devices,?\s*Inc\.?\s*(\[AMD/ATI\])?|AMD/ATI|AMD)\s*',
+               '', n, flags=re.I)
+    n = n.strip()
+    # 2) 去掉结尾的 (rev 02) / [8086:3e90] 这类尾巴
+    n = re.sub(r'\s*\(rev[^)]*\)\s*$', '', n, flags=re.I)
+    n = re.sub(r'\s*\[[0-9a-f]{4}:[0-9a-f]{4}\]\s*$', '', n, flags=re.I)
+    # 3) 方括号里的市场名优先（旧格式：[UHD Graphics 610]）
+    mkt = None
+    for mm in re.finditer(r'\[([^\]]+)\]', n):
+        cand = mm.group(1).strip()
+        if cand.lower() in ('amd/ati',):
+            continue
+        mkt = cand
+        break
+    arch = re.sub(r'\[[^\]]+\]', '', n).strip()
+    arch = re.sub(r'\s{2,}', ' ', arch).strip()
+    if mkt and mkt.lower() not in ('device',):
+        return mkt, arch
+    # 4) 没有方括号：把结尾的架构代号括号当作 arch，如 'UHD Graphics 610 (Coffee Lake-S GT1)'
+    m2 = re.match(r'^(.*?)\s*\(([^()]+)\)\s*$', n)
+    if m2:
+        base = m2.group(1).strip()
+        suffix = m2.group(2).strip()
+        if base and not re.search(r'(laptop|notebook|rev|version|tm|oc|super|max-?q)', suffix, re.I):
+            return base, suffix
+    # 5) 连括号都没有、但含已知核显市场名 + 后缀代号，如 'UHD Graphics 610 CoffeeLake-S GT'
+    m3 = re.match(r'^(UHD Graphics\s+\d+|HD Graphics\s+\d+)', n, re.I)
+    if m3:
+        base = m3.group(1).strip()
+        suffix = n[m3.end():].strip(" -")
+        if suffix and not re.search(r'laptop|notebook', suffix, re.I):
+            return base, suffix
+    return (n or str(raw)), ''
+
+
+def _gpu_ident_list():
+    """返回 [{vendor, dev, pci, name, type}]，缓存 5 分钟，避免每 2s 跑 lspci。"""
+    now = time.time()
+    if _GPU_IDENT_CACHE["data"] is not None and now - _GPU_IDENT_CACHE["t"] < 300:
+        return _GPU_IDENT_CACHE["data"]
+    out = []
+    seen = set()
+    try:
+        lspci = run_cmd(["lspci"], 3)
+        for line in lspci.splitlines():
+            if not re.search(r"VGA compatible controller|3D controller|Display controller", line, re.I):
+                continue
+            pci = ""
+            pm = re.match(r"^([0-9a-f]{2}:[0-9a-f]{2}\.\d)", line)
+            if pm:
+                pci = pm.group(1)
+            m = re.search(r"controller\s*\[[0-9a-f]{4}\]:\s*(.+?)\s*\[([0-9a-f]{4}):([0-9a-f]{4})\]", line)
+            if m:
+                name = m.group(1).strip(); vendor = m.group(2).lower(); dev = m.group(3).lower()
+            else:
+                vendor = ""; name = line.strip(); dev = ""
+            if vendor == "8086" or "intel" in name.lower():
+                gtype = "核显"
+            elif vendor == "1002" and re.search(r"radeon|graphics|apu|vega|renoir|cezanne|phoenix|raphael", name, re.I):
+                gtype = "核显"
+            else:
+                gtype = "独显"
+            # 去重：同一 PCI 地址（或同名无地址）只计一次，避免显卡被重复识别成多张
+            key = pci if pci else ("name:" + name)
+            if key in seen:
+                continue
+            seen.add(key)
+            # 清理名称：短市场名 + 架构代号，原长名留作悬停全名
+            sn, sa = _clean_gpu_name(name)
+            name_full = (sn + (" (" + sa + ")" if sa else "")) or name
+            out.append({"vendor": vendor, "dev": dev, "pci": pci,
+                        "name": sn, "name_arch": sa, "name_full": name_full, "type": gtype})
+    except Exception:
+        out = []
+    if not out:
+        out = [{"vendor": "", "dev": "", "pci": "", "name": "", "type": "无核显"}]
+    _GPU_IDENT_CACHE["data"] = out
+    _GPU_IDENT_CACHE["t"] = now
+    return out
+
+def _gpu_temp_from_sysfs_live(pci):
+    """模块级 GPU 温度读取（按 PCI 在 /sys/class/drm/cardN/device/hwmon 找），复用与 get_gpu 一致的匹配逻辑。"""
+    try:
+        base = (pci or "").strip()
+        for name in os.listdir("/sys/class/drm"):
+            if not re.match(r"^card\d+$", name):
+                continue
+            devdir = os.path.join("/sys/class/drm", name, "device")
+            uevent = os.path.join(devdir, "uevent")
+            if not os.path.exists(uevent):
+                continue
+            data = open(uevent).read()
+            mm = re.search(r"PCI_SLOT_NAME=(\S+)", data)
+            if not mm:
+                continue
+            dev = mm.group(1)
+            if base and (base == dev or dev.endswith(base) or base.endswith(dev)):
+                hdir = os.path.join(devdir, "hwmon")
+                if os.path.isdir(hdir):
+                    for hw in sorted(os.listdir(hdir)):
+                        for tf in ("temp1_input", "temp2_input", "temp_input"):
+                            p = os.path.join(hdir, hw, tf)
+                            if os.path.exists(p):
+                                try:
+                                    return int(open(p).read().strip()) // 1000
+                                except Exception:
+                                    pass
+    except Exception:
+        return None
+    return None
+
+def _amd_gpu_busy(pci):
+    """AMD 独显使用率：/sys/class/drm/cardN/device/gpu_busy_percent（0-100）。按 PCI 匹配。"""
+    try:
+        base = (pci or "").strip()
+        for name in os.listdir("/sys/class/drm"):
+            if not re.match(r"^card\d+$", name):
+                continue
+            devdir = os.path.join("/sys/class/drm", name, "device")
+            uevent = os.path.join(devdir, "uevent")
+            if not os.path.exists(uevent):
+                continue
+            data = open(uevent).read()
+            mm = re.search(r"PCI_SLOT_NAME=(\S+)", data)
+            if not mm:
+                continue
+            dev = mm.group(1)
+            if base and (base == dev or dev.endswith(base) or base.endswith(dev)):
+                bp = os.path.join(devdir, "gpu_busy_percent")
+                if os.path.exists(bp):
+                    return float(open(bp).read().strip())
+    except Exception:
+        return None
+    return None
+
+def _read_drm_attr(fname):
+    """读第一个存在的 /sys/class/drm/card*/device/<fname>，取不到返回 None。"""
+    try:
+        for name in sorted(os.listdir("/sys/class/drm")):
+            if not re.match(r"^card\d+$", name):
+                continue
+            p = os.path.join("/sys/class/drm", name, "device", fname)
+            if os.path.exists(p):
+                return int(open(p).read().strip())
+    except Exception:
+        return None
+    return None
+
+def _intel_igpu_top_sample():
+    """Intel 核显：用 intel_gpu_top -J 取 busy/render/video/频率/功耗/rc6。
+    返回 dict；取不到则返回空 dict。"""
+    import subprocess
+    try:
+        proc = subprocess.Popen(["intel_gpu_top", "-J", "-s", "200", "-o", "-"],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        buf = ""
+        deadline = time.time() + 3
+        j = None
+        while time.time() < deadline:
+            if proc.poll() is not None:
+                break
+            line = proc.stdout.readline()
+            if not line:
+                time.sleep(0.05)
+                continue
+            buf += line
+            try:
+                j = json.loads(buf)
+                break
+            except Exception:
+                continue
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        if not j:
+            return {}
+        engines = j.get("engines", {})
+        busy = []
+        render = None
+        video = None
+        for k, v in engines.items():
+            b = v.get("busy")
+            if isinstance(b, (int, float)):
+                busy.append(b)
+                if k.startswith("Render"):
+                    render = b
+                elif k.startswith("Video"):
+                    video = b
+        freq = j.get("frequency", {}).get("actual")
+        power = j.get("power", {}).get("GPU")
+        rc6 = j.get("rc6", {}).get("value")
+        out = {}
+        if busy:
+            out["util"] = round(sum(busy) / len(busy), 1)
+        if render is not None:
+            out["render"] = round(render, 1)
+        if video is not None:
+            out["video"] = round(video, 1)
+        if isinstance(freq, (int, float)):
+            out["freq_mhz"] = round(freq, 1)
+        if isinstance(power, (int, float)):
+            out["power_w"] = round(power, 2)
+        if isinstance(rc6, (int, float)):
+            out["rc6"] = round(rc6, 1)
+        return out
+    except Exception:
+        return {}
+
+
+def _intel_igpu_util():
+    """Intel 核显使用率/活动度。返回 (值, 是否代理)。
+    真·使用率优先（intel_gpu_top -J 各 engine busy 平均值）；无该工具则退化为频率活动度。
+    都没有返回 (None, False)。"""
+    sample = _intel_igpu_top_sample()
+    if sample.get("util") is not None:
+        return sample["util"], False
+    try:
+        cur = _read_drm_attr("gt_cur_freq_mhz")
+        mn = _read_drm_attr("gt_min_freq_mhz")
+        mx = _read_drm_attr("gt_boost_freq_mhz") or _read_drm_attr("gt_max_freq_mhz")
+        if cur is not None and mn is not None and mx is not None and mx > mn:
+            return round((cur - mn) / (mx - mn) * 100, 1), True
+    except Exception:
+        pass
+    return None, False
+
+def _gpu_memory_bytes():
+    """核显共享系统内存：返回 (used_bytes, total_bytes, percent)。
+    无 psutil 依赖，直接读 /proc/meminfo；取不到返回 (None,None,None)。"""
+    try:
+        mem = {}
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if ':' in line:
+                    k, v = line.split(':', 1)
+                    mem[k.strip()] = int(v.split()[0])  # KB
+        total = mem.get("MemTotal", 0) * 1024
+        avail = mem.get("MemAvailable", 0) * 1024
+        if total <= 0:
+            return None, None, None
+        used = total - avail
+        return used, total, round(used / total * 100, 1)
+    except Exception:
+        return None, None, None
+
+
+def _sample_gpu_live():
+    idents = _gpu_ident_list()
+    res = []
+    for g in idents:
+        temp = None; util = None; util_avail = False; util_proxy = False
+        render = None; video = None; freq_mhz = None; power_w = None; rc6 = None
+        mem_used = None; mem_total = None; mem_pct = None
+        try:
+            if g["vendor"] == "10de":  # NVIDIA
+                s = run_cmd(["nvidia-smi", "--query-gpu=utilization.gpu,utilization.memory,temperature.gpu,memory.used,memory.total",
+                             "--format=csv,noheader,nounits"], 3)
+                parts = [x.strip() for x in s.split(",")]
+                if len(parts) >= 2:
+                    try:
+                        util = float(parts[0]); util_avail = True
+                    except Exception:
+                        pass
+                    try:
+                        mem_pct = float(parts[1])
+                    except Exception:
+                        pass
+                    try:
+                        temp = float(parts[2])
+                    except Exception:
+                        pass
+                    try:
+                        mem_used = int(parts[3]) * 1024 * 1024  # MiB -> bytes
+                        mem_total = int(parts[4]) * 1024 * 1024
+                    except Exception:
+                        pass
+            elif g["vendor"] == "1002":  # AMD
+                b = _amd_gpu_busy(g["pci"])
+                if b is not None:
+                    util = b; util_avail = True
+                t = _gpu_temp_from_sysfs_live(g["pci"])
+                if t is not None:
+                    temp = t
+                # AMDGPU VRAM: /sys/class/drm/cardN/device/mem_info_vram_{used,total}
+                try:
+                    base = (g["pci"] or "").strip()
+                    for name in os.listdir("/sys/class/drm"):
+                        if not re.match(r"^card\d+$", name):
+                            continue
+                        devdir = os.path.join("/sys/class/drm", name, "device")
+                        uevent = os.path.join(devdir, "uevent")
+                        if not os.path.exists(uevent):
+                            continue
+                        data = open(uevent).read()
+                        mm = re.search(r"PCI_SLOT_NAME=(\S+)", data)
+                        if not mm:
+                            continue
+                        dev = mm.group(1)
+                        if base and not (base == dev or dev.endswith(base) or base.endswith(dev)):
+                            continue
+                        used_path = os.path.join(devdir, "mem_info_vram_used")
+                        total_path = os.path.join(devdir, "mem_info_vram_total")
+                        if os.path.exists(used_path) and os.path.exists(total_path):
+                            mem_used = int(open(used_path).read().strip())
+                            mem_total = int(open(total_path).read().strip())
+                            if mem_total > 0:
+                                mem_pct = round(mem_used / mem_total * 100, 1)
+                            break
+                except Exception:
+                    pass
+            else:  # Intel 核显 / 无核显
+                temp = _temp_snapshot_read().get("cpu_temp")
+                sample = _intel_igpu_top_sample()
+                if sample.get("util") is not None:
+                    util = sample["util"]; util_avail = True; util_proxy = False
+                if sample.get("render") is not None:
+                    render = sample["render"]
+                if sample.get("video") is not None:
+                    video = sample["video"]
+                if sample.get("freq_mhz") is not None:
+                    freq_mhz = sample["freq_mhz"]
+                if sample.get("power_w") is not None:
+                    power_w = sample["power_w"]
+                if sample.get("rc6") is not None:
+                    rc6 = sample["rc6"]
+                if util is None:
+                    u, u_proxy = _intel_igpu_util()
+                    if u is not None:
+                        util = u; util_avail = True; util_proxy = u_proxy
+                # 核显共享系统内存
+                mu, mt, mp = _gpu_memory_bytes()
+                if mt:
+                    mem_used, mem_total, mem_pct = mu, mt, mp
+        except Exception as _e:
+            pass
+        res.append({"vendor": g["vendor"], "type": g["type"], "name": g["name"], "pci": g["pci"],
+                    "name_full": g.get("name_full", g["name"]), "name_arch": g.get("name_arch", ""),
+                    "temp": (round(temp, 1) if isinstance(temp, (int, float)) else None),
+                    "util": (round(util, 1) if isinstance(util, (int, float)) else None),
+                    "render": (round(render, 1) if isinstance(render, (int, float)) else None),
+                    "video": (round(video, 1) if isinstance(video, (int, float)) else None),
+                    "freq_mhz": (round(freq_mhz, 1) if isinstance(freq_mhz, (int, float)) else None),
+                    "power_w": (round(power_w, 2) if isinstance(power_w, (int, float)) else None),
+                    "rc6": (round(rc6, 1) if isinstance(rc6, (int, float)) else None),
+                    "mem_used": mem_used, "mem_total": mem_total, "mem_pct": mem_pct,
+                    "util_avail": util_avail, "util_proxy": util_proxy})
+    return res
+
+def _get_gpu_live():
+    now = time.time()
+    if now - _GPU_LIVE_CACHE["t"] < 2:
+        return _GPU_LIVE_CACHE["data"]
+    try:
+        data = _sample_gpu_live()
+    except Exception:
+        data = _GPU_LIVE_CACHE["data"]
+    _GPU_LIVE_CACHE["t"] = now
+    _GPU_LIVE_CACHE["data"] = data
+    return data
+
 # 启动即后台预热重型采集缓存（storcli/smartctl/docker 等同步命令耗时长）。
 # 首个用户请求直接命中缓存，首屏 /api/all 从 4~5s 降至 <0.05s，不再阻塞转圈。
 def _warmup_caches():
@@ -5592,6 +5972,7 @@ def api_metrics():
             load = None
         return jsonify({"net": list(merged.values()), "diskio": diskio,
                         "cpu_usage": cpu_usage, "mem_percent": mem_percent, "load": load,
+                        "gpu": _get_gpu_live(),
                         "time": time.strftime("%Y-%m-%d %H:%M:%S")})
     except Exception as e:
         return jsonify({"error": str(e), "net": [], "diskio": []})
