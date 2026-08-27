@@ -763,8 +763,16 @@ def _parse_cpu_temp(j):
     return max(fallback) if fallback else None
 
 def _parse_mb_temp(j):
-    """统一主板温度解析（纯函数）：SYSTIN 精确测点优先；
-    回落排除 coretemp/AUX 后最高；再回落非 coretemp 最高。"""
+    """统一主板温度解析（纯函数）。
+
+    优先级（均带合理性护栏：0~90°C 视为有效，过滤传感器错误值）：
+      1) acpitz —— ACPI 固件报的「系统环境温度」，多数主板最稳、不易虚高
+                  （很多主板的 SYSTIN 是错的，论坛反馈据此优先取 acpitz）
+      2) SYSTIN  —— hwmon 上的精确测点
+      3) 排除 coretemp / AUXTIN 后的最高温
+      4) 非 coretemp 最高温（兜底）
+    任一来源无效/缺失则自动回落到下一来源，避免把传感器错误值当真。
+    """
     temps = []
     for chip, entries in (j or {}).items():
         if not isinstance(entries, dict):
@@ -777,15 +785,34 @@ def _parse_mb_temp(j):
                     temps.append((str(chip), str(ename), float(v)))
     if not temps:
         return None
-    systin = [t for t in temps if t[1].strip().upper() == "SYSTIN"]
+
+    def _sane(v):
+        return isinstance(v, (int, float)) and 0 <= v <= 90
+
+    # 1) acpitz（ACPI 系统环境温度）优先
+    acpitz = [t for t in temps if str(t[0]).lower().startswith("acpitz") and _sane(t[2])]
+    if acpitz:
+        return acpitz[0][2]
+
+    # 2) SYSTIN 精确测点
+    systin = [t for t in temps if t[1].strip().upper() == "SYSTIN" and _sane(t[2])]
     if systin:
         return systin[0][2]
-    mb = [t for t in temps if "coretemp" not in t[0].lower() and not t[1].strip().upper().startswith("AUXTIN")]
+
+    # 3) 排除 coretemp / AUXTIN 后的最高温
+    mb = [t for t in temps
+          if "coretemp" not in t[0].lower()
+          and not t[1].strip().upper().startswith("AUXTIN")
+          and _sane(t[2])]
     if mb:
         return max(t[2] for t in mb)
-    mb2 = [t for t in temps if "coretemp" not in t[0].lower()]
+
+    # 4) 非 coretemp 最高温（兜底）
+    mb2 = [t for t in temps if "coretemp" not in t[0].lower() and _sane(t[2])]
     if mb2:
         return max(t[2] for t in mb2)
+
+    # 5) 实在没有合理值，返回全部里的最高（保持旧行为兜底）
     return max(t[2] for t in temps)
 
 def _parse_sensors_all(j):
