@@ -4734,22 +4734,34 @@ function toCSV(points){
   }).join(','));
   return head+'\n'+rows.join('\n');
 }
-// 真折线图（Mermaid xychart-beta）：GitHub / VS Code(Mermaid 插件) / Typora / Obsidian / Notion 等查看器会渲染为真实 SVG 折线图，和 HTML 版视觉一致
-function mermaidChart(m, pairs){
+// 真折线图：内嵌为独立 SVG 图片（base64 data-uri），VS Code / Typora / Obsidian / WorkBuddy 等查看器均会渲染为真实折线图，和 HTML 版视觉一致；不依赖 Mermaid 引擎，避免 VS Code 预览无法渲染 xychart-beta 的问题
+function svgChartImg(m, pairs){
   if(!pairs || pairs.length < 2) return '';
   const conv = m.unit==='speed' ? (v=>v/1024) : (v=>v);
   const unitLabel = m.unit==='speed' ? 'KB/s' : m.unit;
   const all = pairs.map(p=>({t:p.ts, v:conv(p.v)}));
-  const step = Math.max(1, Math.ceil(all.length/30));
+  const step = Math.max(1, Math.ceil(all.length/60));
   const ds = all.filter((_,i)=> i%step===0 || i===all.length-1);
   if(ds.length < 2) return '';
-  const vals = ds.map(d=>d.v);
+  const W=560,H=132,padL=10,padR=10,padT=24,padB=18;
+  const vals=ds.map(d=>d.v);
   const mn=Math.min(...vals), mx=Math.max(...vals), span=(mx-mn)||1;
-  const lo=Math.floor(mn - span*0.1 - 0.5), hi=Math.ceil(mx + span*0.1 + 0.5);
-  const xs=ds.map(d=>'"'+fmtTime(d.t)+'"');
-  const line=vals.map(v=>Math.round(v*100)/100);
-  const title=m.label + (m.unit==='speed' ? ' (KB/s)' : ' ('+m.unit+')');
-  return '```mermaid\nxychart-beta\n  title "'+title+'"\n  x-axis ['+xs.join(', ')+']\n  y-axis "'+unitLabel+'" '+lo+' --> '+hi+'\n  line ['+line.join(', ')+']\n```';
+  const lo=mn - span*0.12, hi=mx + span*0.12;
+  const X=i=> padL + (i/(ds.length-1))*(W-padL-padR);
+  const Y=v=> padT + (1-(v-lo)/(hi-lo))*(H-padT-padB);
+  const pts=ds.map((d,i)=>`${X(i).toFixed(1)},${Y(d.v).toFixed(1)}`).join(' ');
+  const last=ds[ds.length-1].v;
+  const lastTxt = m.unit==='speed' ? (Math.round(last*10)/10)+' KB/s' : (Math.round(last*10)/10)+unitLabel;
+  const svg=`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">`+
+    `<rect x="0" y="0" width="${W}" height="${H}" fill="#fafbfc"/>`+
+    `<polyline points="${pts}" fill="none" stroke="${m.color}" stroke-width="1.6" stroke-linejoin="round"/>`+
+    `<text x="${W-8}" y="15" text-anchor="end" font-size="11" fill="#6b7280" font-family="sans-serif">${m.label}（${unitLabel}） 最新 ${lastTxt}</text>`+
+    `<text x="8" y="${H-5}" font-size="10" fill="#9aa1ad" font-family="sans-serif">${fmtTime(ds[0].t)}</text>`+
+    `<text x="${W-8}" y="${H-5}" text-anchor="end" font-size="10" fill="#9aa1ad" font-family="sans-serif">${fmtTime(ds[ds.length-1].t)}</text>`+
+    `</svg>`;
+  let b64='';
+  try { b64 = btoa(unescape(encodeURIComponent(svg))); } catch(e){ return ''; }
+  return `![${m.label} 折线图](data:image/svg+xml;base64,${b64})`;
 }
 function toMarkdown(range, genAt, items, overview, points){
   const rt={'24h':'24 小时','7d':'7 天','30d':'30 天'}[range]||range;
@@ -4758,7 +4770,7 @@ function toMarkdown(range, genAt, items, overview, points){
   md+=`- 数据区间：${rt}（历史数据自动保留 30 天）\n`;
   md+=`- 生成时间：${genAt}\n`;
   md+=`- 数据样本：${n} 条（每 30 秒聚合一点）\n\n`;
-  md+=`- 说明：下方折线图采用 Mermaid 格式，在 GitHub / VS Code(装 Mermaid 插件) / Typora / Obsidian / Notion 中可渲染为真实折线图；纯文本环境会显示原始数据，下方另有「文本趋势线」兜底。\n\n`;
+  md+=`- 说明：下方折线图为内嵌 SVG 图片，在 VS Code / Typora / Obsidian / WorkBuddy 预览中均显示真实折线图；纯记事本/微信会显示图片链接文字，下方「文本趋势线」仍可看趋势。若需任意环境都为真图，请下载 HTML 版。\n\n`;
   md+=`## 总体结论\n\n${overview.text}\n\n`;
   REPORT_GROUPS.forEach(g=>{
     const gs=items.filter(x=>g.keys.includes(x.m.key));
@@ -4766,7 +4778,7 @@ function toMarkdown(range, genAt, items, overview, points){
     md+=`## ${g.title}\n\n`;
     gs.forEach(x=>{
       const pairs=(points||[]).map(p=>({ts:p.ts, v:p[x.m.key]})).filter(p=> typeof p.v==='number' && !isNaN(p.v));
-      md+=`### ${x.m.label}\n${x.nar.text}\n\n${mermaidChart(x.m, pairs)}\n\n> 趋势（${x.m.label}）：${asciiSpark(x.s.values)}\n\n`;
+      md+=`### ${x.m.label}\n${x.nar.text}\n\n${svgChartImg(x.m, pairs)}\n\n> 趋势（${x.m.label}）：${asciiSpark(x.s.values)}\n\n`;
     });
   });
   const warns=items.filter(x=>x.nar&&x.nar.level!=='ok');
