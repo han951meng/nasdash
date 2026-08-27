@@ -875,6 +875,14 @@ def _parse_sensors_all(j):
                         nm = "CMOS 电池"
                     voltages.append({"name": nm, "value": round(v, 2)})
                     break
+    # 论坛反馈：很多主板 SYSTIN 是错的（虚高/无效），主板温度应优先用 ACPI(acpitz)
+    # 提供的稳定「系统环境温度」。若存在 acpitz，把「主板温度」主名让给它，SYSTIN 降级为「主板(SYSTIN)」。
+    _acpi_i = next((i for i, _t in enumerate(temps) if _t.get("name") == "主板(ACPI)"), None)
+    _systin_i = next((i for i, _t in enumerate(temps) if _t.get("name") == "主板温度"), None)
+    if _acpi_i is not None:
+        if _systin_i is not None:
+            temps[_systin_i]["name"] = "主板(SYSTIN)"
+        temps[_acpi_i]["name"] = "主板温度"
     return temps, voltages
 
 _TEMP_SNAP = {"t": 0.0, "cpu_temp": None, "mb_temp": None, "temps": [], "voltages": [], "disks": {}, "raid_temp": None}
@@ -7267,6 +7275,13 @@ def _save_alerts(cfg):
 
 def _mb_temp_from_sensors(sensors):
     temps = (sensors or {}).get("temps", []) or []
+    # 优先取 acpitz 优先后的「主板温度」主值（论坛反馈：SYSTIN 很多主板错，acpitz 更稳）
+    _primary = [t for t in temps if t.get("name") == "主板温度"]
+    if _primary:
+        try:
+            return float(_primary[0]["value"])
+        except (TypeError, ValueError):
+            pass
     cand = []
     for t in temps:
         name = (t.get("name") or "")
