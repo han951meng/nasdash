@@ -5195,6 +5195,12 @@ def _init_history_db():
                 ts INTEGER PRIMARY KEY,
                 disk_read REAL, disk_write REAL,
                 net_rx REAL, net_tx REAL, cpu_power REAL)""")
+            # 兼容旧库（早期只有 disk_read/disk_write 两列的表）：缺列则补，避免 INSERT 报「no column」被吞、历史停止写入
+            for col in ("net_rx", "net_tx", "cpu_power"):
+                try:
+                    con.execute(f"ALTER TABLE samples ADD COLUMN {col} REAL")
+                except Exception:
+                    pass
             con.commit(); con.close()
     except Exception:
         pass
@@ -6435,11 +6441,13 @@ def api_history():
         with _db_lock:
             con = _sqlite3.connect(_DB_PATH)
             rows = con.execute(
-                "SELECT (ts/?)*?*1000 AS bts, AVG(disk_read), AVG(disk_write) "
+                "SELECT (ts/?)*?*1000 AS bts, AVG(disk_read), AVG(disk_write), AVG(net_rx), AVG(net_tx), AVG(cpu_power) "
                 "FROM samples WHERE ts>=? GROUP BY bts ORDER BY bts",
                 (bucket, bucket, start)).fetchall()
             con.close()
-        points = [{"ts": r[0], "disk_read": round(r[1] or 0, 1), "disk_write": round(r[2] or 0, 1)} for r in rows]
+        points = [{"ts": r[0], "disk_read": round(r[1] or 0, 1), "disk_write": round(r[2] or 0, 1),
+                   "net_rx": round(r[3] or 0, 1), "net_tx": round(r[4] or 0, 1),
+                   "cpu_power": round(r[5] or 0, 1)} for r in rows]
         return jsonify({"range": rng, "points": points, "bucket_s": bucket})
     except Exception as e:
         return jsonify({"error": str(e), "points": []})
