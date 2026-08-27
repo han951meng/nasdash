@@ -2080,7 +2080,18 @@ function renderTemps(s){
               : (DATA && DATA.raid && typeof DATA.raid.controller_temp==='number') ? DATA.raid.controller_temp
               : null;
   let raidEntry = (raidTemp!=null) ? {name:'阵列卡芯片温度', raw:'Controller Temperature (ROC)', value:raidTemp, max:80, crit:90} : null;
-  let wallEntries = raidEntry ? tempEntries.concat([raidEntry]) : tempEntries;
+  // 显卡温度：优先统一快照（fetchTemps 每 5s 拉到 LAST_TEMPS.gpus），回退页面数据 / 全局 DATA
+  let gpusSrc = (LAST_TEMPS && Array.isArray(LAST_TEMPS.gpus)) ? LAST_TEMPS.gpus
+              : (s && Array.isArray(s.gpus)) ? s.gpus
+              : (DATA && DATA.system && Array.isArray(DATA.system.gpus)) ? DATA.system.gpus
+              : [];
+  let gpuEntries = gpusSrc.map(function(g){
+    let isIgpu = (g.vendor!=='10de' && g.vendor!=='1002');
+    let nm = (g.name||g.type||'显卡');
+    let label = (isIgpu?'核显':'独显') + (gpusSrc.length>1?(' '+nm):'');
+    return {name: label, raw: (nm+' GPU 温度'), value: g.temp, max:95, crit:100};
+  }).filter(function(e){ return typeof e.value==='number' && e.value>0 && e.value<150; });
+  let wallEntries = tempEntries.concat(raidEntry?[raidEntry]:[], gpuEntries);
   let wall = wallEntries.length?`<div class="temp-wall">${wallEntries.map(t=>{let raw=t.raw||'';let tip=raw?raw+'（原始测点名）':'';let star=(t.name==='CPU 封装温度')?' <span class="best-tag" title="CPU 内部传感器直读，最准确">★最准</span>':'';let trip=t.crit||t.max||85;return `<div class="temp-chip" title="${esc(tip)}"><span class="tc-name">${esc(t.name)}${star}</span><span class="tc-val" style="color:${tempColor(t.value, trip)}">${t.value}°C</span></div>`;}).join('')}</div>`:'<div class="loading">未检测到温度测点</div>';
   // 温度汇总：最高、平均、偏高/告警数量（与系统资源页的 CPU/内存解耦，避免重复）
   let maxTemp = null, avgTemp = null, warnCount = 0, critCount = 0;
@@ -2109,7 +2120,7 @@ function renderTemps(s){
     <div class="card" style="grid-column:1/-1">
       <h3 title="硬件能承受的温度上限，超过会降频保护">温度墙</h3>
       ${wall}
-      <div style="margin-top:8px;font-size:12px;color:var(--muted)">主板传感器测点 + 阵列卡芯片温度全览（已过滤无效 0°C / 负温）；鼠标悬停可查看原始英文名。颜色：绿正常 · 橙偏高 · 红危险</div>
+      <div style="margin-top:8px;font-size:12px;color:var(--muted)">主板传感器测点 + 阵列卡芯片温度 + 显卡温度全览（已过滤无效 0°C / 负温）；鼠标悬停可查看原始英文名。颜色：绿正常 · 橙偏高 · 红危险</div>
     </div>
   </div>`;
 }

@@ -6907,6 +6907,13 @@ def api_fan_temps():
         # 温度墙测点全量 + 阵列卡芯片温度：前端温度页 5s 实时刷新用（不再等 30s 快照）
         "sensors": _snap.get("temps") or [],
         "raid_temp": _snap.get("raid_temp"),
+        # 显卡温度：复用 GPU 实时采样缓存（2s 刷新），仅取温度相关字段，供温度墙展示。
+        # iGPU（Intel 核显）temp 取 CPU 封装温度（同 die）；dGPU 走各自驱动。
+        "gpus": [
+            {"name": gg.get("name"), "vendor": gg.get("vendor"),
+             "type": gg.get("type"), "temp": gg.get("temp")}
+            for gg in _get_gpu_live()
+        ],
     })
 
 
