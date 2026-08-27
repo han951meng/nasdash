@@ -6519,13 +6519,18 @@ def api_history():
                 "FROM samples WHERE ts>=? GROUP BY bts ORDER BY bts",
                 (bucket, bucket, start)).fetchall()
             con.close()
-        points = [{"ts": r[0], "disk_read": round(r[1] or 0, 1), "disk_write": round(r[2] or 0, 1),
-                   "net_rx": round(r[3] or 0, 1), "net_tx": round(r[4] or 0, 1),
-                   "cpu_power": round(r[5] or 0, 1),
-                   "cpu_temp": round(r[6] or 0, 1), "mb_temp": round(r[7] or 0, 1),
-                   "gpu_temp": round(r[8] or 0, 1), "disk_temp_max": round(r[9] or 0, 1),
-                   "raid_temp": round(r[10] or 0, 1), "fan_rpm_avg": round(r[11] or 0, 0),
-                   "mem_used_pct": round(r[12] or 0, 1)} for r in rows]
+        def _v(idx, digits=1):
+            v = r[idx]
+            if v is None:
+                return None
+            return round(v, digits)
+        points = [{"ts": r[0], "disk_read": _v(1), "disk_write": _v(2),
+                   "net_rx": _v(3), "net_tx": _v(4),
+                   "cpu_power": _v(5),
+                   "cpu_temp": _v(6), "mb_temp": _v(7),
+                   "gpu_temp": _v(8), "disk_temp_max": _v(9),
+                   "raid_temp": _v(10), "fan_rpm_avg": _v(11, 0),
+                   "mem_used_pct": _v(12)} for r in rows]
         return jsonify({"range": rng, "points": points, "bucket_s": bucket})
     except Exception as e:
         return jsonify({"error": str(e), "points": []})
