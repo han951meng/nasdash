@@ -4734,19 +4734,40 @@ function toCSV(points){
   }).join(','));
   return head+'\n'+rows.join('\n');
 }
-function toMarkdown(range, genAt, items, overview){
+// 真折线图（Mermaid xychart-beta）：GitHub / VS Code(Mermaid 插件) / Typora / Obsidian / Notion 等查看器会渲染为真实 SVG 折线图，和 HTML 版视觉一致
+function mermaidChart(m, pairs){
+  if(!pairs || pairs.length < 2) return '';
+  const conv = m.unit==='speed' ? (v=>v/1024) : (v=>v);
+  const unitLabel = m.unit==='speed' ? 'KB/s' : m.unit;
+  const all = pairs.map(p=>({t:p.ts, v:conv(p.v)}));
+  const step = Math.max(1, Math.ceil(all.length/30));
+  const ds = all.filter((_,i)=> i%step===0 || i===all.length-1);
+  if(ds.length < 2) return '';
+  const vals = ds.map(d=>d.v);
+  const mn=Math.min(...vals), mx=Math.max(...vals), span=(mx-mn)||1;
+  const lo=Math.floor(mn - span*0.1 - 0.5), hi=Math.ceil(mx + span*0.1 + 0.5);
+  const xs=ds.map(d=>'"'+fmtTime(d.t)+'"');
+  const line=vals.map(v=>Math.round(v*100)/100);
+  const title=m.label + (m.unit==='speed' ? ' (KB/s)' : ' ('+m.unit+')');
+  return '```mermaid\nxychart-beta\n  title "'+title+'"\n  x-axis ['+xs.join(', ')+']\n  y-axis "'+unitLabel+'" '+lo+' --> '+hi+'\n  line ['+line.join(', ')+']\n```';
+}
+function toMarkdown(range, genAt, items, overview, points){
   const rt={'24h':'24 小时','7d':'7 天','30d':'30 天'}[range]||range;
   const n=items.length?items[0].s.n:0;
   let md='# nasdash 历史趋势分析报告\n\n';
   md+=`- 数据区间：${rt}（历史数据自动保留 30 天）\n`;
   md+=`- 生成时间：${genAt}\n`;
   md+=`- 数据样本：${n} 条（每 30 秒聚合一点）\n\n`;
+  md+=`- 说明：下方折线图采用 Mermaid 格式，在 GitHub / VS Code(装 Mermaid 插件) / Typora / Obsidian / Notion 中可渲染为真实折线图；纯文本环境会显示原始数据，下方另有「文本趋势线」兜底。\n\n`;
   md+=`## 总体结论\n\n${overview.text}\n\n`;
   REPORT_GROUPS.forEach(g=>{
     const gs=items.filter(x=>g.keys.includes(x.m.key));
     if(!gs.length) return;
     md+=`## ${g.title}\n\n`;
-    gs.forEach(x=>{ md+=`### ${x.m.label}\n${x.nar.text}\n\n> 趋势（${x.m.label}）：${asciiSpark(x.s.values)}\n\n`; });
+    gs.forEach(x=>{
+      const pairs=(points||[]).map(p=>({ts:p.ts, v:p[x.m.key]})).filter(p=> typeof p.v==='number' && !isNaN(p.v));
+      md+=`### ${x.m.label}\n${x.nar.text}\n\n${mermaidChart(x.m, pairs)}\n\n> 趋势（${x.m.label}）：${asciiSpark(x.s.values)}\n\n`;
+    });
   });
   const warns=items.filter(x=>x.nar&&x.nar.level!=='ok');
   if(warns.length){
@@ -4798,7 +4819,7 @@ async function genReport(range, fmt){
     const genAt=new Date().toLocaleString('zh-CN');
     let content,mime,ext,bom=false;
     if(fmt==='csv'){ content=toCSV(pts); mime='text/csv'; ext='csv'; bom=true; }
-    else if(fmt==='md'){ content=toMarkdown(range,genAt,items,overview); mime='text/markdown'; ext='md'; }
+    else if(fmt==='md'){ content=toMarkdown(range,genAt,items,overview,pts); mime='text/markdown'; ext='md'; }
     else { content=toHTML(range,genAt,items,overview); mime='text/html'; ext='html'; }
     const fn=`nasdash-历史报告-${range}-${new Date().toISOString().slice(0,10)}.${ext}`;
     downloadReport(fn, content, mime, bom);
