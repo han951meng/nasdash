@@ -5229,9 +5229,15 @@ def _init_history_db():
             con.execute("""CREATE TABLE IF NOT EXISTS samples(
                 ts INTEGER PRIMARY KEY,
                 disk_read REAL, disk_write REAL,
-                net_rx REAL, net_tx REAL, cpu_power REAL)""")
-            # 兼容旧库（早期只有 disk_read/disk_write 两列的表）：缺列则补，避免 INSERT 报「no column」被吞、历史停止写入
-            for col in ("net_rx", "net_tx", "cpu_power"):
+                net_rx REAL, net_tx REAL, cpu_power REAL,
+                cpu_temp REAL, mb_temp REAL, gpu_temp REAL,
+                disk_temp_max REAL, raid_temp REAL,
+                fan_rpm_avg REAL, mem_used_pct REAL)""")
+            # 兼容旧库：缺列则补，避免 INSERT 报「no column」被吞、历史停止写入
+            for col in ("net_rx", "net_tx", "cpu_power",
+                        "cpu_temp", "mb_temp", "gpu_temp",
+                        "disk_temp_max", "raid_temp",
+                        "fan_rpm_avg", "mem_used_pct"):
                 try:
                     con.execute(f"ALTER TABLE samples ADD COLUMN {col} REAL")
                 except Exception:
@@ -5252,11 +5258,42 @@ def _write_history_sample():
         dw = sum((d.get("write_rate") or 0) for d in disk)
         nr = sum((n.get("rx_rate") or 0) for n in net)
         nw = sum((n.get("tx_rate") or 0) for n in net)
+        # 温度/风扇/内存快照（复用已有采样结果，避免每次开 shell）
+        ts = _TEMP_SNAP
+        cpu_temp = ts.get("cpu_temp")
+        mb_temp = ts.get("mb_temp")
+        raid_temp = ts.get("raid_temp")
+        disk_states = ts.get("disks") or {}
+        disk_temps = [v.get("temp") for v in disk_states.values()
+                      if isinstance(v, dict) and isinstance(v.get("temp"), (int, float))]
+        disk_temp_max = max(disk_temps) if disk_temps else None
+        try:
+            gpus = _get_gpu_live()
+            gpu_temp = next((g.get("temp") for g in gpus if isinstance(g.get("temp"), (int, float))), None)
+        except Exception:
+            gpu_temp = None
+        try:
+            fans = get_fan_status()
+            rpms = [f.get("rpm") for f in fans if isinstance(f.get("rpm"), (int, float))]
+            fan_rpm_avg = round(sum(rpms) / len(rpms), 0) if rpms else None
+        except Exception:
+            fan_rpm_avg = None
+        try:
+            meminfo = read_file("/proc/meminfo")
+            mi = {}
+            for line in meminfo.splitlines():
+                m = re.match(r"(\w+):\s+(\d+)", line)
+                if m:
+                    mi[m.group(1)] = int(m.group(2))
+            mt = mi.get("MemTotal", 0); ma = mi.get("MemAvailable", 0)
+            mem_used_pct = round((mt - ma) / mt * 100, 1) if mt else None
+        except Exception:
+            mem_used_pct = None
         with _db_lock:
             con = _sqlite3.connect(_DB_PATH)
             con.execute(
-                "INSERT OR REPLACE INTO samples(ts,disk_read,disk_write,net_rx,net_tx,cpu_power) VALUES(?,?,?,?,?,?)",
-                (now, dr, dw, nr, nw, cpu))
+                "INSERT OR REPLACE INTO samples(ts,disk_read,disk_write,net_rx,net_tx,cpu_power,cpu_temp,mb_temp,gpu_temp,disk_temp_max,raid_temp,fan_rpm_avg,mem_used_pct) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (now, dr, dw, nr, nw, cpu, cpu_temp, mb_temp, gpu_temp, disk_temp_max, raid_temp, fan_rpm_avg, mem_used_pct))
             cutoff = now - 30*86400
             con.execute("DELETE FROM samples WHERE ts < ?", (cutoff,))
             con.commit(); con.close()
@@ -6476,13 +6513,19 @@ def api_history():
         with _db_lock:
             con = _sqlite3.connect(_DB_PATH)
             rows = con.execute(
-                "SELECT (ts/?)*?*1000 AS bts, AVG(disk_read), AVG(disk_write), AVG(net_rx), AVG(net_tx), AVG(cpu_power) "
+                "SELECT (ts/?)*?*1000 AS bts, AVG(disk_read), AVG(disk_write), AVG(net_rx), AVG(net_tx), AVG(cpu_power), "
+                "AVG(cpu_temp), AVG(mb_temp), AVG(gpu_temp), AVG(disk_temp_max), AVG(raid_temp), "
+                "AVG(fan_rpm_avg), AVG(mem_used_pct) "
                 "FROM samples WHERE ts>=? GROUP BY bts ORDER BY bts",
                 (bucket, bucket, start)).fetchall()
             con.close()
         points = [{"ts": r[0], "disk_read": round(r[1] or 0, 1), "disk_write": round(r[2] or 0, 1),
                    "net_rx": round(r[3] or 0, 1), "net_tx": round(r[4] or 0, 1),
-                   "cpu_power": round(r[5] or 0, 1)} for r in rows]
+                   "cpu_power": round(r[5] or 0, 1),
+                   "cpu_temp": round(r[6] or 0, 1), "mb_temp": round(r[7] or 0, 1),
+                   "gpu_temp": round(r[8] or 0, 1), "disk_temp_max": round(r[9] or 0, 1),
+                   "raid_temp": round(r[10] or 0, 1), "fan_rpm_avg": round(r[11] or 0, 0),
+                   "mem_used_pct": round(r[12] or 0, 1)} for r in rows]
         return jsonify({"range": rng, "points": points, "bucket_s": bucket})
     except Exception as e:
         return jsonify({"error": str(e), "points": []})

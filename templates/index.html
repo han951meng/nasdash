@@ -4470,10 +4470,13 @@ function initHistory(){
       {v:'24 小时',k:'当前区间'},
       {v:'30 天',k:'数据保留'}
     ]}) + `
-      <div class="seg" id="hist-metric" style="margin-bottom:8px">
+      <div class="seg" id="hist-metric" style="margin-bottom:8px;flex-wrap:wrap">
         <button class="seg-btn active" data-metric="disk">磁盘 I/O</button>
         <button class="seg-btn" data-metric="net">网络</button>
         <button class="seg-btn" data-metric="power">功耗</button>
+        <button class="seg-btn" data-metric="temp">温度</button>
+        <button class="seg-btn" data-metric="fan">风扇</button>
+        <button class="seg-btn" data-metric="mem">内存</button>
       </div>
       <div class="section-title" id="hist-section-title">磁盘 I/O 历史趋势</div>
       <div class="card">
@@ -4492,7 +4495,8 @@ function initHistory(){
         b.classList.add('active');
         histMetric = b.dataset.metric;
         document.getElementById('hist-section-title').textContent =
-          {disk:'磁盘 I/O 历史趋势', net:'网络速率历史趋势', power:'CPU 功耗历史趋势'}[histMetric];
+          {disk:'磁盘 I/O 历史趋势', net:'网络速率历史趋势', power:'CPU 功耗历史趋势',
+           temp:'温度历史趋势', fan:'风扇转速历史趋势', mem:'内存占用历史趋势'}[histMetric];
         drawHist(_lastHist);
       };
     });
@@ -4531,14 +4535,17 @@ function drawHist(d){
   const CFG = {
     disk:  {keys:[['disk_read','#4aa3ff','读'],['disk_write','#ff7a59','写']], unit:'speed'},
     net:   {keys:[['net_rx','#3ec97a','↓下载'],['net_tx','#ffb020','↑上传']], unit:'speed'},
-    power: {keys:[['cpu_power','#b07cff','CPU 功耗']], unit:'w'}
+    power: {keys:[['cpu_power','#b07cff','CPU 功耗']], unit:'w'},
+    temp:  {keys:[['cpu_temp','#4aa3ff','CPU温度'],['mb_temp','#3ec97a','主板温度'],['disk_temp_max','#ff7a59','硬盘最高温'],['raid_temp','#b07cff','阵列卡'],['gpu_temp','#ffb020','GPU温度']], unit:'c'},
+    fan:   {keys:[['fan_rpm_avg','#4aa3ff','风扇平均转速']], unit:'rpm'},
+    mem:   {keys:[['mem_used_pct','#3ec97a','内存占用率']], unit:'pct'}
   }[histMetric] || {keys:[], unit:'speed'};
   let maxV = 1;
   CFG.keys.forEach(k=>pts.forEach(p=>{ const v=p[k[0]]||0; if(v>maxV) maxV=v; }));
   const padL=46, padR=10, padT=10, padB=20;
   const X = i => padL + (cssW-padL-padR)*(i/((pts.length-1)||1));
   const Y = v => (cssH-padB) - (cssH-padB-padT)*(v/maxV);
-  const fmtAxis = v => CFG.unit==='w' ? Math.round(v)+'W' : fmtSpeed(v);
+  const fmtAxis = v => CFG.unit==='w' ? Math.round(v)+'W' : CFG.unit==='c' ? Math.round(v)+'°C' : CFG.unit==='rpm' ? Math.round(v)+' RPM' : CFG.unit==='pct' ? Math.round(v)+'%' : fmtSpeed(v);
   ctx.strokeStyle='rgba(128,128,128,0.15)'; ctx.lineWidth=1;
   ctx.fillStyle=muted; ctx.font='10px sans-serif'; ctx.textAlign='right'; ctx.textBaseline='middle';
   for(let g=0; g<=3; g++){
@@ -4554,8 +4561,9 @@ function drawHist(d){
   // 图例
   const legEl = document.getElementById('hist-legend');
   if(legEl){
+    const unitText = CFG.unit==='w' ? '单位 W' : CFG.unit==='c' ? '单位 °C' : CFG.unit==='rpm' ? '单位 RPM' : CFG.unit==='pct' ? '单位 %' : '速率自适应 B/s·KB/s·MB/s';
     legEl.innerHTML = CFG.keys.map(k=>`${k[2]} <span style="color:${k[1]}">■</span>`).join(' &nbsp; ') +
-      (CFG.unit==='w' ? ' &nbsp; 单位 W' : ' &nbsp; 速率自适应 B/s·KB/s·MB/s') +
+      ' &nbsp; ' + unitText +
       '（数据自部署起累积，自动保留 30 天）';
   }
 }
