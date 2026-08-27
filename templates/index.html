@@ -4510,6 +4510,7 @@ function initHistory(){
                 <button class="seg-btn" data-rpt-fmt="md">Markdown</button>
                 <button class="seg-btn" data-rpt-fmt="csv">CSV 数据</button>
               </div>
+              <div id="rpt-fmt-hint" style="font-size:12px;color:var(--text-3);margin-top:8px;line-height:1.6"></div>
             </div>
             <div id="report-status" style="font-size:12px;color:var(--text-3);margin-top:10px;min-height:16px"></div>
           </div>
@@ -4549,8 +4550,17 @@ function initHistory(){
       b.onclick = ()=>{ box.querySelectorAll('#report-modal .seg-btn[data-rpt-range]').forEach(x=>x.classList.remove('active')); b.classList.add('active'); rptRange = b.dataset.rptRange; };
     });
     box.querySelectorAll('#report-modal .seg-btn[data-rpt-fmt]').forEach(b=>{
-      b.onclick = ()=>{ box.querySelectorAll('#report-modal .seg-btn[data-rpt-fmt]').forEach(x=>x.classList.remove('active')); b.classList.add('active'); rptFmt = b.dataset.rptFmt; };
+      b.onclick = ()=>{ box.querySelectorAll('#report-modal .seg-btn[data-rpt-fmt]').forEach(x=>x.classList.remove('active')); b.classList.add('active'); rptFmt = b.dataset.rptFmt; updateRptFmtHint(); };
     });
+    function updateRptFmtHint(){
+      const h=document.getElementById('rpt-fmt-hint'); if(!h) return;
+      h.innerHTML = {
+        html:'<b>HTML</b>：任意环境（双击即开）均显示真折线图，推荐大多数人使用。',
+        md:'<b>Markdown</b>：折线图为内嵌图片，需用支持预览的查看器——VS Code 按 <b>Cmd/Ctrl+Shift+V</b> 进「预览」视图才看得到图；代码视图、GitHub 网页、微信里只显示文字，属正常。',
+        csv:'<b>CSV</b>：原始数据（已换算 KB/s、中文表头），用 Excel / 表格软件直接打开分析。'
+      }[rptFmt] || '';
+    }
+    updateRptFmtHint();
     const genBtn = document.getElementById('report-gen'); if(genBtn) genBtn.onclick = ()=>genReport(rptRange, rptFmt);
     const cancelBtn = document.getElementById('report-cancel'); if(cancelBtn) cancelBtn.onclick = closeReportModal;
     _histInited = true;
@@ -4770,7 +4780,7 @@ function toMarkdown(range, genAt, items, overview, points){
   md+=`- 数据区间：${rt}（历史数据自动保留 30 天）\n`;
   md+=`- 生成时间：${genAt}\n`;
   md+=`- 数据样本：${n} 条（每 30 秒聚合一点）\n\n`;
-  md+=`- 说明：下方折线图为内嵌 SVG 图片，在 VS Code / Typora / Obsidian / WorkBuddy 预览中均显示真实折线图；纯记事本/微信会显示图片链接文字，下方「文本趋势线」仍可看趋势。若需任意环境都为真图，请下载 HTML 版。\n\n`;
+  md+=`- 说明：下方折线图为内嵌 SVG 图片。在 VS Code 中请按 **Cmd+Shift+V（Mac）/ Ctrl+Shift+V（Win）** 打开「预览」视图查看真图；代码视图、GitHub 网页、微信中只显示图片链接文字属正常现象（下方「文本趋势线」仍可看趋势）。若需任意环境都为真图，请下载 HTML 版。\n\n`;
   md+=`## 总体结论\n\n${overview.text}\n\n`;
   REPORT_GROUPS.forEach(g=>{
     const gs=items.filter(x=>g.keys.includes(x.m.key));
