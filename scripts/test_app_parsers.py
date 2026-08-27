@@ -318,11 +318,61 @@ def test_fan_read_sys_temp_cpu_amd_tdie(monkeypatch):
 
 
 def test_fan_read_sys_temp_mb_excludes_coretemp(monkeypatch):
+    # 无 acpitz / 无 SYSTIN 时，回落到「排除 coretemp/AUXTIN 后的最高温」
     sens = json.dumps({
         "coretemp-isa-0000": {"Package id 0": {"temp1_input": 70.0}},
         "it8620-isa-0290": {"temp1": {"temp1_input": 38.0}, "temp2": {"temp2_input": 41.0}},
     })
     assert app._parse_mb_temp(json.loads(sens)) == 41.0  # 主板温度取 it86 最高，不含 coretemp
+
+
+def test_fan_read_sys_temp_mb_prefers_acpitz(monkeypatch):
+    # 论坛反馈：SYSTIN 在很多主板是错的；应优先取 acpitz（ACPI 系统环境温度，稳定不虚高）
+    sens = json.dumps({
+        "acpitz-acpi-0": {"temp1": {"temp1_input": 33.0}},
+        "nct6797-isa-0a00": {
+            "SYSTIN": {"temp1_input": 62.0},   # 虚高（错误值）
+            "CPUTIN": {"temp2_input": 45.0},
+        },
+        "coretemp-isa-0000": {"Package id 0": {"temp1_input": 55.0}},
+    })
+    assert app._parse_mb_temp(json.loads(sens)) == 33.0  # 取 acpitz，而非 SYSTIN
+
+
+def test_fan_read_sys_temp_mb_acpitz_insane_falls_back(monkeypatch):
+    # acpitz 报出明显传感器错误（>90）时，应回落到 SYSTIN，而不是把错值当真
+    sens = json.dumps({
+        "acpitz-acpi-0": {"temp1": {"temp1_input": 127.0}},
+        "nct6797-isa-0a00": {"SYSTIN": {"temp1_input": 36.0}},
+    })
+    assert app._parse_mb_temp(json.loads(sens)) == 36.0
+
+
+def test_sensors_all_mb_temp_prefers_acpitz(monkeypatch):
+    # 论坛反馈 bug 核心：面板「主板温度」条目应优先用 acpitz（ACPI 系统环境温度，稳定），
+    # 而非 SYSTIN（很多主板是错的）。SYSTIN 降级为「主板(SYSTIN)」保留展示，不丢信息。
+    sens = json.dumps({
+        "acpitz-acpi-0": {"temp1": {"temp1_input": 28.0}},
+        "nct6797-isa-0a00": {
+            "SYSTIN": {"temp1_input": 43.0},   # 虚高（错误值）
+            "CPUTIN": {"temp2_input": 36.0},
+            "AUXTIN": {"temp3_input": 999.0},  # 异常值，应被忽略
+        },
+    })
+    temps, _ = app._parse_sensors_all(json.loads(sens))
+    names = {t["name"]: t["value"] for t in temps}
+    assert names.get("主板温度") == 28, "主板温度应=acpitz(28)，而非 SYSTIN(43)"
+    assert names.get("主板(SYSTIN)") == 43, "SYSTIN 应降级为「主板(SYSTIN)」"
+    assert "主板(ACPI)" not in names, "主板(ACPI)应已合并改名"
+
+
+def test_mb_temp_from_sensors_prefers_acpitz(monkeypatch):
+    # 告警判定（主板/芯片组温度过高）也应取 acpitz 优先后的「主板温度」主值
+    sensors = {"temps": [
+        {"name": "主板温度", "value": 28.0},
+        {"name": "主板(SYSTIN)", "value": 43.0},
+    ]}
+    assert app._mb_temp_from_sensors(sensors) == 28.0
 
 
 # ---------------- Docker 资源解析（v1.10.0） ----------------

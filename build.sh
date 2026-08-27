@@ -11,7 +11,10 @@ case "$(uname -s)" in
 esac
 
 # 1. 重建 app.tgz（含 app.py / ui / config / bin / templates / docs 操作手册）
-tar $TAR_FMT -czf app.tgz app.py ui config bin templates docs
+#    只打包手册本体 docs/使用手册.md——严禁把整个 docs/ 目录打进包！
+#    历史教训：整目录打包导致 screenshots/、ui-2.0-preview.html 乃至内部 WORKFLOW.md
+#    等随 fpk 外泄（fpk 内 app.tgz 路径需保留 docs/使用手册.md 以匹配 app.py 的读取路径）。
+tar $TAR_FMT -czf app.tgz app.py ui config bin templates "docs/使用手册.md"
 
 # 2. 同步 manifest.checksum（GNU tar 把 mtime 嵌进归档，md5 必漂移，必须重算）
 python3 - <<'PY'

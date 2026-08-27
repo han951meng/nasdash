@@ -763,8 +763,16 @@ def _parse_cpu_temp(j):
     return max(fallback) if fallback else None
 
 def _parse_mb_temp(j):
-    """统一主板温度解析（纯函数）：SYSTIN 精确测点优先；
-    回落排除 coretemp/AUX 后最高；再回落非 coretemp 最高。"""
+    """统一主板温度解析（纯函数）。
+
+    优先级（均带合理性护栏：0~90°C 视为有效，过滤传感器错误值）：
+      1) acpitz —— ACPI 固件报的「系统环境温度」，多数主板最稳、不易虚高
+                  （很多主板的 SYSTIN 是错的，论坛反馈据此优先取 acpitz）
+      2) SYSTIN  —— hwmon 上的精确测点
+      3) 排除 coretemp / AUXTIN 后的最高温
+      4) 非 coretemp 最高温（兜底）
+    任一来源无效/缺失则自动回落到下一来源，避免把传感器错误值当真。
+    """
     temps = []
     for chip, entries in (j or {}).items():
         if not isinstance(entries, dict):
@@ -777,15 +785,34 @@ def _parse_mb_temp(j):
                     temps.append((str(chip), str(ename), float(v)))
     if not temps:
         return None
-    systin = [t for t in temps if t[1].strip().upper() == "SYSTIN"]
+
+    def _sane(v):
+        return isinstance(v, (int, float)) and 0 <= v <= 90
+
+    # 1) acpitz（ACPI 系统环境温度）优先
+    acpitz = [t for t in temps if str(t[0]).lower().startswith("acpitz") and _sane(t[2])]
+    if acpitz:
+        return acpitz[0][2]
+
+    # 2) SYSTIN 精确测点
+    systin = [t for t in temps if t[1].strip().upper() == "SYSTIN" and _sane(t[2])]
     if systin:
         return systin[0][2]
-    mb = [t for t in temps if "coretemp" not in t[0].lower() and not t[1].strip().upper().startswith("AUXTIN")]
+
+    # 3) 排除 coretemp / AUXTIN 后的最高温
+    mb = [t for t in temps
+          if "coretemp" not in t[0].lower()
+          and not t[1].strip().upper().startswith("AUXTIN")
+          and _sane(t[2])]
     if mb:
         return max(t[2] for t in mb)
-    mb2 = [t for t in temps if "coretemp" not in t[0].lower()]
+
+    # 4) 非 coretemp 最高温（兜底）
+    mb2 = [t for t in temps if "coretemp" not in t[0].lower() and _sane(t[2])]
     if mb2:
         return max(t[2] for t in mb2)
+
+    # 5) 实在没有合理值，返回全部里的最高（保持旧行为兜底）
     return max(t[2] for t in temps)
 
 def _parse_sensors_all(j):
@@ -848,6 +875,14 @@ def _parse_sensors_all(j):
                         nm = "CMOS 电池"
                     voltages.append({"name": nm, "value": round(v, 2)})
                     break
+    # 论坛反馈：很多主板 SYSTIN 是错的（虚高/无效），主板温度应优先用 ACPI(acpitz)
+    # 提供的稳定「系统环境温度」。若存在 acpitz，把「主板温度」主名让给它，SYSTIN 降级为「主板(SYSTIN)」。
+    _acpi_i = next((i for i, _t in enumerate(temps) if _t.get("name") == "主板(ACPI)"), None)
+    _systin_i = next((i for i, _t in enumerate(temps) if _t.get("name") == "主板温度"), None)
+    if _acpi_i is not None:
+        if _systin_i is not None:
+            temps[_systin_i]["name"] = "主板(SYSTIN)"
+        temps[_acpi_i]["name"] = "主板温度"
     return temps, voltages
 
 _TEMP_SNAP = {"t": 0.0, "cpu_temp": None, "mb_temp": None, "temps": [], "voltages": [], "disks": {}, "raid_temp": None}
@@ -6880,6 +6915,13 @@ def api_fan_temps():
         # 温度墙测点全量 + 阵列卡芯片温度：前端温度页 5s 实时刷新用（不再等 30s 快照）
         "sensors": _snap.get("temps") or [],
         "raid_temp": _snap.get("raid_temp"),
+        # 显卡温度：复用 GPU 实时采样缓存（2s 刷新），仅取温度相关字段，供温度墙展示。
+        # iGPU（Intel 核显）temp 取 CPU 封装温度（同 die）；dGPU 走各自驱动。
+        "gpus": [
+            {"name": gg.get("name"), "vendor": gg.get("vendor"),
+             "type": gg.get("type"), "temp": gg.get("temp")}
+            for gg in _get_gpu_live()
+        ],
     })
 
 
@@ -7248,6 +7290,13 @@ def _save_alerts(cfg):
 
 def _mb_temp_from_sensors(sensors):
     temps = (sensors or {}).get("temps", []) or []
+    # 优先取 acpitz 优先后的「主板温度」主值（论坛反馈：SYSTIN 很多主板错，acpitz 更稳）
+    _primary = [t for t in temps if t.get("name") == "主板温度"]
+    if _primary:
+        try:
+            return float(_primary[0]["value"])
+        except (TypeError, ValueError):
+            pass
     cand = []
     for t in temps:
         name = (t.get("name") or "")
