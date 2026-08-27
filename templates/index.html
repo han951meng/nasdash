@@ -4695,10 +4695,43 @@ function sparkline(values, color, w, h){
   const pts=values.map((v,i)=>`${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join(' ');
   return `<svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" preserveAspectRatio="none" style="display:block"><polyline points="${pts}" fill="none" stroke="${color}" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
 }
+// 文本迷你折线（ASCII sparkline）：任何纯文本环境都能看到趋势形状
+function asciiSpark(values, w){
+  w=w||32;
+  if(!values||values.length<2) return '';
+  const bars='▁▂▃▄▅▆▇█';
+  const min=Math.min(...values), max=Math.max(...values), span=(max-min)||1;
+  const n=values.length;
+  let s='';
+  for(let i=0;i<w;i++){
+    const idx=Math.floor(i/w*(n-1));
+    const v=values[idx];
+    s+=bars[Math.min(bars.length-1, Math.round((v-min)/span*(bars.length-1)))];
+  }
+  return s;
+}
 function toCSV(points){
-  const cols=['disk_read','disk_write','net_rx','net_tx','cpu_power','cpu_temp','mb_temp','gpu_temp','disk_temp_max','raid_temp','fan_rpm_avg','mem_used_pct'];
-  const head='时间,'+cols.join(',');
-  const rows=points.map(p=>fmtTimeFull(p.ts)+','+cols.map(c=>p[c]==null?'':p[c]).join(','));
+  const defs=[
+    {key:'disk_read', label:'磁盘读取(KB/s)', speed:true},
+    {key:'disk_write', label:'磁盘写入(KB/s)', speed:true},
+    {key:'net_rx', label:'网络下载(KB/s)', speed:true},
+    {key:'net_tx', label:'网络上传(KB/s)', speed:true},
+    {key:'cpu_power', label:'CPU功耗(W)'},
+    {key:'cpu_temp', label:'CPU温度(°C)'},
+    {key:'mb_temp', label:'主板温度(°C)'},
+    {key:'gpu_temp', label:'GPU温度(°C)'},
+    {key:'disk_temp_max', label:'硬盘最高温(°C)'},
+    {key:'raid_temp', label:'阵列卡温度(°C)'},
+    {key:'fan_rpm_avg', label:'风扇转速(RPM)'},
+    {key:'mem_used_pct', label:'内存占用(%)'}
+  ];
+  const head='时间,'+defs.map(d=>d.label).join(',');
+  const rows=points.map(p=>fmtTimeFull(p.ts)+','+defs.map(d=>{
+    let v=p[d.key];
+    if(v==null||isNaN(v)) return '';
+    if(d.speed) return (v/1024).toFixed(1);
+    return (Math.round(v*10)/10);
+  }).join(','));
   return head+'\n'+rows.join('\n');
 }
 function toMarkdown(range, genAt, items, overview){
@@ -4713,7 +4746,7 @@ function toMarkdown(range, genAt, items, overview){
     const gs=items.filter(x=>g.keys.includes(x.m.key));
     if(!gs.length) return;
     md+=`## ${g.title}\n\n`;
-    gs.forEach(x=>{ md+=`### ${x.m.label}\n${x.nar.text}\n\n`; });
+    gs.forEach(x=>{ md+=`### ${x.m.label}\n${x.nar.text}\n\n> 趋势（${x.m.label}）：${asciiSpark(x.s.values)}\n\n`; });
   });
   const warns=items.filter(x=>x.nar&&x.nar.level!=='ok');
   if(warns.length){
