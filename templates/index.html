@@ -4467,7 +4467,7 @@ function initHistory(){
   const box = document.getElementById('sys-hist');
   if(box && !_histInited){
     box.innerHTML = panelHero({icon:ICON_HISTORY,title:'历史趋势',sub:'多维度趋势（自适应时间范围）',stats:[
-      {v:'24 小时',k:'当前区间'},
+      {v:'24 小时',k:'当前区间', id:'hist-range-label'},
       {v:'30 天',k:'数据保留'}
     ]}) + `
       <div class="seg" id="hist-metric" style="margin-bottom:8px;flex-wrap:wrap">
@@ -4537,6 +4537,8 @@ function initHistory(){
         box.querySelectorAll('.seg-btn[data-range]').forEach(x=>x.classList.remove('active'));
         b.classList.add('active');
         histRange = b.dataset.range;
+        const rl = document.getElementById('hist-range-label');
+        if(rl) rl.textContent = { '24h':'24 小时', '7d':'7 天', '30d':'30 天' }[histRange] || histRange;
         loadHistory();
       };
     });
