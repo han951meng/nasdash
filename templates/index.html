@@ -601,7 +601,7 @@
   .dt-toggle{display:inline-flex;align-items:center;gap:8px;font-size:14px;font-weight:500;cursor:pointer}
   .dt-toggle input{accent-color:var(--blue);flex-shrink:0}
   .dt-toggle .num-stepper{display:inline-flex;align-items:center;gap:2px;flex-shrink:0}
-  .dt-toggle .num-stepper input{width:44px;padding:4px 2px;font-size:14px;line-height:1.4;text-align:center;border:1px solid var(--border);border-radius:6px;background:#fff;color:var(--text);-moz-appearance:textfield;appearance:textfield}
+  .dt-toggle .num-stepper input{width:44px;padding:4px 2px;font-size:14px;line-height:1.4;text-align:center;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);-moz-appearance:textfield;appearance:textfield}
   .dt-toggle .num-stepper input::-webkit-inner-spin-button,.dt-toggle .num-stepper input::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
   .dt-toggle .num-stepper .ns-btn{width:24px;height:26px;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:600;line-height:1;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);cursor:pointer;user-select:none;padding:0}
   .dt-toggle .num-stepper .ns-btn:hover{border-color:var(--blue);color:var(--blue)}
@@ -676,7 +676,7 @@
   .dt-toggle{display:flex;align-items:center;gap:8px;font-size:13px;margin:8px 0;cursor:pointer;color:var(--text)}
   .dt-toggle input[type=checkbox]{width:16px;height:16px;accent-color:var(--primary)}
   .dt-toggle .num-stepper{display:inline-flex;align-items:center;gap:2px;flex-shrink:0}
-  .dt-toggle .num-stepper input{width:44px;padding:4px 2px;font-size:14px;line-height:1.4;text-align:center;border:1px solid var(--border);border-radius:6px;background:#fff;color:var(--text);-moz-appearance:textfield;appearance:textfield}
+  .dt-toggle .num-stepper input{width:44px;padding:4px 2px;font-size:14px;line-height:1.4;text-align:center;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);-moz-appearance:textfield;appearance:textfield}
   .dt-toggle .num-stepper input::-webkit-inner-spin-button,.dt-toggle .num-stepper input::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
   .dt-toggle .num-stepper .ns-btn{width:24px;height:26px;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:600;line-height:1;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);cursor:pointer;user-select:none;padding:0}
   .dt-toggle .num-stepper .ns-btn:hover{border-color:var(--blue);color:var(--blue)}
@@ -692,10 +692,10 @@
   .curve-presets{display:flex;gap:6px;margin:6px 0 10px;flex-wrap:wrap}
   .curve-canvas{width:100%;height:150px;background:var(--bg);border:1px solid var(--border);border-radius:8px;margin-top:8px;display:block}
   /* 2.0 暗色兜底：子面板背景跟随 fill，避免黑底黑块；文字色统一走 Token */
-  [data-theme="dark"] .mem-slot,[data-theme="dark"] .temp-chip,[data-theme="dark"] .fan-card,[data-theme="dark"] .fan-presets,[data-theme="dark"] .dt-field,[data-theme="dark"] .dt-opt,[data-theme="dark"] .chan,[data-theme="dark"] .dt-live,[data-theme="dark"] .fan-rule-tip,[data-theme="dark"] .fan-hw-note,[data-theme="dark"] .fan-dc-note,[data-theme="dark"] .dt-hint,[data-theme="dark"] .temp-overview,[data-theme="dark"] .sleep-panel,[data-theme="dark"] .auto-card,[data-theme="dark"] .curve-pt-input,[data-theme="dark"] .fan-label-input,[data-theme="dark"] .fan-volt-select,[data-theme="dark"] .fan-rule-src,[data-theme="dark"] .fan-rule-fields input,[data-theme="dark"] .dt-field input,[data-theme="dark"] .auto-field input,[data-theme="dark"] .curve-canvas{background:var(--fill);border-color:var(--border)}
+  [data-theme="dark"] .mem-slot,[data-theme="dark"] .temp-chip,[data-theme="dark"] .fan-card,[data-theme="dark"] .fan-presets,[data-theme="dark"] .dt-field,[data-theme="dark"] .dt-opt,[data-theme="dark"] .chan,[data-theme="dark"] .dt-live,[data-theme="dark"] .fan-rule-tip,[data-theme="dark"] .fan-hw-note,[data-theme="dark"] .fan-dc-note,[data-theme="dark"] .dt-hint,[data-theme="dark"] .temp-overview,[data-theme="dark"] .sleep-panel,[data-theme="dark"] .auto-card,[data-theme="dark"] .curve-pt-input,[data-theme="dark"] .fan-label-input,[data-theme="dark"] .fan-volt-select,[data-theme="dark"] .fan-rule-src,[data-theme="dark"] .fan-rule-fields input,[data-theme="dark"] .dt-field input,[data-theme="dark"] .auto-field input,[data-theme="dark"] .curve-canvas,[data-theme="dark"] .dt-toggle .num-stepper input{background:var(--fill);border-color:var(--border)}
   /* 表单控件文字色显式补 Token：select/input 的 color 在部分浏览器/内核（Safari/webview）不继承页面样式，
      深底 + 系统默认黑字 = 深色模式下文字空白（温度源下拉框 2.0 以来的论坛反馈 bug）；color-scheme 已同步声明 */
-  [data-theme="dark"] .fan-rule-src,[data-theme="dark"] .fan-volt-select,[data-theme="dark"] .fan-rule-fields input,[data-theme="dark"] .dt-field input,[data-theme="dark"] .auto-field input,[data-theme="dark"] .curve-pt-input,[data-theme="dark"] .fan-label-input{color:var(--text)}
+  [data-theme="dark"] .fan-rule-src,[data-theme="dark"] .fan-volt-select,[data-theme="dark"] .fan-rule-fields input,[data-theme="dark"] .dt-field input,[data-theme="dark"] .auto-field input,[data-theme="dark"] .curve-pt-input,[data-theme="dark"] .fan-label-input,[data-theme="dark"] .dt-toggle .num-stepper input{color:var(--text)}
   [data-theme="dark"] .fan-rule-src option,[data-theme="dark"] .fan-volt-select option{background:var(--card);color:var(--text)}
   [data-theme="dark"] .kv{border-color:var(--divider)}
   [data-theme="dark"] .disk-group-title{color:var(--text-3)}
@@ -996,7 +996,7 @@ async function refreshPanel(id){
   document.querySelectorAll('.spin').forEach(spin=>spin.style.display='inline-block');
   try{
     if(id==='detect'){ // 硬件配置检测是全局概览，需要所有数据 → 走全量
-      var rr=await fetch('/api/all?_='+Date.now()); DATA=await rr.json(); renderAll(); return;
+      var rr=await fetchWithTimeout('/api/all?_='+Date.now(), {}, 60000); DATA=await rr.json(); renderAll(); return;
     }
     if(id==='sys-hist'){ loadHistory(); return; }
     if(id==='automation'){ if(typeof refreshAutomationAlerts==='function') refreshAutomationAlerts(); return; }
@@ -2647,9 +2647,12 @@ function _paintTemps(){
   row.innerHTML=_buildTempRow();
   var up=document.getElementById('temp-updated'); if(up) up.textContent='· 更新于 '+new Date().toLocaleTimeString();
 }
+let _tempsBusy=false;
 async function fetchTemps(){
+  if(_tempsBusy) return;            // 上一次没回来就跳过，避免请求堆叠挤爆网关
+  _tempsBusy=true;
   try{
-    var r=await fetch('/api/fan/temps?_='+Date.now());
+    var r=await fetchWithTimeout('/api/fan/temps?_='+Date.now(), {}, 30000);
     var j=await r.json();
     // 先把数据按 dev 合并 LAST_DISK_TEMPS：对未读出(temp=null)但前一刻读到的盘沿用上次值，
     // 避免温度显示在「44°C」与「N/A」之间反复横跳（用户反馈：硬盘温度会随刷新消失）
@@ -2689,6 +2692,7 @@ async function fetchTemps(){
       }catch(e){}
     }catch(e){}
   }catch(e){}
+  finally{ _tempsBusy=false; }
 }
 function ensureTempPolling(){
   if(_tempTimer) return;
@@ -2901,11 +2905,15 @@ function updateLiveStats(d){
     });
   }
 }
+let _netRatesBusy=false;
 async function fetchNetRates(){
+  if(_netRatesBusy) return;          // 上一次没回来就跳过，避免请求堆叠挤爆网关
+  _netRatesBusy=true;
   try{
-    let r=await fetch('/api/metrics?_='+Date.now());
+    let r=await fetchWithTimeout('/api/metrics?_='+Date.now(), {}, 30000);
+    if(!r||!r.ok) return;
     let d=await r.json();
-    updateLiveStats(d);   // 1s 级增量刷新 CPU/内存/负载（后端已实时计算，不受 /api/system 60s 缓存影响）
+    updateLiveStats(d);   // 实时增量刷新 CPU/内存/负载（后端已实时计算，不受 /api/system 60s 缓存影响）
     // CPU / 内存折线图历史（每 1s 一个点，60s 滚动，Y 轴 0-100 固定）
     if(d.cpu_usage!=null){ CPU_HISTORY.push(Math.min(100,Math.max(0,parseFloat(d.cpu_usage)||0))); if(CPU_HISTORY.length>60) CPU_HISTORY.shift(); drawCpuSpark(); }
     if(d.mem_percent!=null){ MEM_HISTORY.push(Math.min(100,Math.max(0,parseFloat(d.mem_percent)||0))); if(MEM_HISTORY.length>60) MEM_HISTORY.shift(); drawMemSpark(); }
@@ -2955,6 +2963,7 @@ async function fetchNetRates(){
     let _rxEl=document.getElementById('net-rx-val'); if(_rxEl) _rxEl.textContent=fmtSpeed(rx);
     drawNetSpark();   // 重绘融合图
   }catch(e){}
+  finally{ _netRatesBusy=false; }
 }
 // 网络实时速率历史已改为融合全部网口（NET_HIST），单图双线（见 drawNetSpark）
 // CPU / 内存使用率的 60s 滚动历史（值域 0-100，每秒一个点）
@@ -3101,13 +3110,17 @@ function drawNetSpark(){
   drawLine('tx', b);   // 上行/上传 蓝（先画，作底）
   drawLine('rx', g);   // 下行/下载 绿（后画，盖在上层）
 }
-function startNetRateTimer(){ if(!netRateTimer){ fetchNetRates(); netRateTimer=setInterval(fetchNetRates, 1000); } }
+function startNetRateTimer(){ if(!netRateTimer){ fetchNetRates(); netRateTimer=setInterval(fetchNetRates, 5000); } }
 // 网络卡片轻量刷新：每 5s 拉 /api/network（独立接口，不含 /api/system 的 60s 缓存），
 // 实时更新 IP/状态/连接速率等，避免网络卡片因慢缓存而长时间不更新。
 let sysNetTimer=null;
+let _sysNetBusy=false;
 async function fetchSysNet(){
+  if(_sysNetBusy) return;
+  _sysNetBusy=true;
+  setTimeout(function(){ _sysNetBusy=false; }, 8000);
   try{
-    let r=await fetch('/api/network?_='+Date.now());
+    let r=await fetchWithTimeout('/api/network?_='+Date.now(), {}, 30000);
     let d=await r.json();
     let card=document.getElementById('sys-net-card');
     if(card && d.nics){ card.innerHTML = renderSysNetCard(d.nics, new Date()); }
@@ -3148,10 +3161,29 @@ async function applyFanCustom(hwmon, idx){
   inp.value=v;
   await applyFan(hwmon, idx, v);
 }
-async function fetchFanStatus(){
+// ── 统一带超时 fetch（2026-08-31 修正）──
+// fnOS 升级后，经统一网关的远程请求偶发卡顿；裸 fetch 会无限等待，
+// 导致前端「刷新圈」永远停不下来、接管开关最长要等 ~1 分钟才生效。
+// 用 AbortController 给每个请求套硬超时，超时即放弃，绝不无限挂起。
+async function fetchWithTimeout(url, opts, ms){
+  opts = opts || {};
+  let ctrl = (typeof AbortController!=='undefined') ? new AbortController() : null;
+  let to = null;
+  if(ctrl){ opts.signal = ctrl.signal; to = setTimeout(function(){ try{ ctrl.abort(); }catch(e){} }, ms||6000); }
   try{
-    let r=await fetch('/api/fan/status?_='+Date.now());
+    return await fetch(url, opts);
+  } finally { if(to) clearTimeout(to); }
+}
+
+let _fanStatusBusy=false;
+async function fetchFanStatus(){
+  if(_fanStatusBusy) return;          // 上一次没回来就跳过：避免请求无限堆叠把网关挤爆（飞牛升级后远程请求变慢，堆叠会触发整页转圈/接管要等1分钟）
+  _fanStatusBusy=true;
+  try{
+    let r=await fetchWithTimeout('/api/fan/status?_='+Date.now(), {}, 30000);
+    if(!r || !r.ok) return;
     let j=await r.json();
+    if(!j || !j.fans) return;
     (j.fans||[]).forEach(f=>{
       let id=fanUid(f.hwmon, f.idx);
       let cur=document.getElementById(id+'-cur');
@@ -3186,6 +3218,7 @@ async function fetchFanStatus(){
     });
     updatePresetHighlight(j.fans);
   }catch(e){}
+  finally{ _fanStatusBusy=false; }
 }
 async function applyFan(hwmon, idx, pwm){
   let id=fanUid(hwmon, idx), st=document.getElementById(id+'-state');
@@ -3294,7 +3327,7 @@ function bindFanSliders(){
   document.querySelectorAll('.fan-custom-input').forEach(inp=>{
     inp.addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); applyFanCustom(inp.dataset.hwmon, parseInt(inp.dataset.idx)); } });
   });
-  if(!fanTimer){ fetchFanStatus(); fanTimer=setInterval(fetchFanStatus, 1000); }
+  if(!fanTimer){ fetchFanStatus(); fanTimer=setInterval(fetchFanStatus, 5000); }
 }
 
 
@@ -4870,7 +4903,7 @@ async function loadData(force){
   // 2) 后台静默拉取最新全量数据，到了再无缝覆盖
   document.querySelectorAll('.spin').forEach(spin=>spin.style.display='inline-block');
   try{
-    let r = await fetch('/api/all' + (force?'?force=1&_=':'?_=') + Date.now());
+    let r = await fetchWithTimeout('/api/all' + (force?'?force=1&_=':'?_=') + Date.now(), {}, 60000);
     DATA = await r.json();
     renderAll(false);
     try{ localStorage.setItem(CACHE_KEY, JSON.stringify({data:DATA, savedAt:new Date().toISOString()})); }catch(e){}

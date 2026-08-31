@@ -66,6 +66,15 @@ LEGACY_APPATA = "/usr/local/apps/@appdata/com.dashboard.nasdash"
 def _config_dir():
     d = os.environ.get("TRIM_PKGVAR")
     if not d:
+        # 某些启动路径（如热更新后 restart）可能未注入 TRIM_PKGVAR，
+        # 此时不要直接回退到 APP_DIR（重装即被清空），而是主动定位飞牛
+        # 持久化 @appdata 目录，保证配置与历史库（history.db）指向同一处，
+        # 避免多进程/环境变量差异导致「写入一个库、API 读另一个空库」。
+        import glob
+        cand = glob.glob("/vol*/@appdata/com.dashboard.nasdash")
+        if cand:
+            d = cand[0]
+    if not d:
         d = LEGACY_APPATA
     try:
         os.makedirs(d, exist_ok=True)
@@ -620,6 +629,24 @@ def _fcs_has_board_config():
     except Exception:
         return False
 
+def _fcs_running_cached():
+    """廉价的 FCS 在跑状态：读 15s TTL 缓存，绝不每 tick 跑 systemctl is-active。
+    仅供控速循环自愈合判断使用；首次未填充时返回 False（保守：视为未接管，
+    由 fan_smooth_loop 的 _FCS_TAKEN 逻辑兜底停掉），避免每轮控速被一次 systemctl 卡 1~2 秒。"""
+    c = _FCS_STATUS_CACHE
+    with c["lock"]:
+        v = c["v"]
+    return bool(v and v.get("running"))
+
+
+def _fcs_installed_cached():
+    """廉价的 FCS 是否安装/开机自启状态：读缓存，不每 tick 跑 systemctl is-enabled。"""
+    c = _FCS_STATUS_CACHE
+    with c["lock"]:
+        v = c["v"]
+    return bool(v and (v.get("installed") or v.get("enabled")))
+
+
 def _fan_stop_ext_service():
     """临时停止系统风扇服务 FanControlServer（接管窗口内，仅 best-effort）。
     后台线程执行，避免 systemctl stop 数秒阻塞 HTTP/主控循环。"""
@@ -973,8 +1000,12 @@ def _fan_auto_pwm(cpu_temp):
     # clamp 30%~70%（raw 76~178），防止 auto 狂转（旧机 IT87 曾因此满速）
     return max(76, min(178, raw))
 
-def _fan_smooth_step(hwmon, idx, target):
+def _fan_smooth_step(hwmon, idx, target, snap=False):
     _fan_set_enable(hwmon, idx, 1)   # 接管写 pwm 前确保软件控（enable=1）；否则硬件 enable=2 时写 pwm 被内核忽略→全速
+    if snap:
+        # 接管总开关刚打开：直接到位，一个 tick 内把风扇拉到温度目标，让面板点一下立刻看到转速变化。
+        _fan_write_raw(hwmon, idx, target)
+        return
     cur = _fan_read_raw(hwmon, idx)
     if cur is None:
         return
@@ -983,9 +1014,14 @@ def _fan_smooth_step(hwmon, idx, target):
         if cur != target:
             _fan_write_raw(hwmon, idx, target)
         return
-    # 每 tick 最多变 18（≈ 12%/秒），手动拉进度条几秒内明显响应，又不至于瞬间从静音直接满速。
-    step = 18 if abs(diff) > 18 else abs(diff)
+    # 每 tick 最多变 30（≈ 20%/秒）：手动拉滑块/温度联动更跟手；接管开关走 snap 直接到位，不靠这里缓变。
+    step = 30 if abs(diff) > 30 else abs(diff)
     _fan_write_raw(hwmon, idx, cur + (step if diff > 0 else -step))
+
+# 接管总开关刚打开时打一次「立即到位」标志：下一 tick 把接管中的风扇直接写到温度目标，
+# 不再一格一格缓变，让用户在面板点一下就能立刻看到转速变化（关闭接管本身是瞬间降到待机，无需 snap）。
+_FAN_SNAP = {"v": False, "lock": _threading.Lock()}
+
 
 def _enumerate_fans(force=False):
     """枚举本机所有「可控制风扇通道」(hwmon_path, idx)。
@@ -1153,7 +1189,7 @@ def _fan_ensure_all_claimed():
         if not _FAN_CTRL_ENABLED:
             return
         # 同上：FCS 没真配置时不视为「系统在控」，nasdash 该接管就接管，否则风扇会全速。
-        if _fan_ext_service_running() and _fcs_has_board_config():
+        if _fcs_running_cached() and _fcs_has_board_config():
             return
         enum = _enumerate_fans()
         with FAN_LOCK:
@@ -1173,11 +1209,11 @@ def fan_smooth_loop():
                 # 使风扇被卡在最后的高位。因此 FCS 真的配置了风扇参数时只启动/保持它，
                 # 不再写 enable=2；否则 nasdash 直接停手，保持风扇当前手动值，
                 # 避免某些主板 enable=2 后转速反而被拉得更高。
-                if not _fcs_disabled() and _fcs_installed_state() == "enabled" and _fcs_has_board_config():
+                if not _fcs_disabled() and _fcs_installed_cached() and _fcs_has_board_config():
                     if _FCS_TAKEN["v"]:
                         try: _fan_start_ext_service(); _FCS_TAKEN["v"] = False
                         except Exception: pass
-                    if not _fan_ext_service_running():
+                    if not _fcs_running_cached():
                         _fan_start_ext_service()
                 time.sleep(0.6)
                 continue
@@ -1185,6 +1221,12 @@ def fan_smooth_loop():
             # 解决硬重启时序（hwmon 晚于 nasdash 自启注册、启动期枚举不全）与 fan_mode.json 不完整
             # 导致的「部分风扇失控、开机狂转」。FCS 在控时不抢（交还原生控温）。
             _fan_ensure_all_claimed()
+            # 接管总开关刚切到 ON：本 tick 一次性把风扇直接写到目标（见 _FAN_SNAP 标志），即时反馈给用户。
+            _snap = False
+            with _FAN_SNAP["lock"]:
+                if _FAN_SNAP["v"]:
+                    _snap = True
+                    _FAN_SNAP["v"] = False
             with FAN_LOCK:
                 overrides = dict(FAN_TARGETS)   # 每风扇手动/自动覆盖（仅用户经 UI 调过的风扇）
             all_fans = _enumerate_fans()          # 本机真实风扇全集（it87/nct）
@@ -1232,7 +1274,7 @@ def fan_smooth_loop():
                 controlled.add(key)
                 action, target = _fan_rule_decision(key, rule, T, all_idle=all_idle)
                 if action == "control" and target is not None:
-                    _fan_smooth_step(hwmon, idx, target); controlling_any = True
+                    _fan_smooth_step(hwmon, idx, target, _snap); controlling_any = True
                 elif action == "release":
                     _fan_release_auto(hwmon, idx)
             # "hold" → 已交还自动，不再写入（避免与主板/内核抢控）
@@ -1242,12 +1284,12 @@ def fan_smooth_loop():
                     continue  # 已被温控接管
                 if cfg.get("mode") == "auto":
                     ct = _fan_cpu_temp_cached()
-                    _fan_smooth_step(hwmon, idx, _fan_auto_pwm(ct)); controlling_any = True
+                    _fan_smooth_step(hwmon, idx, _fan_auto_pwm(ct), _snap); controlling_any = True
                 else:
                     tgt = cfg.get("target")
                     if tgt is None:
                         continue
-                    _fan_smooth_step(hwmon, idx, tgt); controlling_any = True
+                    _fan_smooth_step(hwmon, idx, tgt, _snap); controlling_any = True
             # 接管/交还系统风扇服务 FanControlServer：本应用真正控速任意风扇时停 FCS（避免抢控冲突），
             # 全部交还自动后重启 FCS 恢复 fnOS 原生控温。状态机保证只在边界切换时执行一次。
             if controlling_any and not _FCS_TAKEN["v"]:
@@ -2263,6 +2305,58 @@ def _parse_roc_temp(text):
     return int(m.group(1)) if m else None
 
 
+def _parse_cachevault(out):
+    """从 storcli /c0 show 输出解析 CacheVault/BBU 状态，返回 (显示文本, normalized_status)。
+
+    不同卡/不同 storcli 版本输出格式差异很大：
+      - CVPM02 Optimal 25C
+      - CVPM02 - -
+      - CacheVault_Info 块里 Status = Optimal
+      - CacheVault = Present / Missing
+      - 老卡用 BBU Optimal 28C
+    本函数尽量兼容常见格式；解析失败返回 ("未检测到", None)。
+    """
+    if not out:
+        return "未检测到", None
+
+    # 1. CVPMxx Status Temp 格式（CVPM02 Optimal 25C / CVPM02 Degraded -）
+    m = re.search(r"(CVPM\w+)\s+(\S+)\s+(\d+C|\d+\s*°C|-+|N/A|n/a|--)", out, re.I)
+    if m:
+        cvpm, status, temp = m.group(1), m.group(2).strip(), m.group(3).strip()
+        norm = status.lower()
+        # 温度显示友好化
+        temp_disp = temp if temp not in ("-", "--", "N/A", "n/a", "") else "-"
+        display = f"{cvpm} {status.title()} {temp_disp}".strip()
+        return display, norm
+
+    # 2. CacheVault_Info / Status 块（Status = Optimal / Missing / Present）
+    #    CacheVault 与 Status 可能不在同一行，用有限跨行窗口匹配
+    m = re.search(r"CacheVault[\s\S]{0,200}?Status\s*=\s*(\S+)", out, re.I)
+    if m:
+        status = m.group(1).strip()
+        return f"CacheVault {status}", status.lower()
+
+    # 3. 简单的 "CacheVault = ..." 键值
+    m = re.search(r"CacheVault\s*=\s*(\S+)", out, re.I)
+    if m:
+        status = m.group(1).strip()
+        return f"CacheVault {status}", status.lower()
+
+    # 4. 老卡 BBU 备份电池单元
+    m = re.search(r"BBU\s+(\S+)\s+(\d+C|\d+\s*°C|-+|N/A|n/a|--)", out, re.I)
+    if m:
+        status = m.group(1).strip()
+        return f"BBU {status.title()}", status.lower()
+
+    # 5. BBU Status = ...
+    m = re.search(r"BBU[\s\S]{0,200}?Status\s*=\s*(\S+)", out, re.I)
+    if m:
+        status = m.group(1).strip()
+        return f"BBU {status}", status.lower()
+
+    return "未检测到", None
+
+
 def _parse_vds_from_topology(out):
     """从 storcli /c0 show 的 TOPOLOGY 表解析 Virtual Drive（逻辑盘）元信息。"""
     vds = []
@@ -2397,12 +2491,10 @@ def get_raid_card():
         data["driver"] = grab(r"Driver Name\s*=\s*(\S+)") + " " + grab(r"Driver Version\s*=\s*(\S+)")
         data["pci"] = grab(r"PCI Address\s*=\s*(\S+)")
         data["jbod_count"] = grab(r"JBOD Drives\s*=\s*(\d+)", "0")
-        # CacheVault
-        cv = re.search(r"CVPM\w+\s+(\w+)\s+(\d+C)", out)
-        if cv:
-            data["cachevault"] = f"{cv.group(0).strip()}"
-        else:
-            data["cachevault"] = "未检测到"
+        # CacheVault / BBU
+        cv_text, cv_status = _parse_cachevault(out)
+        data["cachevault"] = cv_text
+        data["cachevault_status"] = cv_status
         # 阵列卡芯片温度 (ROC Temperature)，兼容多种 storcli 输出格式
         temp = _parse_roc_temp(out)
         if temp is None:
@@ -6519,18 +6611,18 @@ def api_history():
                 "FROM samples WHERE ts>=? GROUP BY bts ORDER BY bts",
                 (bucket, bucket, start)).fetchall()
             con.close()
-        def _v(idx, digits=1):
-            v = r[idx]
+        def _v(row, idx, digits=1):
+            v = row[idx]
             if v is None:
                 return None
             return round(v, digits)
-        points = [{"ts": r[0], "disk_read": _v(1), "disk_write": _v(2),
-                   "net_rx": _v(3), "net_tx": _v(4),
-                   "cpu_power": _v(5),
-                   "cpu_temp": _v(6), "mb_temp": _v(7),
-                   "gpu_temp": _v(8), "disk_temp_max": _v(9),
-                   "raid_temp": _v(10), "fan_rpm_avg": _v(11, 0),
-                   "mem_used_pct": _v(12)} for r in rows]
+        points = [{"ts": r[0], "disk_read": _v(r, 1), "disk_write": _v(r, 2),
+                   "net_rx": _v(r, 3), "net_tx": _v(r, 4),
+                   "cpu_power": _v(r, 5),
+                   "cpu_temp": _v(r, 6), "mb_temp": _v(r, 7),
+                   "gpu_temp": _v(r, 8), "disk_temp_max": _v(r, 9),
+                   "raid_temp": _v(r, 10), "fan_rpm_avg": _v(r, 11, 0),
+                   "mem_used_pct": _v(r, 12)} for r in rows]
         return jsonify({"range": rng, "points": points, "bucket_s": bucket})
     except Exception as e:
         return jsonify({"error": str(e), "points": []})
@@ -6910,6 +7002,9 @@ def api_fan_control_set():
         except Exception:
             pass
         _FAN_ENABLE_CACHE.clear()
+        # 标记下一 tick 把接管中的风扇直接到位（见 fan_smooth_loop 的 _snap 处理），让接管开关点一下立刻见效。
+        with _FAN_SNAP["lock"]:
+            _FAN_SNAP["v"] = True
     else:
         # 接管关闭：后台线程把风扇降到安全待机转速并停手（详见 _fan_release_to_idle 注释），
         # 避免同步写 sysfs 阻塞 API，造成前端 toggle 卡住、用户感觉「关不掉/打不开」。
@@ -7408,8 +7503,11 @@ def _evaluate_alerts(system, disks, docker=None):
     except Exception:
         raid = {}
     if raid and raid.get("mode") in ("mega", "hba"):
-        cv = (raid.get("cachevault") or "").lower()
-        if cv and cv not in ("optimal", "ok", "", "-", "none") and "optimal" not in cv:
+        # CacheVault 告警只看解析后的 normalized 状态；"未检测到"/无 CacheVault 时不应告警
+        cv_status = (raid.get("cachevault_status") or "").lower()
+        if not cv_status:
+            cv_status = (raid.get("cachevault") or "").lower()
+        if cv_status and cv_status not in ("optimal", "ok", "", "-", "none", "present", "未检测到") and "optimal" not in cv_status:
             alerts.append({"level": "warn", "title": "CacheVault 状态异常", "detail": "阵列卡掉电保护缓存状态：%s（断电时缓存数据可能丢失）" % raid.get("cachevault")})
         for v in (raid.get("virtual_drives") or []):
             st = (v.get("state") or "").lower()
