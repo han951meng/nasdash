@@ -5680,66 +5680,99 @@ def _read_drm_attr(fname):
         return None
     return None
 
+# intel_gpu_top 采样结果短缓存（秒）。
+# _sample_gpu_live 里会连着取两次（一次拿 util/render/video，util 为空时
+# _intel_igpu_util 再取一次做频率兜底），没这层缓存就会启两遍子进程、耗时翻倍。
+_IGPU_TOP_CACHE = {"t": 0.0, "d": {}}
+_IGPU_TOP_TTL = 1.5
+
 def _intel_igpu_top_sample():
     """Intel 核显：用 intel_gpu_top -J 取 busy/render/video/频率/功耗/rc6。
-    返回 dict；取不到则返回空 dict。"""
-    import subprocess
+    返回 dict；取不到则返回空 dict。
+
+    ⚠️ 坑（2026-09-05 踩过）：intel_gpu_top -J 是**流式**输出，每 -s 毫秒吐一个
+    JSON 对象且**进程永不退出**。所以：
+      · json.loads(整段) 在多个对象拼接时永远解析失败；
+      · 更不能用 communicate(timeout=N) —— 进程不退出就必然死等满 N 秒再 kill，
+        /api/metrics 被拖到 6 秒一次（一次采样还被调两次），前端 5s 轮询看起来
+        就是"数据不跳了"。
+    正确做法：os.read 有多少读多少，边读边用 raw_decode 试解析，
+    拿到第一个完整 JSON 对象立刻返回并杀进程（实测 0.01s 出数）。
+    """
+    import subprocess as _sp
+    _now = time.time()
+    if _now - _IGPU_TOP_CACHE["t"] < _IGPU_TOP_TTL:
+        return _IGPU_TOP_CACHE["d"]
+    proc = None
+    out = {}
     try:
-        proc = subprocess.Popen(["intel_gpu_top", "-J", "-s", "200", "-o", "-"],
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        buf = ""
-        deadline = time.time() + 3
+        proc = _sp.Popen(["intel_gpu_top", "-J", "-s", "200", "-o", "-"],
+                         stdout=_sp.PIPE, stderr=_sp.DEVNULL)
+        buf = b""
+        dec = json.JSONDecoder()
         j = None
+        deadline = _now + 2.0           # 硬兜底：最多等 2 秒，绝不拖垮请求
+        fd = proc.stdout.fileno()
         while time.time() < deadline:
-            if proc.poll() is not None:
-                break
-            line = proc.stdout.readline()
-            if not line:
-                time.sleep(0.05)
-                continue
-            buf += line
             try:
-                j = json.loads(buf)
-                break
+                chunk = os.read(fd, 65536)
             except Exception:
-                continue
-        try:
-            proc.kill()
-        except Exception:
-            pass
-        if not j:
-            return {}
-        engines = j.get("engines", {})
-        busy = []
-        render = None
-        video = None
-        for k, v in engines.items():
-            b = v.get("busy")
-            if isinstance(b, (int, float)):
-                busy.append(b)
-                if k.startswith("Render"):
-                    render = b
-                elif k.startswith("Video"):
-                    video = b
-        freq = j.get("frequency", {}).get("actual")
-        power = j.get("power", {}).get("GPU")
-        rc6 = j.get("rc6", {}).get("value")
-        out = {}
-        if busy:
-            out["util"] = round(sum(busy) / len(busy), 1)
-        if render is not None:
-            out["render"] = round(render, 1)
-        if video is not None:
-            out["video"] = round(video, 1)
-        if isinstance(freq, (int, float)):
-            out["freq_mhz"] = round(freq, 1)
-        if isinstance(power, (int, float)):
-            out["power_w"] = round(power, 2)
-        if isinstance(rc6, (int, float)):
-            out["rc6"] = round(rc6, 1)
-        return out
+                break
+            if not chunk:               # 进程退出 / EOF
+                break
+            buf += chunk
+            try:
+                j, _ = dec.raw_decode(buf.decode("utf-8", "ignore").lstrip())
+                break                   # 第一个完整对象就够了
+            except ValueError:
+                continue                # 还没读完整，继续读
+        if isinstance(j, dict):
+            engines = j.get("engines") or {}
+            busy = []
+            render = None
+            video = None
+            for k, v in engines.items():
+                b = (v or {}).get("busy")
+                if isinstance(b, (int, float)):
+                    busy.append(b)
+                    if k.startswith("Render"):
+                        render = b
+                    elif k.startswith("Video"):
+                        video = b
+            freq = (j.get("frequency") or {}).get("actual")
+            power = (j.get("power") or {}).get("GPU")
+            rc6 = (j.get("rc6") or {}).get("value")
+            if busy:
+                out["util"] = round(sum(busy) / len(busy), 1)
+            if render is not None:
+                out["render"] = round(render, 1)
+            if video is not None:
+                out["video"] = round(video, 1)
+            if isinstance(freq, (int, float)):
+                out["freq_mhz"] = round(freq, 1)
+            if isinstance(power, (int, float)):
+                out["power_w"] = round(power, 2)
+            if isinstance(rc6, (int, float)):
+                out["rc6"] = round(rc6, 1)
     except Exception:
-        return {}
+        out = {}
+    finally:
+        if proc is not None:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            try:
+                proc.stdout.close()
+            except Exception:
+                pass
+            try:
+                proc.wait(timeout=2)
+            except Exception:
+                pass
+    _IGPU_TOP_CACHE["t"] = time.time()
+    _IGPU_TOP_CACHE["d"] = out
+    return out
 
 
 def _intel_igpu_util():
@@ -5779,6 +5812,50 @@ def _gpu_memory_bytes():
         return None, None, None
 
 
+def _intel_igpu_vram_bytes():
+    """Intel 核显真实显存占用：读 i915 debugfs 的 GEM 对象统计。
+
+    核显没有独立显存，图形缓冲实际占用的是系统内存（共享内存 + BIOS 预留 stolen），
+    sysfs 无标准接口（i915 不暴露 mem_info_vram_*），只能读 debugfs 的 i915_gem_objects。
+    返回 (used_bytes, total_bytes, percent, basis)；读不到返回 (None, None, None, None)。
+
+    - used  = 当前 GEM 对象实际占用的图形缓冲（首行 shrinkable 的 bytes）
+    - total = 共享上限，取系统内存总量（核显没有固定显存上限，故为口径参考值而非硬上限）
+    - basis = 'gem'，供前端区分于独显的真实显存口径
+    """
+    try:
+        used = None
+        dri_root = "/sys/kernel/debug/dri"
+        for name in sorted(os.listdir(dri_root)):
+            # 只要真实设备目录（0000:00:02.0 或数字编号），跳过 bridges / client-* / by-path 等
+            if not re.match(r"^(\d{4}:[\da-fA-F:.]+|\d+)$", name):
+                continue
+            p = os.path.join(dri_root, name, "i915_gem_objects")
+            if not os.path.exists(p):
+                continue
+            with open(p) as f:
+                txt = f.read(8192)
+            # 首行形如：358 shrinkable [0 free] objects, 536887296 bytes
+            m = re.search(r"^\s*\d+\s+\S+[^,]*,\s*(\d+)\s+bytes", txt, re.M)
+            if m:
+                used = int(m.group(1))
+                break
+        if not used:
+            return None, None, None, None
+        total_kb = None
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemTotal:"):
+                    total_kb = int(line.split()[1])
+                    break
+        if not total_kb:
+            return used, None, None, "gem"
+        total = total_kb * 1024
+        return used, total, round(used / total * 100, 1), "gem"
+    except Exception:
+        return None, None, None, None
+
+
 def _sample_gpu_live():
     idents = _gpu_ident_list()
     res = []
@@ -5786,6 +5863,8 @@ def _sample_gpu_live():
         temp = None; util = None; util_avail = False; util_proxy = False
         render = None; video = None; freq_mhz = None; power_w = None; rc6 = None
         mem_used = None; mem_total = None; mem_pct = None
+        # 显存口径：vram=独显驱动真实显存 / gem=核显 GEM 图形缓冲（共享内存）/ sysmem=回退按系统内存
+        mem_basis = None
         try:
             if g["vendor"] == "10de":  # NVIDIA
                 s = run_cmd(["nvidia-smi", "--query-gpu=utilization.gpu,utilization.memory,temperature.gpu,memory.used,memory.total",
@@ -5807,6 +5886,7 @@ def _sample_gpu_live():
                     try:
                         mem_used = int(parts[3]) * 1024 * 1024  # MiB -> bytes
                         mem_total = int(parts[4]) * 1024 * 1024
+                        mem_basis = "vram"
                     except Exception:
                         pass
             elif g["vendor"] == "1002":  # AMD
@@ -5840,6 +5920,7 @@ def _sample_gpu_live():
                             mem_total = int(open(total_path).read().strip())
                             if mem_total > 0:
                                 mem_pct = round(mem_used / mem_total * 100, 1)
+                                mem_basis = "vram"
                             break
                 except Exception:
                     pass
@@ -5862,10 +5943,14 @@ def _sample_gpu_live():
                     u, u_proxy = _intel_igpu_util()
                     if u is not None:
                         util = u; util_avail = True; util_proxy = u_proxy
-                # 核显共享系统内存
-                mu, mt, mp = _gpu_memory_bytes()
-                if mt:
-                    mem_used, mem_total, mem_pct = mu, mt, mp
+                # 核显共享系统内存：优先取 i915 GEM 图形缓冲的真实占用（与系统内存占用不是一回事，
+                # 不会和「内存占用」重复）；i915 debugfs 不可读时再回退到系统内存口径并标注 basis。
+                mu, mt, mp, mb = _intel_igpu_vram_bytes()
+                if mu is None:
+                    mu, mt, mp = _gpu_memory_bytes()
+                    mb = "sysmem" if mt else None
+                if mu is not None:
+                    mem_used, mem_total, mem_pct, mem_basis = mu, mt, mp, mb
         except Exception as _e:
             pass
         res.append({"vendor": g["vendor"], "type": g["type"], "name": g["name"], "pci": g["pci"],
@@ -5878,6 +5963,7 @@ def _sample_gpu_live():
                     "power_w": (round(power_w, 2) if isinstance(power_w, (int, float)) else None),
                     "rc6": (round(rc6, 1) if isinstance(rc6, (int, float)) else None),
                     "mem_used": mem_used, "mem_total": mem_total, "mem_pct": mem_pct,
+                    "mem_basis": mem_basis,
                     "util_avail": util_avail, "util_proxy": util_proxy})
     return res
 
@@ -6004,6 +6090,23 @@ def api_all():
             _raid = result.get("raid")
             if isinstance(_raid, dict):
                 result["system"]["raid_temp"] = _raid.get("controller_temp")
+            # 把显卡「实时显存占用」并入 system.gpus，供系统资源页顶部「显存占用」指标格显示。
+            # 静态 gpus 只有型号与显存容量，实时占用来自 _get_gpu_live()（独显驱动直读，核显走 i915 GEM）。
+            # 按 pci 优先、型号次之匹配；匹配不上就不带 mem_* 字段，前端显示「—」。
+            try:
+                _live_gpus = _get_gpu_live()
+                for _sg in (result["system"].get("gpus") or []):
+                    for _lg in _live_gpus:
+                        _pci_ok = _sg.get("pci") and _lg.get("pci") and _sg["pci"] == _lg["pci"]
+                        _nm_ok = (_sg.get("name") or "") and _sg.get("name") == _lg.get("name")
+                        if _pci_ok or _nm_ok:
+                            _sg["mem_used"] = _lg.get("mem_used")
+                            _sg["mem_total"] = _lg.get("mem_total")
+                            _sg["mem_pct"] = _lg.get("mem_pct")
+                            _sg["mem_basis"] = _lg.get("mem_basis")
+                            break
+            except Exception:
+                pass
         try:
             # 给每块盘标注通道来源（阵列卡 / 主板），供前端「物理硬盘信息」区分
             result["disks"] = _enrich_disk_channels(result.get("disks", []) or [], result.get("raid") or {})
@@ -7060,9 +7163,13 @@ def api_fan_temps():
         "raid_temp": _snap.get("raid_temp"),
         # 显卡温度：复用 GPU 实时采样缓存（2s 刷新），仅取温度相关字段，供温度墙展示。
         # iGPU（Intel 核显）temp 取 CPU 封装温度（同 die）；dGPU 走各自驱动。
+        # 附带显存占用（供系统资源页顶部 hero「显存占用」指标格）：
+        # 独显走驱动真实显存；核显取 i915 图形缓冲实际占用（共享内存口径，见 mem_basis）。
         "gpus": [
             {"name": gg.get("name"), "vendor": gg.get("vendor"),
-             "type": gg.get("type"), "temp": gg.get("temp")}
+             "type": gg.get("type"), "temp": gg.get("temp"),
+             "mem_used": gg.get("mem_used"), "mem_total": gg.get("mem_total"),
+             "mem_pct": gg.get("mem_pct"), "mem_basis": gg.get("mem_basis")}
             for gg in _get_gpu_live()
         ],
     })
