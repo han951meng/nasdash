@@ -326,7 +326,7 @@
   .temp-wall{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px;margin-top:6px}
   .temp-chip{border-radius:10px;padding:10px 12px;border:1px solid var(--border);background:var(--bg);display:flex;flex-direction:column;gap:4px}
   .temp-chip .tc-name{font-size:12px;color:var(--muted);word-break:break-all}
-  .temp-chip .best-tag{font-size:10px;color:#fff;background:#16a34a;border-radius:4px;padding:1px 5px;margin-left:4px;vertical-align:1px}
+  .temp-chip .best-tag{display:inline-block;white-space:nowrap;word-break:keep-all;font-size:10px;color:#fff;background:#16a34a;border-radius:4px;padding:1px 5px;margin-left:4px;vertical-align:middle}
   .temp-chip .tc-val{font-size:16px;font-weight:600}
   .gpu-sep{height:1px;background:var(--border);margin:8px 0}
   /* 显卡卡片收纳折叠 */
@@ -548,8 +548,12 @@
   .temp-cat{display:flex;flex-wrap:wrap;gap:6px;align-items:stretch;width:100%;margin-top:4px;padding-top:6px;border-top:1px dashed var(--border)}
   .temp-cat:first-of-type{margin-top:8px;padding-top:0;border-top:none}
   .temp-cat-label{font-size:11px;color:var(--muted);min-width:42px;font-weight:600;align-self:center}
-  .temp-chip{display:inline-flex;align-items:center;justify-content:center;gap:6px;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:5px 9px;font-size:12px;line-height:1.4;white-space:nowrap;min-height:34px}
-  .temp-chip.off{opacity:.65}
+  /* 顶部温度概览的紧凑 chip（白名单作用域：不能影响温度墙 .temp-wall 的同名 .temp-chip，否则 nowrap 会让长测点名撑破格子） */
+  .temp-overview .temp-chip{display:inline-flex;align-items:center;justify-content:center;gap:6px;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:5px 9px;font-size:12px;line-height:1.4;white-space:nowrap;min-height:34px}
+  .temp-overview .temp-chip.off{opacity:.65}
+  /* 温度墙格子兜底：长测点名必须换行收纳，不允许撑破 grid 列宽遮挡相邻卡片 */
+  .temp-wall .temp-chip{min-width:0;white-space:normal;overflow-wrap:anywhere;align-items:center;text-align:center}
+  .temp-wall .temp-chip .tc-name,.temp-wall .temp-chip .tc-val{width:100%;text-align:center}
   .temp-chip-name{color:var(--muted);font-variant-numeric:tabular-nums}
   .temp-chip-val{font-weight:700;font-variant-numeric:tabular-nums;min-width:38px;text-align:right}
   .temp-chip-tag{font-size:10px;padding:1px 5px;border-radius:6px;line-height:1.3}
@@ -2010,8 +2014,10 @@ function renderSystem(s){
   return `
   ${panelHero({icon:ICON_SYSTEM,title:'系统资源',sub:'CPU / 内存 / 网络实时状态',stats:[
     {v:(s.cpu_usage!=null?s.cpu_usage+'%':'—'),k:'CPU 使用率', id:'hero-cpu'},
-    {v:memPct+'%',k:'内存占用', id:'hero-mem'},
+    // 用上一次轮询算出的值兜底：整页每 30s 会重渲一次，否则那一瞬间会闪回"—"再等 1s 才补上
+    {v:(RT_GPU_PCT!=null?RT_GPU_PCT+'%':'—'),k:'GPU 占用', id:'hero-gpu', tip:'显卡实时使用率（优先独显，无独显时显示核显）'},
     {v:netVal,k:'网络', id:'hero-net', cls:'net'},
+    {v:memPct+'%',k:'内存占用', id:'hero-mem'},
     {v:(s.uptime?String(s.uptime).replace(/\s+/g,''):'—'),k:'已运行'}
   ]})}
   <div class="sys-grid">
@@ -2086,8 +2092,12 @@ function renderTemps(s){
               : (DATA && DATA.system && Array.isArray(DATA.system.gpus)) ? DATA.system.gpus
               : [];
   let gpuEntries = gpusSrc.map(function(g){
-    let isIgpu = (g.vendor!=='10de' && g.vendor!=='1002');
-    let nm = (g.name||g.type||'显卡');
+    // 核显/独显口径统一采信后端（与「硬件配置检测」页同一套判定），避免两页打架：
+    // 后端 lspci 拿不到厂商编号时会兜底判「独显」，而前端仅凭 vendor 会把空编号误判成「核显」。
+    // 只有后端没给出有效 type 时，才回退前端按厂商编号判断（10de=NVIDIA、1002=AMD）。
+    var _t = String(g.type||'').trim();
+    var isIgpu = (_t==='核显') ? true : (_t==='独显') ? false : (g.vendor!=='10de' && g.vendor!=='1002');
+    var nm = (g.name||'显卡');
     let label = (isIgpu?'核显':'独显') + (gpusSrc.length>1?(' '+nm):'');
     return {name: label, raw: (nm+' GPU 温度'), value: g.temp, max:95, crit:100};
   }).filter(function(e){ return typeof e.value==='number' && e.value>0 && e.value<150; });
@@ -2956,6 +2966,22 @@ async function fetchNetRates(){
       if(up) up.textContent=fmtSpeed(tx);
       if(down) down.textContent=fmtSpeed(rx);
     }
+    // 顶部 hero GPU 占用：取主显卡（优先独显，无则核显）的实时使用率，每秒随指标轮询刷新
+    let hg=document.getElementById('hero-gpu');
+    if(hg){
+      let _pg=(d.gpu&&d.gpu.length)?(d.gpu.find(function(g){return g.vendor==='10de'||g.vendor==='1002';})||d.gpu[0]):null;
+      // 优先真实 GPU 使用率；核显不回退 mem_pct——核显显存=共享系统内存，
+      // 那个数就是整机内存占用率（会显示成 58% 之类），与飞牛的 GPU 利用率口径不符。
+      let _gp=null;
+      if(_pg){
+        if(_pg.util!=null){ _gp=_pg.util; }
+        else if((_pg.vendor==='10de'||_pg.vendor==='1002')&&_pg.mem_pct!=null){ _gp=_pg.mem_pct; }
+      }
+      RT_GPU_PCT=_gp;   // 存下来，供整页 30s 重渲时兜底
+      hg.textContent=(_gp!=null?_gp+'%':'—');
+      let _hk=hg.parentElement?hg.parentElement.querySelector('.hs-k'):null;
+      if(_hk&&_pg){ _hk.setAttribute('title',(_pg.name_full||_pg.name||_pg.type||'显卡')); }
+    }
     // 融合全部网口的上下行速率历史（单图双线），并刷新实时数字
     NET_HIST.push({rx:rx, tx:tx});
     if(NET_HIST.length>60) NET_HIST.shift();
@@ -2975,6 +3001,8 @@ let GPU_HIST=[];
 let selectedGpu=0;
 // 最近一次后端返回的显卡列表快照（下拉切换时更新名称标签用）
 let RT_GPUS=[];
+// 最近一次算出的主显卡使用率（%）。renderSystem 重渲 hero 时用它兜底，避免 30s 全量刷新闪回"—"。
+let RT_GPU_PCT=null;
 // 系统资源页图表通用绘制：单线 + fillArea，无刻度/无网格/无外框（飞牛运行状态风格）
 function drawSingleSpark(canvasId, hist, lineColor, fillColor){
   let cv=document.getElementById(canvasId);
@@ -3110,7 +3138,10 @@ function drawNetSpark(){
   drawLine('tx', b);   // 上行/上传 蓝（先画，作底）
   drawLine('rx', g);   // 下行/下载 绿（后画，盖在上层）
 }
-function startNetRateTimer(){ if(!netRateTimer){ fetchNetRates(); netRateTimer=setInterval(fetchNetRates, 5000); } }
+// 后端 metrics_collect_loop() 每 ~1s 采样一次，/api/metrics 是纯读缓存的秒级接口（实测 0.002~0.08s）。
+// 这里必须 1s 拉取才能跟住后端的刷新节奏；5s 会丢掉 4/5 的采样点，看上去就是"数据半天才跳一下"。
+// （改动前是 5000，与上方"每 1s"的注释不符，属历史遗留，2026-09-05 修正。）
+function startNetRateTimer(){ if(!netRateTimer){ fetchNetRates(); netRateTimer=setInterval(fetchNetRates, 1000); } }
 // 网络卡片轻量刷新：每 5s 拉 /api/network（独立接口，不含 /api/system 的 60s 缓存），
 // 实时更新 IP/状态/连接速率等，避免网络卡片因慢缓存而长时间不更新。
 let sysNetTimer=null;
@@ -4927,7 +4958,7 @@ autoRefreshEnabled = (localStorage.getItem('nasdash_autorefresh') === '1');
 if(autoRefreshEnabled){ timer = setInterval(autoRefreshTick, 30000); }
 
 loadData();  // 首屏仍全量拉取一次，打底填充所有板块 DATA
-startNetRateTimer();  // 启动轻量实时流量刷新（每 2s 只拉 /api/metrics，不动重采集）
+startNetRateTimer();  // 启动轻量实时流量刷新（每 1s 只拉 /api/metrics，不动重采集）
 startSysNetTimer();  // 启动网络卡片轻量刷新（每 5s 拉独立 /api/network，不依赖 60s 缓存）
 ensureTempPolling();  // 全局开启温度轮询，让检测/风扇页也用实时 CPU 温度，避免各页温度不一致
 
