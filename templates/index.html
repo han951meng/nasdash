@@ -59,6 +59,32 @@
     --series-cyan:#38bdf8; --series-disk:#4aa3ff;
     --chart-grid:rgba(128,128,128,.15); --chart-axis:#8a93a6;
     --glow-brand:rgba(117,191,255,.05);
+    /* ===== 品牌 / 状态 / 光晕 tint 色阶（值不变，仅收敛字面量为变量，明暗同值可继承） ===== */
+    --tint-brand-06:rgba(117,191,255,.06);
+    --tint-brand-14:rgba(117,191,255,.14);
+    --tint-brand-24:rgba(117,191,255,.24);
+    --glow-brand-25:rgba(57,125,255,.25);
+    --tint-err-08:rgba(245,63,63,.08);
+    --tint-err-40:rgba(245,63,63,.40);
+    --tint-err-10:rgba(224,57,74,.10);
+    --tint-err2-12:rgba(229,72,77,.12);
+    --tint-err3-12:rgba(239,68,68,.12);
+    --glow-red-25:rgba(220,53,69,.25);
+    --glow-red-28:rgba(185,28,28,.28);
+    --tint-amber-10:rgba(245,158,11,.10);
+    --tint-amber-15:rgba(245,158,11,.15);
+    --tint-amber-35:rgba(245,158,11,.35);
+    --tint-warn-10:rgba(196,123,0,.10);
+    --tint-warn2-12:rgba(180,83,9,.12);
+    --glow-orange-28:rgba(234,88,12,.28);
+    --tint-ok3-10:rgba(34,197,94,.10);
+    --tint-cyan-10:rgba(56,189,248,.10);
+    --tint-cyan-35:rgba(56,189,248,.35);
+    --tint-blue-12:rgba(120,170,255,.12);
+    --scrim-modal:rgba(11,11,12,.45);
+    --chart-grid-18:rgba(128,128,128,.18);
+    --skeleton-1:rgba(128,128,128,.12);
+    --skeleton-2:rgba(128,128,128,.22);
     --text:var(--text-1); --muted:var(--text-3);
   }
   [data-theme="dark"]{
@@ -130,7 +156,7 @@
   .panel{display:none}
   /* 移动端抽屉导航（桌面隐藏，仅手机显示汉堡按钮） */
   .menu-toggle{display:none}
-  .nav-overlay{display:none;position:fixed;inset:0;background:rgba(15,23,42,.4);z-index:45}
+  .nav-overlay{display:none;position:fixed;inset:0;background:var(--scrim);z-index:45}
   .modal-overlay{display:none;position:fixed;inset:0;background:rgba(var(--semi-grey-9),.45);z-index:10000;align-items:center;justify-content:center;padding:16px;backdrop-filter:blur(2px)}
   .modal-overlay.show{display:flex}
   .modal-box{width:100%;max-width:420px;background:var(--c-card);border:1px solid var(--c-border);border-radius:var(--r-lg);box-shadow:var(--shadow-hover);padding:22px 24px 20px;display:flex;flex-direction:column;gap:14px;animation:modalIn .18s ease}
@@ -230,8 +256,8 @@
   .cb-add{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:8px}
   .pill{display:inline-block;padding:1px 8px;border-radius:6px;font-size:11px;margin-left:6px}
   .pill.gray{background:var(--fill);color:var(--text-3)}
-  .pill.red{background:rgba(245,63,63,.12);color:var(--danger)}
-  .pill.green{background:rgba(0,180,42,.12);color:var(--success)}
+  .pill.red{background:var(--status-err-bg);color:var(--danger)}
+  .pill.green{background:var(--status-ok-bg);color:var(--success)}
   .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start}
   .split-col{display:flex;flex-direction:column;gap:14px}
   .disk-scroll{overflow:auto;padding-right:4px}
@@ -261,7 +287,7 @@
   .detect-sub{font-size:13px;color:var(--text-3);margin-bottom:14px}
   /* ===== hero 横幅（对齐飞牛虚拟机概览页）===== */
   .hero{background:var(--c-card);border:1px solid rgba(0,0,0,.06);box-shadow:0 1px 3px rgba(0,0,0,.05);border-radius:var(--r-md);padding:20px 24px;margin-bottom:16px;color:#1f2329;position:relative;overflow:hidden}
-  .hero::after{content:"";position:absolute;right:-40px;top:-60px;width:220px;height:220px;border-radius:50%;background:rgba(117,191,255,.05)}
+  .hero::after{content:"";position:absolute;right:-40px;top:-60px;width:220px;height:220px;border-radius:50%;background:var(--glow-brand)}
   .hero-head{display:flex;align-items:center;justify-content:space-between;gap:14px;position:relative;z-index:1;flex-wrap:nowrap;min-height:54px}
   .hero-left{display:flex;align-items:center;gap:14px;flex:1 1 auto;min-width:0;overflow:hidden}
   .hero-text{min-width:0}
