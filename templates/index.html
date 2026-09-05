@@ -183,8 +183,8 @@
   .log-line{font-family:Consolas,Menlo,monospace;font-size:12px;padding:5px 12px;border-bottom:1px solid var(--c-border);white-space:pre-wrap;word-break:break-all;line-height:1.55;color:var(--text-1)}
   .log-line:last-child{border-bottom:none}
   .log-line .lt{color:var(--muted);margin-right:8px;font-size:11px}
-  .log-line.lv-err{background:rgba(224,57,74,.10);color:var(--status-err-solid)}
-  .log-line.lv-warn{background:rgba(196,123,0,.10);color:var(--status-warn-solid)}
+  .log-line.lv-err{background:var(--tint-err-10);color:var(--status-err-solid)}
+  .log-line.lv-warn{background:var(--tint-warn-10);color:var(--status-warn-solid)}
   .log-empty{padding:18px 12px;color:var(--muted);text-align:center;font-size:13px}
   .panel.active{display:block}
   .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}
@@ -295,17 +295,17 @@
   .hero-ic{width:52px;height:52px;flex:none;border-radius:var(--r-md);background:transparent;border:1px solid transparent;box-shadow:none;display:flex;align-items:center;justify-content:center;font-size:26px;line-height:1}
   .hero-title{font-size:18px;font-weight:500;color:#1f2329;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .hero-sub{font-size:12px;color:#646a73;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .hero-badge{display:inline-flex;align-items:center;gap:6px;background:rgba(117,191,255,.14);border-radius:var(--r-round);padding:5px 12px;font-size:12px;color:var(--link);white-space:nowrap;flex-shrink:0}
+  .hero-badge{display:inline-flex;align-items:center;gap:6px;background:var(--tint-brand-14);border-radius:var(--r-round);padding:5px 12px;font-size:12px;color:var(--link);white-space:nowrap;flex-shrink:0}
   .hero-badge .dot{width:6px;height:6px;border-radius:50%;background:#4ADE80}
   .hero-badge.warn .dot{background:#FDE047}
   .hero-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(104px,1fr));gap:8px;margin-top:18px;position:relative;z-index:1}
-  .hs{background:rgba(117,191,255,.06);border:1px solid rgba(0,0,0,.05);border-radius:var(--r-md);padding:14px 16px;display:flex;flex-direction:column;justify-content:center;align-items:center;min-height:78px;text-align:center}
+  .hs{background:var(--tint-brand-06);border:1px solid rgba(0,0,0,.05);border-radius:var(--r-md);padding:14px 16px;display:flex;flex-direction:column;justify-content:center;align-items:center;min-height:78px;text-align:center}
   .hs-v{font-size:28px;font-weight:600;color:#1f2329;line-height:1.15;white-space:nowrap;text-align:center}
   .hs-v small{font-size:13px;font-weight:500;opacity:.7;margin-left:3px}
   .hs-k{font-size:13px;color:#646a73;margin-top:5px;font-weight:500;text-align:center}
   .hs-uptime .hs-v{white-space:normal;word-break:break-all;font-size:20px;line-height:1.25}
-  .hs.bad .hs-v{color:#E5484D;background:rgba(229,72,77,.12);padding:1px 8px;border-radius:6px;display:inline-block}
-  .hs.warn .hs-v{color:#B45309;background:rgba(180,83,9,.12);padding:1px 8px;border-radius:6px;display:inline-block}
+  .hs.bad .hs-v{color:#E5484D;background:var(--tint-err2-12);padding:1px 8px;border-radius:6px;display:inline-block}
+  .hs.warn .hs-v{color:#B45309;background:var(--tint-warn2-12);padding:1px 8px;border-radius:6px;display:inline-block}
   /* 网络卡：与下方 sys-area-netlive 同款 grid 写法；inline-grid 在 .hs-v(text-align:center) 内居中，
      不嵌套 flex，从根上避免任何跳动。颜色与字号由 netVal 内联样式控制。 */
   .hs.net .hs-v{font-size:22px;line-height:1.3;padding:2px 0}
@@ -329,8 +329,8 @@
   [data-theme="dark"] .hs.warn .hs-v{color:#FCD34D;background:rgba(245,158,11,.16);padding:1px 8px;border-radius:6px;display:inline-block}
   [data-theme="dark"] .tab.active{background:var(--c-primary-bg);color:var(--c-primary);box-shadow:var(--c-shadow);border-left:3px solid var(--c-primary)}
   .hero-action{display:inline-flex;align-items:center;gap:8px;flex-wrap:nowrap;justify-content:flex-end}
-  .hero-action .btn-mini{background:rgba(117,191,255,.14);border-color:transparent;color:var(--link)}
-  .hero-action .btn-mini:hover{background:rgba(117,191,255,.24);color:var(--link-hover)}
+  .hero-action .btn-mini{background:var(--tint-brand-14);border-color:transparent;color:var(--link)}
+  .hero-action .btn-mini:hover{background:var(--tint-brand-24);color:var(--link-hover)}
   .hero-ctrls{display:inline-flex;align-items:center;gap:6px;flex-wrap:nowrap;justify-content:flex-end}
   .hero-ctrls .hd-time{color:#646a73;font-size:12px;margin-right:2px;white-space:nowrap}
   .hero-ctrls .icon-btn{color:#646a73;border-color:rgba(0,0,0,.12)}
@@ -485,7 +485,7 @@
   .inp{padding:6px 8px;font-size:13px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text)}
   /* 风扇控制独立页面 */
   .fan-page{display:flex;flex-direction:column;gap:16px}
-  .btn-mini.danger{border-color:rgba(245,63,63,.4);color:var(--danger);background:rgba(245,63,63,.08)}
+  .btn-mini.danger{border-color:var(--tint-err-40);color:var(--danger);background:var(--tint-err-08)}
   .btn-mini.danger:hover{background:#b91c1c;color:#fff;border-color:#b91c1c}
   .fan-presets{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:14px;background:var(--card);border:1px solid var(--border);border-radius:10px}
   .fan-presets .label{font-size:13px;color:var(--muted);margin-right:2px}
@@ -493,8 +493,8 @@
   .preset-btn:hover{border-color:var(--blue);color:var(--blue)}
   .preset-btn.full{background:var(--red);color:#fff;border-color:var(--red)}
   .preset-btn.full:hover{opacity:.85;color:#fff}
-  .preset-btn.active{background:var(--blue);color:#fff;border-color:var(--blue);box-shadow:0 0 0 2px rgba(57,125,255,.25)}
-  .preset-btn.full.active{background:var(--red);border-color:var(--red);box-shadow:0 0 0 2px rgba(220,53,69,.25)}
+  .preset-btn.active{background:var(--blue);color:#fff;border-color:var(--blue);box-shadow:0 0 0 2px var(--glow-brand-25)}
+  .preset-btn.full.active{background:var(--red);border-color:var(--red);box-shadow:0 0 0 2px var(--glow-red-25)}
   .fan-global-state{font-size:13px;color:var(--muted);margin-left:auto}
   .fan-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px}
   .fan-card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px}
@@ -521,9 +521,9 @@
   .volt-pro>summary:hover{color:var(--text-1)}
   .fan-rpm{font-size:26px;font-weight:700;color:var(--blue);line-height:1.1}
   .fan-rpm small{font-size:12px;color:var(--muted);font-weight:400;margin-left:4px}
-  .fan-hw-note{margin-top:8px;padding:6px 10px;border-radius:7px;background:rgba(245,158,11,.10);border:1px solid rgba(245,158,11,.35);font-size:12px;line-height:1.5;display:none;align-items:center;flex-wrap:wrap;gap:8px}
+  .fan-hw-note{margin-top:8px;padding:6px 10px;border-radius:7px;background:var(--tint-amber-10);border:1px solid var(--tint-amber-35);font-size:12px;line-height:1.5;display:none;align-items:center;flex-wrap:wrap;gap:8px}
   /* DC(电压)调速提示：该接口用电压高低调速，低档更易停转，与 PWM 行为不同需明确告知 */
-  .fan-dc-note{margin-top:8px;padding:6px 10px;border-radius:7px;background:rgba(56,189,248,.10);border:1px solid rgba(56,189,248,.35);font-size:12px;line-height:1.5}
+  .fan-dc-note{margin-top:8px;padding:6px 10px;border-radius:7px;background:var(--tint-cyan-10);border:1px solid var(--tint-cyan-35);font-size:12px;line-height:1.5}
   .fan-hw-sum{font-weight:600;color:var(--orange)}
   .fan-hw-toggle{margin-left:auto;font-size:11px;font-weight:400;color:var(--muted);background:none;border:1px solid var(--border);border-radius:5px;padding:1px 7px;cursor:pointer}
   .fan-hw-toggle:hover{color:var(--orange);border-color:var(--orange)}
@@ -601,7 +601,7 @@
   .temp-chip-name{color:var(--muted);font-variant-numeric:tabular-nums}
   .temp-chip-val{font-weight:700;font-variant-numeric:tabular-nums;min-width:38px;text-align:right}
   .temp-chip-tag{font-size:10px;padding:1px 5px;border-radius:6px;line-height:1.3}
-  .temp-chip-tag.off{color:var(--blue);background:rgba(120,170,255,.12)}
+  .temp-chip-tag.off{color:var(--blue);background:var(--tint-blue-12)}
   .temp-chip-tag.on{color:var(--muted);background:#fff;border:1px solid var(--border)}
   .temp-chip-empty{font-size:12px;color:var(--muted);padding:4px 0}
   /* 风扇曲线编辑器：横向自适应（节点放成表格，单元更紧凑） */
@@ -615,7 +615,7 @@
   .curve-pt-input input:focus{outline:none;background:#eff6ff}
   .curve-pt-input .unit{padding:4px 6px;font-size:11px;color:var(--muted);background:var(--bg);border-left:1px solid var(--border);min-width:22px;text-align:center}
   .curve-pt-del{background:none;border:1px solid var(--border);color:var(--muted);border-radius:6px;padding:3px 7px;cursor:pointer;font-size:12px}
-  .curve-pt-del:hover{color:var(--red);border-color:rgba(245,63,63,.4)}
+  .curve-pt-del:hover{color:var(--red);border-color:var(--tint-err-40)}
   .curve-canvas{width:100%;height:120px;background:var(--bg);border:1px solid var(--border);border-radius:8px;margin-top:8px;display:block}
   /* 硬盘温度控制风扇面板 */
   .dt-panel{--dt-gap:16px;padding:18px}
@@ -714,9 +714,9 @@
   .auto-card h3{margin:0 0 14px;font-size:15px;color:var(--text);display:flex;align-items:center;gap:8px}
   .auto-alerts{list-style:none;padding:0;margin:0}
   .auto-alerts li{padding:9px 12px;border-radius:8px;margin-bottom:8px;font-size:13px;line-height:1.5;color:var(--text)}
-  .auto-alerts li.danger{background:rgba(239,68,68,.12);color:#b91c1c;border-left:3px solid #ef4444}
-  .auto-alerts li.warn{background:rgba(245,158,11,.15);color:#b45309;border-left:3px solid #f59e0b}
-  .auto-alerts li.ok{background:rgba(34,197,94,.1);color:#15803d;border-left:3px solid #22c55e}
+  .auto-alerts li.danger{background:var(--tint-err3-12);color:#b91c1c;border-left:3px solid #ef4444}
+  .auto-alerts li.warn{background:var(--tint-amber-15);color:#b45309;border-left:3px solid #f59e0b}
+  .auto-alerts li.ok{background:var(--tint-ok3-10);color:#15803d;border-left:3px solid #22c55e}
   .auto-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px}
   .auto-field{display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--muted)}
   .auto-field input[type=number],.auto-field input[type=text]{width:100%;padding:7px 9px;background:#fff;border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px}
