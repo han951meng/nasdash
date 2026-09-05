@@ -30,3 +30,7 @@ sample_report.html
 # macOS 资源分叉文件（非源码，勿入库）
 .DS_Store
 nasdash-fnpack-*.fpk
+
+# 历史验证截图 / 临时核查表（自测产物，不进仓库）
+_verify_*.png
+优化核查表_2026-08-20.md
