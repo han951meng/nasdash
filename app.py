@@ -3284,6 +3284,13 @@ def _mem_brand_cn(manu):
         ("WD", "西数"), ("INTEL", "英特尔"), ("RAMAXEL", "记忆科技"),
         ("ELPIDA", "尔必达"), ("NANYA", "南亚"),
         ("GALAXY MICROSYSTEMS", "影驰"), ("GALAX", "影驰"),
+        # —— 国产 / 工控·工规厂商（固件里常是原始英文串，此前会原样显示，见论坛反馈①）——
+        # 注：POWERCHIP 须排在 PSC 之前，先命中更长的键，避免 "PSC" 抢先。
+        ("UNIIC", "紫光"), ("JINHUA", "晋华"), ("JHICC", "晋华"),
+        ("CXMT", "长鑫存储"), ("GIGADEVICE", "兆易创新"),
+        ("POWERCHIP", "力晶"), ("PSC", "力晶"),
+        ("WINBOND", "华邦"), ("ESMT", "晶豪科技"),
+        ("ETRON", "钰创"), ("RENESAS", "瑞萨"),
     ]
     for key, cn in table:
         if key in m:
@@ -3959,6 +3966,8 @@ def _collect_system_full():
     m = re.search(r"Core\(s\) per socket:\s*(\d+)", lscpu)
     d["cpu_cores"] = int(m.group(1)) if m else 0
     m = re.search(r"CPU max MHz:\s*([\d.]+)", lscpu)
+    # ⚠️ 语义提醒：cpu_freq 取自 lscpu 的 "CPU max MHz"，是**最大频率**（历史命名）。
+    # 真正的当前频率见下方 cpu_info.current_freq_mhz，勿再拿本字段当"当前频率"显示。
     d["cpu_freq"] = m.group(1) if m else "?"
 
     def _int(s, default=0):
@@ -3982,6 +3991,21 @@ def _collect_system_full():
         if "processor" in line and len(first_core) > 5:
             break
     flags = first_core.get("flags", first_core.get("Features", "")).split()
+    # 当前频率：/proc/cpuinfo 的 "cpu MHz" 是**每个核的瞬时值**，单核采样会随负载在
+    # min~max 间大幅跳动（容易被误读成"显示的是最大频率"）。取**全部核心的平均**更能
+    # 代表整机当前频率（论坛反馈②）。若无该字段（部分 ARM / 虚拟机）则回退首核值。
+    _core_mhz = []
+    for _ln in cpuinfo.splitlines():
+        if _ln[:7].lower() == "cpu mhz" and ":" in _ln:
+            try:
+                _core_mhz.append(float(_ln.split(":", 1)[1].strip()))
+            except Exception:
+                pass
+    current_freq_mhz = (
+        round(sum(_core_mhz) / len(_core_mhz), 1)
+        if _core_mhz
+        else _float(first_core.get("cpu MHz"))
+    )
     virt = None
     if "vmx" in flags:
         virt = "Intel VT-x"
@@ -4002,7 +4026,7 @@ def _collect_system_full():
         "numa_nodes": _int(lscpu_field("NUMA node(s)"), 1),
         "min_freq_mhz": _float(lscpu_field("CPU min MHz")),
         "max_freq_mhz": _float(lscpu_field("CPU max MHz")) or _float(d.get("cpu_freq")),
-        "current_freq_mhz": _float(first_core.get("cpu MHz")),
+        "current_freq_mhz": current_freq_mhz,   # 全部核心瞬时频率的平均值（见上方说明）
         "bogomips": _float(first_core.get("BogoMIPS") or first_core.get("bogomips")),
         "l1d": lscpu_field("L1d cache"),
         "l1i": lscpu_field("L1i cache"),
@@ -5401,10 +5425,21 @@ def _read_net_bytes():
     return res
 
 def _read_disk_stats():
-    """返回 {dev: (rd_sectors, wr_sectors, io_ticks)}，过滤分区(数字结尾)与 loop/ram。
+    """返回 {dev: (rd_sectors, wr_sectors, io_ticks)}，只保留**物理整盘**。
     io_ticks = /proc/diskstats 第13列：设备累计花在 I/O 上的毫秒数；
-    两次采样差 / 采样间隔毫秒 = 该盘 busy 占用率(%)。"""
+    两次采样差 / 采样间隔毫秒 = 该盘 busy 占用率(%)。
+
+    过滤规则（2026-09-11 修正，见论坛反馈③）：
+    - loop/ram/sr/zram/nbd/rbd：回环、内存盘、光驱、网络块设备，非物理硬盘。
+    - md*/dm-*/drbd*：软 RAID / device-mapper / DRBD 等**虚拟聚合设备**——
+      它们的 I/O 由下面的物理成员盘累加而来，一并显示会重复计数。
+    - 分区：以 /sys/class/block/<dev>/partition 是否存在判定。
+      ⚠️ 旧写法用「名字末位是数字就跳过」，本意只跳过分区（sda1），
+      却把 nvme0n1 / mmcblk0 / md0 / dm-0 这类**名字以数字结尾的整盘**也一并误杀，
+      导致 NVMe 系统盘永远不出现在「磁盘 I/O」里。
+    """
     res = {}
+    _VIRTUAL = ("loop", "ram", "sr", "zram", "md", "dm-", "drbd", "nbd", "rbd")
     try:
         with open("/proc/diskstats") as f:
             for line in f:
@@ -5412,7 +5447,10 @@ def _read_disk_stats():
                 if len(cols) < 13:
                     continue
                 dev = cols[2]
-                if dev.startswith(("loop", "ram")) or dev[-1].isdigit():
+                if dev.startswith(_VIRTUAL):
+                    continue
+                # 真分区判定（sda1 / nvme0n1p1 / mmcblk0p1 都命中，整盘不命中）
+                if os.path.exists("/sys/class/block/%s/partition" % dev):
                     continue
                 res[dev] = (int(cols[5]), int(cols[9]), int(cols[12]))
     except Exception:
@@ -8117,7 +8155,7 @@ def _render_report_html(rep):
     sys_rows = [
         ["CPU 型号", fmt(sys_.get("cpu_model"))],
         ["CPU 核心/线程", f"{fmt(sys_.get('cpu_cores'))} / {fmt(sys_.get('cpu_threads'))}"],
-        ["CPU 频率", fmt(sys_.get("cpu_freq"), " MHz")],
+        ["CPU 最大频率", fmt(sys_.get("cpu_freq"), " MHz")],
         ["负载 (1/5/15)", " / ".join(fmt(x) for x in (sys_.get("load") or []))],
         ["内存", f"{fmt(mem.get('used'))} / {fmt(mem.get('total'))}（{fmt(mem.get('percent'))}%）"],
         ["交换分区", f"{fmt(swap.get('used'))} / {fmt(swap.get('total'))}"],
