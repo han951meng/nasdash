@@ -201,6 +201,7 @@
   .tag-sleep{display:inline-block;margin-left:6px;padding:1px 7px;border-radius:var(--r-sm);font-size:11px;font-weight:600;background:var(--status-ok-bg);color:var(--status-ok);vertical-align:middle}
   .disk-busy{display:block;font-size:11px;color:var(--text-3);margin-top:2px;font-weight:400}
   .b-info{background:var(--c-primary-bg);color:var(--primary)}
+  .cloud-tag{display:inline-block;margin-top:3px;padding:1px 8px;border-radius:var(--r-sm);font-size:11px;line-height:1.6;background:var(--c-primary-bg);color:var(--primary);white-space:nowrap}
   .b-muted{background:var(--fill);color:var(--text-3)}
   .disk-card{position:relative}
   .disk-card.bad{border-color:var(--red);background:#fef2f2}
@@ -3548,6 +3549,12 @@ function renderStorage(st){
     return `<tr><td>${a.name}</td><td><span class="badge ${ok?'b-ok':'b-bad'}">${a.level}</span></td><td>${a.state}</td><td>${a.size}</td><td>${(a.disks||[]).join(', ')}</td></tr>`;
   }).join('');
   let vols = (st.volumes||[]).map(v=>{
+    // 云挂载（飞牛「远程挂载」的网盘）：容量由云端掌握、后端不报配额，
+    // 与其显示 rclone 的占位值，不如如实标出「是哪个云盘 + 归属名」。
+    if (v.cloud){
+      let label = v.cloud_type + (v.cloud_name ? ' · ' + v.cloud_name : '');
+      return `<tr><td>${v.mount}<div class="cloud-tag">☁ ${label}</div></td><td>${v.cloud_proto||'rclone WebDAV'}</td><td style="color:var(--c-text-2)">—</td><td style="color:var(--c-text-2)">—</td><td style="color:var(--c-text-2)">云端挂载 · 不提供容量</td></tr>`;
+    }
     let pct = parseInt(v.pcent);
     let col = pct>85?'var(--red)':pct>70?'var(--orange)':'var(--green)';
     // 智能两态：色条够宽时白字嵌在条内（保持原观感，锚在色条末端）；太窄时数字挪到色条右侧并按语义色显示，避免被圆角切掉
@@ -3559,7 +3566,9 @@ function renderStorage(st){
     return `<tr><td>${v.mount}</td><td>${v.fstype}</td><td>${v.size}</td><td>${v.used} / ${v.avail}</td><td style="min-width:140px"><div class="progress"><div class="progress-fill" style="${fillStyle}">${fillTxt}</div>${outSpan}</div></td></tr>`;
   }).join('');
   let _raids=(st.raid_arrays||[]), _vols=(st.volumes||[]);
-  let _avgPct = _vols.length ? Math.round(_vols.reduce((a,v)=>a+parseInt(v.pcent||0),0)/_vols.length) : 0;
+  // 平均使用率只算本地卷：云挂载无使用率（后端置空），计入会把均值拉低成假象
+  let _local = _vols.filter(v=>!v.cloud);
+  let _avgPct = _local.length ? Math.round(_local.reduce((a,v)=>a+parseInt(v.pcent||0),0)/_local.length) : 0;
   return `
   ${panelHero({icon:ICON_STORAGE,title:'存储卷',sub:'RAID 阵列 / 卷容量 / 拓扑',stats:[
     {v:_raids.length,k:'RAID 阵列'},
@@ -3567,7 +3576,7 @@ function renderStorage(st){
     {v:_avgPct+'%',k:'平均使用率',cls:(_avgPct>85?'bad':_avgPct>70?'warn':'')},
     {v:(st.topology?'有':'无'),k:'拓扑'}
   ]})}
-  <div class="section-title">RAID 阵列 (mdadm)</div>
+  <div class="section-title">RAID 阵列</div>
   <div class="card">
     <table class="table"><thead><tr><th>阵列</th><th>级别</th><th>状态</th><th>容量</th><th>成员盘</th></tr></thead><tbody>${raids||'<tr><td colspan=5>无</td></tr>'}</tbody></table>
   </div>
@@ -3575,7 +3584,7 @@ function renderStorage(st){
   <div class="card">
     <table class="table"><thead><tr><th>挂载点</th><th>文件系统</th><th>总容量</th><th>已用/可用</th><th>使用率</th></tr></thead><tbody>${vols||'<tr><td colspan=5>无</td></tr>'}</tbody></table>
   </div>
-  <div class="section-title">存储拓扑 (lsblk)</div>
+  <div class="section-title">存储拓扑</div>
   <div class="card"><pre>${(st.topology||'').replace(/</g,'&lt;')}</pre></div>`;
 }
 

@@ -4688,9 +4688,41 @@ def fmt_kb(kb):
     return f"{kb} KB"
 
 # ===================== 采集：存储卷 =====================
+CLOUD_MOUNT_INFO = "/etc/mountmgr/mount_info.json"
+
+def _cloud_mount_map():
+    """飞牛「远程挂载」的云盘归属：mountPoint -> {type, name, proto}。
+
+    数据源 /etc/mountmgr/mount_info.json（root 专属，本进程以 root 运行可直接读）。
+    例：{"cloudStorageTypeStr": "夸克网盘", "comment": "兴奋的柚子"}。
+    读不到 / 格式变化一律返回空 dict，绝不影响本地盘显示。
+    """
+    out = {}
+    try:
+        raw = read_file(CLOUD_MOUNT_INFO, "")
+        if not raw.strip():
+            return out
+        for _uid, mounts in (json.loads(raw) or {}).items():
+            if not isinstance(mounts, dict):
+                continue
+            for _mid, info in mounts.items():
+                if not isinstance(info, dict):
+                    continue
+                mp = (info.get("mountPoint") or "").strip()
+                if not mp:
+                    continue
+                out[mp] = {
+                    "type": (info.get("cloudStorageTypeStr") or "云盘").strip(),
+                    "name": (info.get("comment") or "").strip(),
+                    "proto": "rclone WebDAV",
+                }
+    except Exception:
+        pass
+    return out
+
 @_ttl_cache(60)
 def get_storage():
-    d = {"raid_arrays": [], "volumes": [], "topology": ""}
+    d = {"raid_arrays": [], "volumes": [], "topology": "", "cloud_mounts": []}
     # mdadm RAID
     mdstat = read_file("/proc/mdstat")
     d["mdstat"] = mdstat
@@ -4712,6 +4744,7 @@ def get_storage():
     if cur:
         d["raid_arrays"].append(cur)
     # 挂载点容量（排除 docker overlay / tmpfs 等非存储卷）
+    cloud_map = _cloud_mount_map()
     df = run_cmd(["df", "-h", "--output=target,size,used,avail,pcent,fstype"], 5)
     skip_fs = ("overlay", "tmpfs", "devtmpfs", "squashfs")
     for line in df.strip().splitlines()[1:]:
@@ -4723,10 +4756,35 @@ def get_storage():
             if "docker" in mount or "overlay" in mount:
                 continue
             if mount in ("/", "/fs", "/boot", "/boot/efi") or mount.startswith("/vol"):
-                d["volumes"].append({
+                row = {
                     "mount": mount, "size": size, "used": used,
                     "avail": avail, "pcent": pcent, "fstype": fstype,
-                })
+                }
+                # 云挂载（飞牛「远程挂载」经 rclone/FUSE 挂成本地目录）
+                if mount in cloud_map or fstype.startswith("fuse.rclone"):
+                    cinfo = cloud_map.get(mount) or {}
+                    row.update({
+                        "cloud": True,
+                        "cloud_type": cinfo.get("type") or "云盘",
+                        "cloud_name": cinfo.get("name") or "",
+                        "cloud_proto": cinfo.get("proto") or "rclone WebDAV",
+                    })
+                    # df 对云挂载给出的容量是 rclone 在「后端不报配额」时填的占位值
+                    # （1 PB），既非真实容量也算不出已用，一律置空避免误导；
+                    # 前端对这些字段显示「—」，并把该行排除出平均使用率。
+                    row["size"] = row["used"] = row["avail"] = row["pcent"] = None
+                    d["volumes"].append(row)
+                    d["cloud_mounts"].append(row)
+                    continue
+                d["volumes"].append(row)
+    # 存储拓扑：lsblk 只列块设备，看不到 FUSE 云挂载，单独补一段说明
+    if d["cloud_mounts"]:
+        lines = [d["topology"].rstrip(), "", "── 云端挂载（远程挂载 / rclone FUSE，非本地磁盘）──"]
+        for c in d["cloud_mounts"]:
+            # comment 字段是云盘账号名（如夸克账号「兴奋的柚子」），多账号时用于区分
+            label = c["cloud_type"] + (f"（账号：{c['cloud_name']}）" if c["cloud_name"] else "")
+            lines.append(f"{c['mount']}  {label}  {c['cloud_proto']}  已挂载")
+        d["topology"] = "\n".join(lines)
     return d
 
 def fmt_blocks(blocks):
@@ -8069,7 +8127,13 @@ def _render_report_html(rep):
     raid_info = "阵列卡：{m}（{mode}）".format(m=fmt(raid.get("model")), mode=fmt(raid.get("mode")))
     if raid.get("note"):
         raid_info += " ｜ " + fmt(raid.get("note"))
-    vol_rows = [[fmt(v.get("mount")), fmt(v.get("fstype")), fmt(v.get("size")), fmt(v.get("used")),
+    def _vol_fs(v):
+        # 云挂载：文件系统名（fuse.rclone）对用户无意义，改显示是哪个云盘 + 账号
+        if v.get("cloud"):
+            name = v.get("cloud_name") or ""
+            return (v.get("cloud_type") or "云盘") + (f"（账号：{name}）" if name else "")
+        return v.get("fstype")
+    vol_rows = [[fmt(v.get("mount")), fmt(_vol_fs(v)), fmt(v.get("size")), fmt(v.get("used")),
                  fmt(v.get("avail")), fmt(v.get("pcent"))] for v in (storage.get("volumes") or [])]
     c_rows = []
     for c in (docker.get("containers") or []):
@@ -8135,7 +8199,7 @@ def _render_report_html(rep):
         + cat("Docker 容器")
         + note(f"运行中 {docker.get('running',0)} / 共 {docker.get('total',0)}")
         + data(["名称", "镜像", "状态", "端口", "CPU", "内存%", "内存", "网络 RX/TX"], c_rows)
-        + (cat("存储拓扑 (lsblk)")
+        + (cat("存储拓扑")
            + f"<div class='note'><pre style='margin:0;white-space:pre-wrap;font-family:Consolas,Menlo,monospace;font-size:12px'>{esc(topology)}</pre></div>"
            if topology.strip() else "")
         + "<div class='footer'>本报告由 nasdash 自动生成，仅供硬件健康参考。</div>"
