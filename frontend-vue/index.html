@@ -3,10 +3,37 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>nasdash · 温度监控（阶段 1b · Vue）</title>
+    <title>nasdash · NAS 硬件监控</title>
   </head>
   <body>
     <div id="app"></div>
+
+    <noscript>
+      <div style="max-width: 640px; margin: 60px auto; padding: 20px 24px; font: 14px/1.8 -apple-system, 'PingFang SC', sans-serif">
+        <h2 style="margin: 0 0 8px; font-size: 18px">需要启用 JavaScript</h2>
+        <p style="margin: 0 0 12px">面板依赖浏览器脚本运行。<a href="legacy/" style="color: #0066ff">打开旧版面板 →</a></p>
+      </div>
+    </noscript>
+
     <script type="module" src="/src/main.ts"></script>
+
+    <!--
+      兜底：若脚本报错或浏览器过旧导致 Vue 挂载失败，4 秒后给出提示与旧版入口，
+      避免用户看到一片空白又无路可走（阶段 2 回滚通道）。
+    -->
+    <script>
+      window.addEventListener('load', function () {
+        setTimeout(function () {
+          var el = document.getElementById('app')
+          if (el && el.children.length === 0) {
+            el.innerHTML =
+              '<div style="max-width:640px;margin:60px auto;padding:20px 24px;font:14px/1.8 -apple-system,PingFang SC,sans-serif;border:1px solid rgba(0,0,0,.12);border-radius:12px">' +
+              '<h2 style="margin:0 0 8px;font-size:18px">新界面未能加载</h2>' +
+              '<p style="margin:0 0 12px;color:#646a73">可能是浏览器版本过旧或页面资源未正确加载。面板功能没有丢失，可先用旧版面板。</p>' +
+              '<a href="legacy/" style="color:#0066ff">打开旧版面板 →</a></div>'
+          }
+        }, 4000)
+      })
+    </script>
   </body>
 </html>

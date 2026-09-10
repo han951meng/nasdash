@@ -5110,8 +5110,13 @@ def ui_images(filename):
     """暴露 ui/images 下的静态图标，供页面内 <img> 引用。"""
     return send_from_directory(os.path.join(os.path.dirname(__file__), "ui", "images"), filename)
 
-@app.route("/")
-def index():
+def _render_legacy_panel():
+    """旧版单页面板（阶段 0/1 的产物）。
+
+    阶段 2 起不再是主入口，但**完整保留**为回滚通道（/legacy/）：
+    新版界面出任何问题，用户都能从这里拿到全功能面板；同时它也是新壳里
+    尚未迁移模块的内嵌数据源（?embed=1&tab=xxx）。
+    """
     # no-store：防止浏览器/代理缓存 HTML，避免发版或重启后用户仍看到旧页面（曾导致 FCS 卡片永久“加载中”）
     resp = make_response(render_template(
         "index.html",
@@ -5133,21 +5138,42 @@ def index():
     resp.headers["Expires"] = "0"
     return resp
 
-# ===================== Vue 试点入口（阶段 1a 探针） =====================
-# 独立入口 /vue/：仅用于验证「Vue3 + Vite 单文件产物 + 飞牛网关 + API」这条链路能跑通，
-# 不替换主页面、不参与业务逻辑。产物由 frontend-vue/ 构建（vite-plugin-singlefile 内联成单 HTML）。
-@app.route("/vue")
-@app.route("/vue/")
-def vue_pilot():
+
+def _serve_vue_app():
+    """主界面（阶段 2 起）：frontend-vue/ 构建产物，单文件 HTML。
+
+    产物 `templates/vue/index.html` 已提交进仓库（无 Node 环境也能打包）。
+    文件缺失时自动回退旧页面板，保证面板永远不会白屏。
+    """
     vue_dir = os.path.join(os.path.dirname(__file__), "templates", "vue")
     vue_index = os.path.join(vue_dir, "index.html")
     if not os.path.isfile(vue_index):
-        return "Vue 探针尚未构建：请在 frontend-vue/ 下执行 pnpm build 后重新打包。", 404
+        return _render_legacy_panel()
     resp = make_response(send_from_directory(vue_dir, "index.html"))
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     resp.headers["Pragma"] = "no-cache"
     resp.headers["Expires"] = "0"
     return resp
+
+
+@app.route("/")
+def index():
+    """主入口：阶段 2 起由 Vue 应用接管（系统资源页 + 温度监控页为原生页，
+    其余模块在壳内 iframe 内嵌 /legacy/ 对应页签）。"""
+    return _serve_vue_app()
+
+# ===================== Vue 试点入口（阶段 1a 探针） =====================
+# 阶段 2 起 /vue/ 与 / 同物，保留该路径只为让阶段 1a 的旧链接继续可用。
+@app.route("/vue")
+@app.route("/vue/")
+def vue_pilot():
+    return _serve_vue_app()
+
+# ===================== 旧版完整面板（回滚通道） =====================
+@app.route("/legacy")
+@app.route("/legacy/")
+def legacy_panel():
+    return _render_legacy_panel()
 
 # ===================== 操作手册（/manual 路由，离线可读） =====================
 _MANUAL_CSS = """

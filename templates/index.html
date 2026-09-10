@@ -761,6 +761,16 @@
   [data-theme="dark"] .b-ok{color:var(--success)} [data-theme="dark"] .b-warn{color:var(--warning)} [data-theme="dark"] .b-bad{color:var(--danger)}
   [data-theme="dark"] .curve-pt-input input:focus{background:var(--fill)}
   [data-theme="dark"] .auto-alerts li.danger{color:#ff8a85} [data-theme="dark"] .auto-alerts li.warn{color:#ffb56b} [data-theme="dark"] .auto-alerts li.ok{color:#5fd98a}
+
+  /* ===== 阶段 2：被新壳内嵌时的「嵌入模式」（URL 加 ?embed=1 触发）=====
+     新壳（/）自带侧边栏与顶栏，这里必须收起旧页自己的那套，否则会出现两层侧边栏套娃。
+     内容区改为整宽无内边距，由外层壳提供留白。 */
+  html.embed-mode .header{display:none!important}
+  html.embed-mode .sidebar{display:none!important}
+  html.embed-mode .nav-overlay{display:none!important}
+  html.embed-mode .container{max-width:none;padding:0;display:block}
+  html.embed-mode .content{flex:none;width:100%}
+  html.embed-mode body{padding-bottom:8px}
 </style>
 </head>
 <body>
@@ -816,6 +826,32 @@
 <div class="nav-overlay" id="navOverlay" onclick="closeSidebar()"></div>
 
 <script>
+// ===== 网关适配（唯一一处 fetch 垫片）：给根绝对路径 /api/* 统一补前缀 =====
+// 本页可能的访问形态：
+//   ① 飞牛网关根路径 : /cgi/ThirdParty/<appid>/index.cgi/            → 前缀补到 …/index.cgi
+//   ② 飞牛网关子路径 : /cgi/ThirdParty/<appid>/index.cgi/legacy/     → 同上（新壳内嵌入口）
+//   ③ 旧式 /app/<name> 部署                                          → 前缀补到 /app/<name>
+//   ④ 本地直连       : http://127.0.0.1:9800/ 或 /legacy/            → 应用就在根，不补
+// ⚠️ 全局只能有这一个垫片：早期另有一处「统一网关适配」垫片（按 dirname 取前缀），
+//    在子路径下会算错 base 并与本垫片叠加成双前缀（…/index.cgi/index.cgi/… 直接报错），已合并删除。
+(function(){
+  try{
+    var m = location.pathname.match(/^(.*\/index\.cgi)\/?/);
+    var base = '';
+    if(m){
+      base = m[1];                                     // 形态 ①②：补到 index.cgi 为止
+    }else{
+      var dir = (location.pathname || '/').replace(/\/[^\/]*$/, '');
+      base = /^\/(app|cgi)\//.test(dir) ? dir : '';    // 仅旧式 /app/<name> 才补；本地直连（/、/legacy/）不补
+    }
+    if(!base) return;                                  // 本地直连：保持原样，零改动
+    var _fetch = window.fetch.bind(window);
+    window.fetch = function(u, o){
+      if(typeof u === 'string' && u.charAt(0) === '/' && u.charAt(1) !== '/') u = base + u;
+      return _fetch(u, o);
+    };
+  }catch(e){}
+})();
 // 2.0 明暗主题切换：明 / 暗 / 自动（跟随系统），单按钮循环切换
 function getThemeMode(){
   try{var t=localStorage.getItem('nasdash_theme');if(t==='light'||t==='dark'||t==='auto')return t;}catch(e){}
@@ -924,19 +960,8 @@ function updateThemeBtn(){
 })();
 // 初始化时先按当前模式对齐一次 data-theme，再刷新按钮（修正任何初始偏差）
 document.addEventListener('DOMContentLoaded',applyTheme);
-// 统一网关适配：页面位于 /app/{appname} 路径下时，自动为所有绝对根路径 fetch 补上前缀；
-// 本地 TCP 模式（根路径）下前缀为空，行为完全不变。无需逐个改 fetch 调用。
-(function(){
-  var _orig = window.fetch ? window.fetch.bind(window) : null;
-  if (!_orig) return;
-  var base = (location.pathname || '/').replace(/\/[^\/]*$/, '');
-  window.fetch = function(u, o){
-    if (typeof u === 'string' && u.charAt(0) === '/' && u.charAt(1) !== '/') {
-      u = base + u;
-    }
-    return _orig(u, o);
-  };
-})();
+// （注：早期这里还有一处「统一网关适配」fetch 垫片，已与本脚本顶部的唯一垫片合并删除——
+//  两处叠加会在 /legacy/ 等子路径下算出双前缀。详见顶部注释。）
 let DATA=null, timer=null;
 // 移动端：抽屉式侧栏开合（桌面端 .menu-toggle 隐藏，此函数无副作用）
 function toggleSidebar(){
@@ -5021,6 +5046,32 @@ loadData();  // 首屏仍全量拉取一次，打底填充所有板块 DATA
 startNetRateTimer();  // 启动轻量实时流量刷新（每 1s 只拉 /api/metrics，不动重采集）
 startSysNetTimer();  // 启动网络卡片轻量刷新（每 5s 拉独立 /api/network，不依赖 60s 缓存）
 ensureTempPolling();  // 全局开启温度轮询，让检测/风扇页也用实时 CPU 温度，避免各页温度不一致
+
+// ---------- 阶段 2：作为新壳内嵌页运行（?embed=1&tab=xxx）----------
+// 新壳（/）里尚未迁移的模块用 iframe 内嵌本页对应页签：embed=1 收起本页侧边栏，
+// tab=xxx 指明要打开哪一页；主题由新壳通过 postMessage 通知后再套用，避免两边不一致。
+(function(){
+  var q;
+  try{ q = new URLSearchParams(location.search); }catch(e){ return; }
+  if(q.get('embed') !== '1') return;
+  document.documentElement.classList.add('embed-mode');
+  window.addEventListener('message', function(ev){
+    try{
+      if(ev && ev.data && ev.data.type === 'nasdash-theme' && typeof applyTheme === 'function') applyTheme();
+    }catch(e){}
+  });
+  var want = q.get('tab');
+  if(!want) return;
+  var apply = function(){
+    var btns = document.querySelectorAll('.tab');
+    for(var i=0;i<btns.length;i++){
+      var oc = btns[i].getAttribute('onclick') || '';
+      if(oc.indexOf("'"+want+"'") >= 0){ switchTab(want, btns[i]); return true; }
+    }
+    return false;
+  };
+  setTimeout(function(){ if(!apply()) setTimeout(apply, 800); }, 350);
+})();
 
 // ---------- 检测新版本 ----------
 let updateDismissed = false;

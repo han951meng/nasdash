@@ -1,58 +1,24 @@
-/* nasdash Vue 页样式 —— 对齐 templates/index.html 的飞牛 Semi Design 真值，
-   保证 Vue 产物与主面板同一套配色 / 圆角 / 阴影。 */
-:root {
-  /* 飞牛 Semi 真实设计变量（与 index.html :root 同源） */
-  --c-bg: #F7F8FA;
-  --c-card: #FFFFFF;
-  --c-text-0: rgba(11, 11, 12, 1);
-  --c-text-1: rgba(11, 11, 12, 0.75);
-  --c-text-2: rgba(11, 11, 12, 0.5);
-  --c-text-3: rgba(11, 11, 12, 0.25);
-  --c-border: rgba(11, 11, 12, 0.12);
-  --c-primary: rgba(0, 102, 255, 1);
-  --c-primary-bg: rgba(0, 102, 255, 0.1);
-  --c-success: rgba(0, 158, 97, 1);
-  --c-warning: rgba(255, 154, 46, 1);
-  --c-danger: rgba(219, 56, 44, 1);
-  --c-shadow: 0 1px 2px rgba(11, 11, 12, 0.05);
-  --r-md: 6px;
-  --r-lg: 12px;
+/* 壳层补充样式。
+ *
+ * 说明：颜色 token、卡片/徽标/表格/hero 等全部共用样式来自 panel.css
+ * ——它是 templates/index.html 的样式表原样副本，是新旧页面唯一的设计真值，
+ * 保证 Vue 页与内嵌的旧页长得一模一样。这里只放壳独有的规则。
+ */
 
-  /* tempColor / 温度 chip 兼容别名（与主页面一致） */
-  --blue: var(--c-primary);
-  --green: var(--c-success);
-  --orange: var(--c-warning);
-  --red: var(--c-danger);
-  --muted: var(--c-text-3);
-  --border: var(--c-border);
-  --bg: var(--c-bg);
-  --card: var(--c-card);
-}
-
-[data-theme='dark'] {
-  --c-bg: #1A1E23;
-  --c-card: #23262B;
-  --c-text-0: rgba(255, 255, 255, 0.92);
-  --c-text-1: rgba(255, 255, 255, 0.65);
-  --c-text-2: rgba(255, 255, 255, 0.45);
-  --c-text-3: rgba(255, 255, 255, 0.28);
-  --c-border: rgba(255, 255, 255, 0.12);
-  --c-primary: rgba(117, 191, 255, 1);
-  --c-primary-bg: rgba(117, 191, 255, 0.16);
-  --c-success: rgba(62, 207, 142, 1);
-  --c-warning: rgba(240, 160, 32, 1);
-  --c-danger: rgba(245, 99, 82, 1);
-  --c-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
-}
-
-* {
-  box-sizing: border-box;
-}
-
-body {
-  margin: 0;
+/* 未迁移模块的内嵌旧页：撑满内容区，内部自行滚动（外层不出现双滚动条） */
+.legacy-frame {
+  width: 100%;
+  height: calc(100vh - 120px);
+  min-height: 640px;
+  border: 0;
+  display: block;
   background: var(--c-bg);
-  color: var(--c-text-0);
-  font: 14px/1.65 -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
-  transition: background 0.2s ease, color 0.2s ease;
+  border-radius: var(--r-md);
+}
+
+@media (max-width: 768px) {
+  .legacy-frame {
+    height: calc(100vh - 96px);
+    min-height: 520px;
+  }
 }
