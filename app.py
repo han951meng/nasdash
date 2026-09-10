@@ -5051,6 +5051,22 @@ def index():
     resp.headers["Expires"] = "0"
     return resp
 
+# ===================== Vue 试点入口（阶段 1a 探针） =====================
+# 独立入口 /vue/：仅用于验证「Vue3 + Vite 单文件产物 + 飞牛网关 + API」这条链路能跑通，
+# 不替换主页面、不参与业务逻辑。产物由 frontend-vue/ 构建（vite-plugin-singlefile 内联成单 HTML）。
+@app.route("/vue")
+@app.route("/vue/")
+def vue_pilot():
+    vue_dir = os.path.join(os.path.dirname(__file__), "templates", "vue")
+    vue_index = os.path.join(vue_dir, "index.html")
+    if not os.path.isfile(vue_index):
+        return "Vue 探针尚未构建：请在 frontend-vue/ 下执行 pnpm build 后重新打包。", 404
+    resp = make_response(send_from_directory(vue_dir, "index.html"))
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
+
 # ===================== 操作手册（/manual 路由，离线可读） =====================
 _MANUAL_CSS = """
 :root{

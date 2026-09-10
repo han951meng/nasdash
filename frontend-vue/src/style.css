@@ -1,0 +1,42 @@
+/* 探针页样式 —— 沿用 nasdash 既有 Semi 风格 token，验证「Vue 产物也能吃同一套变量」 */
+:root {
+  --c-bg: #f5f6f8;
+  --c-card: #ffffff;
+  --c-text-0: #0b0b0c;
+  --c-text-1: #4b5057;
+  --c-text-2: #7c828b;
+  --c-border: rgba(0, 0, 0, 0.12);
+  --c-primary: #0066ff;
+  --c-primary-bg: rgba(0, 102, 255, 0.1);
+  --c-success: #008a2e;
+  --c-warning: #c85a00;
+  --c-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+  --r-md: 6px;
+  --r-lg: 12px;
+}
+
+[data-theme='dark'] {
+  --c-bg: #0b0d10;
+  --c-card: #171b21;
+  --c-text-0: rgba(255, 255, 255, 0.95);
+  --c-text-1: rgba(255, 255, 255, 0.75);
+  --c-text-2: rgba(255, 255, 255, 0.5);
+  --c-border: rgba(255, 255, 255, 0.14);
+  --c-primary: #4c9aff;
+  --c-primary-bg: rgba(76, 154, 255, 0.16);
+  --c-success: #3ecf8e;
+  --c-warning: #f0a020;
+  --c-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--c-bg);
+  color: var(--c-text-0);
+  font: 14px/1.65 -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  transition: background 0.2s ease, color 0.2s ease;
+}
