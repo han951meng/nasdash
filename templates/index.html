@@ -216,6 +216,7 @@
   .table td{color:var(--text-2)}
   .progress{height:20px;background:var(--fill);border-radius:10px;overflow:hidden;position:relative}
   .progress-fill{height:100%;display:flex;align-items:center;justify-content:flex-end;padding-right:8px;color:#fff;font-size:11px;font-weight:600}
+  .progress-pct{position:absolute;top:0;height:100%;display:flex;align-items:center;font-size:11px;font-weight:600;line-height:1;white-space:nowrap;color:var(--text-2)}
   .btn{border:1px solid var(--border);border-radius:var(--r-sm);padding:7px 16px;font-size:14px;cursor:pointer;transition:.2s;font-weight:500;background:transparent;color:var(--text-2)}
   .btn:hover{border-color:var(--primary);color:var(--primary)}
   .btn-primary{background:var(--primary);color:#fff;border-color:var(--primary)}
@@ -3549,7 +3550,13 @@ function renderStorage(st){
   let vols = (st.volumes||[]).map(v=>{
     let pct = parseInt(v.pcent);
     let col = pct>85?'var(--red)':pct>70?'var(--orange)':'var(--green)';
-    return `<tr><td>${v.mount}</td><td>${v.fstype}</td><td>${v.size}</td><td>${v.used} / ${v.avail}</td><td style="min-width:140px"><div class="progress"><div class="progress-fill" style="width:${pct}%;background:${col}">${pct}%</div></div></td></tr>`;
+    // 智能两态：色条够宽时白字嵌在条内（保持原观感，锚在色条末端）；太窄时数字挪到色条右侧并按语义色显示，避免被圆角切掉
+    let inside = pct >= 25;
+    let fillTxt = inside ? `${pct}%` : '';
+    // 数字在条外时去掉色条内边距：否则 0% 也会被 padding 撑出一小块绿色，且小比例色条会偏长
+    let fillStyle = `width:${pct}%;background:${col}` + (inside ? '' : ';padding-right:0');
+    let outSpan = inside ? '' : `<span class="progress-pct" style="left:calc(${pct}% + 8px);color:${col}">${pct}%</span>`;
+    return `<tr><td>${v.mount}</td><td>${v.fstype}</td><td>${v.size}</td><td>${v.used} / ${v.avail}</td><td style="min-width:140px"><div class="progress"><div class="progress-fill" style="${fillStyle}">${fillTxt}</div>${outSpan}</div></td></tr>`;
   }).join('');
   let _raids=(st.raid_arrays||[]), _vols=(st.volumes||[]);
   let _avgPct = _vols.length ? Math.round(_vols.reduce((a,v)=>a+parseInt(v.pcent||0),0)/_vols.length) : 0;
