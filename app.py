@@ -4691,33 +4691,53 @@ def fmt_kb(kb):
 CLOUD_MOUNT_INFO = "/etc/mountmgr/mount_info.json"
 
 def _cloud_mount_map():
-    """飞牛「远程挂载」的云盘归属：mountPoint -> {type, name, proto}。
+    """飞牛「远程挂载」的**云盘**归属：mountPoint -> {type, name, proto}。
 
     数据源 /etc/mountmgr/mount_info.json（root 专属，本进程以 root 运行可直接读）。
-    例：{"cloudStorageTypeStr": "夸克网盘", "comment": "兴奋的柚子"}。
-    读不到 / 格式变化一律返回空 dict，绝不影响本地盘显示。
+
+    ⚠️ 该文件是所有「远程挂载」共用的（SMB / NFS / FTP / SFTP / WebDAV 也在里面），
+    只有云盘（夸克/百度/阿里/123 等）才带 cloudStorageTypeStr 品牌字段；非云端远程挂载
+    该字段为空。故只认「品牌名非空」的条目，避免把 SMB/NFS 当云盘、误把它们的真实容量抹掉。
+
+    返回值语义：
+      None  → 文件读不到/格式异常（降级模式，调用方回退按 fuse.rclone 识别）
+      {}    → 读取成功，但当前没有云盘挂载
+      {...} → mountPoint -> 云盘信息
+    例：{"cloudStorageTypeStr": "夸克网盘", "comment": "兴奋的柚子"}（comment 是网盘账号名）。
     """
-    out = {}
     try:
         raw = read_file(CLOUD_MOUNT_INFO, "")
         if not raw.strip():
-            return out
-        for _uid, mounts in (json.loads(raw) or {}).items():
-            if not isinstance(mounts, dict):
-                continue
-            for _mid, info in mounts.items():
-                if not isinstance(info, dict):
-                    continue
-                mp = (info.get("mountPoint") or "").strip()
-                if not mp:
-                    continue
-                out[mp] = {
-                    "type": (info.get("cloudStorageTypeStr") or "云盘").strip(),
-                    "name": (info.get("comment") or "").strip(),
-                    "proto": "rclone WebDAV",
-                }
+            return {}
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            return None
     except Exception:
-        pass
+        return None
+    out = {}
+    for _uid, mounts in data.items():
+        if not isinstance(mounts, dict):
+            continue
+        for _mid, info in mounts.items():
+            if not isinstance(info, dict):
+                continue
+            brand = (info.get("cloudStorageTypeStr") or "").strip()
+            if not brand:
+                continue          # 非云端远程挂载（SMB/NFS/FTP…），不当云盘处理
+            name = (info.get("comment") or "").strip()
+            # proto 是底层传输（云盘统一经本机 WebDAV 桥 15244 + rclone 挂载），
+            # http/https/webdav* 一律展示为「rclone WebDAV」更好读；异常值原样带出。
+            p = (info.get("proto") or "").strip()
+            proto = "rclone WebDAV" if p.lower() in ("", "http", "https", "webdav", "webdavnative", "webdavproxy") else f"rclone {p}"
+            # mountPoint 单数；防御性兼容 mountPoints 数组
+            mps = []
+            if info.get("mountPoint"):
+                mps.append(str(info["mountPoint"]).strip())
+            if isinstance(info.get("mountPoints"), list):
+                mps += [str(x).strip() for x in info["mountPoints"] if x]
+            for mp in mps:
+                if mp:
+                    out[mp] = {"type": brand, "name": name, "proto": proto}
     return out
 
 @_ttl_cache(60)
@@ -4760,9 +4780,13 @@ def get_storage():
                     "mount": mount, "size": size, "used": used,
                     "avail": avail, "pcent": pcent, "fstype": fstype,
                 }
-                # 云挂载（飞牛「远程挂载」经 rclone/FUSE 挂成本地目录）
-                if mount in cloud_map or fstype.startswith("fuse.rclone"):
-                    cinfo = cloud_map.get(mount) or {}
+                # 云盘（飞牛「远程挂载」的网盘，经 rclone/FUSE 挂成本地目录）
+                #  - cloud_map 读到过（非 None）→ 只认品牌字段命中的，SMB/NFS 等不受影响
+                #  - cloud_map 读不到（None，降级）→ 退回按 fuse.rclone 文件系统识别
+                cinfo = None if cloud_map is None else cloud_map.get(mount)
+                _degraded = cloud_map is None and fstype.startswith("fuse.rclone")
+                if cinfo or _degraded:
+                    cinfo = cinfo or {}
                     row.update({
                         "cloud": True,
                         "cloud_type": cinfo.get("type") or "云盘",
