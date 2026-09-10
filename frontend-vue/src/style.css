@@ -5,7 +5,14 @@
  * 保证 Vue 页与内嵌的旧页长得一模一样。这里只放壳独有的规则。
  */
 
-/* 未迁移模块的内嵌旧页：撑满内容区，内部自行滚动（外层不出现双滚动条） */
+/* 未迁移模块的内嵌旧页：撑满内容区，内部自行滚动（外层不出现双滚动条）。
+ * 旧页只挂载一次并常驻（换页签走 postMessage 就地切），所以这里是一个稳定的定位容器，
+ * 载入期间用一层遮罩盖住，避免露出旧页默认的「硬件配置检测」。 */
+.legacy-host {
+  position: relative;
+  min-height: 640px;
+}
+
 .legacy-frame {
   width: 100%;
   height: calc(100vh - 120px);
@@ -16,7 +23,20 @@
   border-radius: var(--r-md);
 }
 
+.legacy-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  color: var(--text-3, #8a8f98);
+  background: var(--c-bg);
+  border-radius: var(--r-md);
+}
+
 @media (max-width: 768px) {
+  .legacy-host,
   .legacy-frame {
     height: calc(100vh - 96px);
     min-height: 520px;

@@ -6,6 +6,22 @@
 <script>
   (function(){try{var t=localStorage.getItem('nasdash_theme');var dark;if(t==='dark'){dark=true;}else if(t==='light'){dark=false;}else{var fn=null;try{var f=localStorage.getItem('fnos-theme-mode');if(f==='dark'||f==='light')fn=f;}catch(e){}if(!fn){try{var p=new URLSearchParams(location.search).get('fnos-theme-mode');if(p==='dark'||p==='light')fn=p;}catch(e){}}if(!fn){try{if(window.parent&&window.parent!==window){var pp=new URLSearchParams(window.parent.location.search).get('fnos-theme-mode');if(pp==='dark'||pp==='light')fn=pp;}}catch(e){}}dark=(fn==='dark')?true:((fn==='light')?false:(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches));}document.documentElement.setAttribute('data-theme',dark?'dark':'light');}catch(e){}})();
 </script>
+<script>
+  /* 阶段 2：被新壳内嵌时，首帧别闪出默认的「硬件配置检测」。
+     模板里 #detect 面板与它的页签按钮都写死了 active，页面一解析出来就会画这一屏，
+     等到底部脚本再切到 ?tab= 目标页，中间那段就是用户看到的「闪一下」。
+     这里在 <head> 里（首帧之前）先挂两个标记：
+       embed-mode    → 旧页自己的顶栏/侧边栏从第一帧起就收起（也顺带消掉左上角闪一下顶栏）
+       embed-pending → 先压住默认面板不画，等底部 bootstrap 切到目标页签再放开
+     只有「内嵌 + 带明确 tab」才压制；直接开 /legacy/ 或 /legacy/?embed=1 仍照常显示检测页。 */
+  (function(){try{
+    var q=new URLSearchParams(location.search);
+    if(q.get('embed')!=='1') return;
+    var cl=document.documentElement.classList;
+    cl.add('embed-mode');
+    if(q.get('tab')) cl.add('embed-pending');
+  }catch(e){}})();
+</script>
 <title>飞牛 NAS 硬件监控</title>
 <style>
   :root{
@@ -771,6 +787,9 @@
   html.embed-mode .container{max-width:none;padding:0;display:block}
   html.embed-mode .content{flex:none;width:100%}
   html.embed-mode body{padding-bottom:8px}
+  /* 首帧压制：内嵌且带 ?tab= 时，先不画写死 active 的默认面板，避免闪一下「硬件配置检测」。
+     底部 bootstrap 切到目标页签后摘掉 embed-pending，内容随即出现（通常只压住几十毫秒）。 */
+  html.embed-pending .panel.active{display:none!important}
 </style>
 </head>
 <body>
@@ -5048,29 +5067,47 @@ startSysNetTimer();  // 启动网络卡片轻量刷新（每 5s 拉独立 /api/n
 ensureTempPolling();  // 全局开启温度轮询，让检测/风扇页也用实时 CPU 温度，避免各页温度不一致
 
 // ---------- 阶段 2：作为新壳内嵌页运行（?embed=1&tab=xxx）----------
-// 新壳（/）里尚未迁移的模块用 iframe 内嵌本页对应页签：embed=1 收起本页侧边栏，
-// tab=xxx 指明要打开哪一页；主题由新壳通过 postMessage 通知后再套用，避免两边不一致。
+// 新壳（/）里尚未迁移的模块用 iframe 内嵌本页：embed=1 收起本页侧边栏与顶栏，
+// tab=xxx 指明首屏打开哪一页；主题由新壳通过 postMessage 通知后再套用，两边保持一致。
+// 后续在壳里换页签不再重载本页，而是发 {type:'nasdash-tab'} 消息就地 switchTab（省掉 3MB 重载）。
 (function(){
   var q;
   try{ q = new URLSearchParams(location.search); }catch(e){ return; }
   if(q.get('embed') !== '1') return;
   document.documentElement.classList.add('embed-mode');
+
+  // 目标页签按钮（模板里 11 个 .tab 都是静态渲染的，直接按 onclick 里的 id 找）
+  function tabBtn(want){
+    var bs = document.querySelectorAll('.tab');
+    for(var i=0;i<bs.length;i++){
+      if((bs[i].getAttribute('onclick')||'').indexOf("'"+want+"'") >= 0) return bs[i];
+    }
+    return null;
+  }
+  function releasePending(){ document.documentElement.classList.remove('embed-pending'); }
+
+  // 首屏：切到 ?tab= 指定的页签。DOM 到这里已解析完，可直接切，无需再等
+  var want = q.get('tab');
+  if(want){
+    var b = tabBtn(want);
+    if(b && typeof switchTab === 'function'){ switchTab(want, b); releasePending(); }
+    else { releasePending(); setTimeout(function(){ var b2=tabBtn(want); if(b2) switchTab(want,b2); }, 120); }
+    // 兜底：无论如何 1s 后必须放开压制，绝不能让内容区一直空着
+    setTimeout(releasePending, 1000);
+  }
+
+  // 与外壳通信：主题同步 / 就地换页签（不重载本页）
   window.addEventListener('message', function(ev){
     try{
-      if(ev && ev.data && ev.data.type === 'nasdash-theme' && typeof applyTheme === 'function') applyTheme();
+      var d = ev && ev.data; if(!d) return;
+      if(d.type === 'nasdash-theme'){
+        if(typeof applyTheme === 'function') applyTheme();
+      } else if(d.type === 'nasdash-tab' && d.tab && typeof switchTab === 'function'){
+        var bb = tabBtn(d.tab);
+        if(bb) switchTab(d.tab, bb);
+      }
     }catch(e){}
   });
-  var want = q.get('tab');
-  if(!want) return;
-  var apply = function(){
-    var btns = document.querySelectorAll('.tab');
-    for(var i=0;i<btns.length;i++){
-      var oc = btns[i].getAttribute('onclick') || '';
-      if(oc.indexOf("'"+want+"'") >= 0){ switchTab(want, btns[i]); return true; }
-    }
-    return false;
-  };
-  setTimeout(function(){ if(!apply()) setTimeout(apply, 800); }, 350);
 })();
 
 // ---------- 检测新版本 ----------
