@@ -6852,8 +6852,17 @@ def api_metrics():
             load = list(os.getloadavg())
         except Exception:
             load = None
+        # CPU 当前频率（全部核心瞬时值的平均，口径同 /api/system 的 cpu_info.current_freq_mhz）。
+        # /proc/cpuinfo 是内核内存里的虚拟文件，每秒读一次开销极小（几 KB），供检测页频率行 1s 增量刷新。
+        try:
+            with open("/proc/cpuinfo") as _f:
+                _mhz = [float(_ln.split(":", 1)[1]) for _ln in _f if _ln[:7].lower() == "cpu mhz" and ":" in _ln]
+            cpu_freq_mhz = round(sum(_mhz) / len(_mhz), 1) if _mhz else None
+        except Exception:
+            cpu_freq_mhz = None
         return jsonify({"net": list(merged.values()), "diskio": diskio,
                         "cpu_usage": cpu_usage, "mem_percent": mem_percent, "load": load,
+                        "cpu_freq_mhz": cpu_freq_mhz,
                         "gpu": _get_gpu_live(),
                         "time": time.strftime("%Y-%m-%d %H:%M:%S")})
     except Exception as e:

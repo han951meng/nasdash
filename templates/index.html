@@ -3004,6 +3004,16 @@ function updateLiveStats(d){
       el.style.color=c; el.textContent=fmtLoad(lv);
     });
   }
+  // CPU 当前频率（全核平均）：/api/metrics 每秒带回，检测页频率行原地改字（蓝色＝实时更新中，同 CPU 使用率口径）。
+  // 检测页整页重渲（30s 快照）后 span 会重建，这里下一秒自动接上，无需特殊处理。
+  if(d.cpu_freq_mhz!=null){
+    let f = Math.round(parseFloat(d.cpu_freq_mhz));
+    if(!isNaN(f)){
+      document.querySelectorAll('.js-cpu-freq-live').forEach(function(el){
+        el.textContent = (el.getAttribute('data-pref')?el.getAttribute('data-pref')+' ':'') + f + ' MHz';
+      });
+    }
+  }
 }
 let _netRatesBusy=false;
 async function fetchNetRates(){
@@ -3908,15 +3918,16 @@ function renderDetect(D){
       <div class="kv"><span class="k">型号</span><span class="v">${s.cpu_model||'-'}</span></div>
       <div class="kv"><span class="k">核心/线程</span><span class="v">${s.cpu_cores||0}核 / ${s.cpu_threads||0}线程</span></div>
       ${(()=>{
-        let cur = ci.current_freq_mhz!=null ? Math.round(ci.current_freq_mhz)+' MHz' : null;
         let min = ci.min_freq_mhz!=null ? Math.round(ci.min_freq_mhz)+' MHz' : null;
         let max = ci.max_freq_mhz!=null ? Math.round(ci.max_freq_mhz)+' MHz' : null;
-        let txt = '';
-        if(cur) txt += '当前 '+cur;
-        if(min && max) txt += (txt?' · ':'')+'范围 '+min+' - '+max;
-        else if(max) txt += (txt?' · ':'')+max;
-        else if(s.cpu_freq!=null) txt = '最大 '+Math.round(parseFloat(s.cpu_freq))+' MHz';
-        return `<div class="kv"><span class="k" title="当前频率＝全部核心瞬时频率的平均值（各核负载不同会各自变频）；范围为最小~最大频率">频率</span><span class="v">${txt||'N/A'}</span></div>`;
+        let range = (min && max) ? '范围 '+min+' - '+max : (max ? max : (s.cpu_freq!=null ? '最大 '+Math.round(parseFloat(s.cpu_freq))+' MHz' : ''));
+        // 当前频率带 .js-cpu-freq-live：由 updateLiveStats() 随 /api/metrics 每秒原地改字（蓝色＝实时更新中）；
+        // 范围是静态参数，仍跟随 /api/system 快照，不需要秒级刷。
+        let live = ci.current_freq_mhz!=null
+          ? `<span class="js-cpu-freq-live" data-pref="当前" style="color:var(--blue)" title="每秒刷新：全部核心瞬时频率的平均值（各核负载不同会各自变频）">当前 ${Math.round(ci.current_freq_mhz)} MHz</span>`
+          : '';
+        let txt = live + (live&&range?' · ':'') + range;
+        return `<div class="kv"><span class="k" title="当前频率＝全部核心瞬时频率的平均值（各核负载不同会各自变频），蓝色数字每秒刷新；范围为最小~最大频率">频率</span><span class="v">${txt||'N/A'}</span></div>`;
       })()}
       <div class="kv"><span class="k">CPU 温度</span><span class="v" id="sys-cpu-temp-kv" style="color:${tempColor(cpuTempUnified(),100)}">${cpuTempUnified()!=null?cpuTempUnified()+'°C':'N/A'}</span></div>
       <div class="kv"><span class="k">CPU 使用率</span><span class="v">${cpuPct}%</span></div>
@@ -3936,7 +3947,7 @@ function renderDetect(D){
         det += gpuRow('插槽数', ci.sockets!=null?ci.sockets+' 个':null);
         det += gpuRow('每插槽核心', ci.cores_per_socket!=null?ci.cores_per_socket+' 核':null);
         det += gpuRow('每核心线程', ci.threads_per_core!=null?ci.threads_per_core+' 线程':null);
-        det += gpuRow('当前频率（各核平均）', ci.current_freq_mhz!=null?Math.round(ci.current_freq_mhz)+' MHz':null);
+        det += gpuRow('当前频率（各核平均）', ci.current_freq_mhz!=null?`<span class="js-cpu-freq-live" style="color:var(--blue)" title="每秒刷新">${Math.round(ci.current_freq_mhz)} MHz</span>`:null);
         let freqRange = '';
         if(ci.min_freq_mhz!=null && ci.max_freq_mhz!=null) freqRange = Math.round(ci.min_freq_mhz)+' - '+Math.round(ci.max_freq_mhz)+' MHz';
         else if(ci.max_freq_mhz!=null) freqRange = Math.round(ci.max_freq_mhz)+' MHz';
