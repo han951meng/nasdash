@@ -30,6 +30,8 @@ const props = defineProps<{
   badge?: { ok: boolean; text: string }
   lastUpdate?: string
   busy?: boolean
+  /** false = 本页不参与「自动刷新」的 30s 定时（风扇页用；开关仍显示） */
+  autoTick?: boolean
 }>()
 
 const emit = defineEmits<{ (e: 'refresh'): void }>()
@@ -50,7 +52,7 @@ const emit = defineEmits<{ (e: 'refresh'): void }>()
           <span class="dot" />{{ props.badge.text }}
         </div>
         <div class="hero-action">
-          <HeroControls :last-update="props.lastUpdate" :busy="props.busy" @refresh="emit('refresh')" />
+          <HeroControls :last-update="props.lastUpdate" :busy="props.busy" :auto-tick="props.autoTick !== false" @refresh="emit('refresh')" />
           <!-- 页面自定义控件（旧页 panelHero 的 o.action，如风扇页的「接管风扇控制」开关） -->
           <slot name="action" />
         </div>

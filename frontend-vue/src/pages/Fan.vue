@@ -1276,6 +1276,7 @@ onUnmounted(() => {
       :stats="heroStats"
       :last-update="lastUpdate"
       :busy="busy"
+      :auto-tick="false"
       @refresh="loadFanData(true)"
     >
       <template #action>

@@ -277,6 +277,8 @@ const logLoading = ref(false)
 const logLoadErr = ref('')
 const logEntries = ref<LogEntry[]>([])
 const logRawText = ref('')
+/** 本次拉取日志的时间（弹窗标题右侧显示，方便确认看的是什么时候的日志） */
+const logFetchedAt = ref('')
 
 const nE = computed(() => logEntries.value.filter(e => e.lvl === 'ERROR').length)
 const nW = computed(() => logEntries.value.filter(e => e.lvl === 'WARN').length)
@@ -318,6 +320,7 @@ async function showRunLog(): Promise<void> {
   logLoadErr.value = ''
   logEntries.value = []
   logRawText.value = ''
+  logFetchedAt.value = ''
   try {
     // 从健康报告 JSON 取 log_tail，避免重复后端实现（旧页同做法）
     const r = await apiFetch('/api/report?format=json&_=' + Date.now(), 60000)
@@ -325,6 +328,7 @@ async function showRunLog(): Promise<void> {
     const text = j.log_tail || ''
     logRawText.value = text
     logEntries.value = parseLog(text)
+    logFetchedAt.value = new Date().toLocaleTimeString('zh-CN')
   } catch (e) {
     logLoadErr.value = '加载日志失败：' + e
   }
@@ -537,7 +541,10 @@ onUnmounted(() => {
     <!-- 运行日志弹窗 -->
     <div class="modal-overlay modal-wide" :class="{ show: logOpen }" @click.self="closeRunLog">
       <div class="modal-box">
-        <div class="modal-title">运行日志（诊断）</div>
+        <div class="modal-title log-title-row">
+          <span>运行日志（诊断）</span>
+          <span v-if="logFetchedAt" class="log-fetched-at">拉取于 {{ logFetchedAt }}</span>
+        </div>
         <div class="modal-body">
           <div v-if="logLoading" class="log-empty">加载中…</div>
           <div v-else-if="logLoadErr" class="log-empty">{{ logLoadErr }}</div>
@@ -580,5 +587,18 @@ onUnmounted(() => {
   font-size: 13px;
   z-index: 9999;
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+}
+/* 日志弹窗标题行：左侧标题、右侧本次拉取时间 */
+.log-title-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.log-fetched-at {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted, #8a8f98);
+  font-variant-numeric: tabular-nums;
 }
 </style>
