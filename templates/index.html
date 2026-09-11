@@ -6,6 +6,22 @@
 <script>
   (function(){try{var t=localStorage.getItem('nasdash_theme');var dark;if(t==='dark'){dark=true;}else if(t==='light'){dark=false;}else{var fn=null;try{var f=localStorage.getItem('fnos-theme-mode');if(f==='dark'||f==='light')fn=f;}catch(e){}if(!fn){try{var p=new URLSearchParams(location.search).get('fnos-theme-mode');if(p==='dark'||p==='light')fn=p;}catch(e){}}if(!fn){try{if(window.parent&&window.parent!==window){var pp=new URLSearchParams(window.parent.location.search).get('fnos-theme-mode');if(pp==='dark'||pp==='light')fn=pp;}}catch(e){}}dark=(fn==='dark')?true:((fn==='light')?false:(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches));}document.documentElement.setAttribute('data-theme',dark?'dark':'light');}catch(e){}})();
 </script>
+<script>
+  /* 阶段 2：被新壳内嵌时，首帧别闪出默认的「硬件配置检测」。
+     模板里 #detect 面板与它的页签按钮都写死了 active，页面一解析出来就会画这一屏，
+     等到底部脚本再切到 ?tab= 目标页，中间那段就是用户看到的「闪一下」。
+     这里在 <head> 里（首帧之前）先挂两个标记：
+       embed-mode    → 旧页自己的顶栏/侧边栏从第一帧起就收起（也顺带消掉左上角闪一下顶栏）
+       embed-pending → 先压住默认面板不画，等底部 bootstrap 切到目标页签再放开
+     只有「内嵌 + 带明确 tab」才压制；直接开 /legacy/ 或 /legacy/?embed=1 仍照常显示检测页。 */
+  (function(){try{
+    var q=new URLSearchParams(location.search);
+    if(q.get('embed')!=='1') return;
+    var cl=document.documentElement.classList;
+    cl.add('embed-mode');
+    if(q.get('tab')) cl.add('embed-pending');
+  }catch(e){}})();
+</script>
 <title>飞牛 NAS 硬件监控</title>
 <style>
   :root{
@@ -47,6 +63,44 @@
     --border:var(--c-border); --divider:var(--c-fill-1); --fill:var(--c-fill-1);
     --bg:var(--c-bg); --card:var(--c-card);
     --shadow:var(--c-shadow); --shadow-hover:0 4px 12px rgba(var(--semi-grey-9),.08);
+    /* ===== 状态语义色（badge / log / pill / 健康度，明暗分别取值） ===== */
+    --status-ok:#0A8C20; --status-ok-bg:rgba(0,180,42,.12); --status-ok-solid:#22c55e;
+    --status-warn:#C85A00; --status-warn-bg:rgba(255,125,0,.12); --status-warn-solid:#f59e0b;
+    --status-err:#C7392F; --status-err-bg:rgba(245,63,63,.12); --status-err-solid:#ef4444;
+    --link:#2a6fd6; --link-hover:#1d5fc0;
+    --scrim:rgba(15,23,42,.4);
+    /* ===== 图表 / 数据可视化系列色（主题无关，明暗同值） ===== */
+    --series-cpu:#4aa3ff; --series-mem:#a855f7; --series-temp:#ff7a59;
+    --series-net:#3ec97a; --series-up:#ffb020; --series-purple:#b07cff;
+    --series-cyan:#38bdf8; --series-disk:#4aa3ff;
+    --chart-grid:rgba(128,128,128,.15); --chart-axis:#8a93a6;
+    --glow-brand:rgba(117,191,255,.05);
+    /* ===== 品牌 / 状态 / 光晕 tint 色阶（值不变，仅收敛字面量为变量，明暗同值可继承） ===== */
+    --tint-brand-06:rgba(117,191,255,.06);
+    --tint-brand-14:rgba(117,191,255,.14);
+    --tint-brand-24:rgba(117,191,255,.24);
+    --glow-brand-25:rgba(57,125,255,.25);
+    --tint-err-08:rgba(245,63,63,.08);
+    --tint-err-40:rgba(245,63,63,.40);
+    --tint-err-10:rgba(224,57,74,.10);
+    --tint-err2-12:rgba(229,72,77,.12);
+    --tint-err3-12:rgba(239,68,68,.12);
+    --glow-red-25:rgba(220,53,69,.25);
+    --glow-red-28:rgba(185,28,28,.28);
+    --tint-amber-10:rgba(245,158,11,.10);
+    --tint-amber-15:rgba(245,158,11,.15);
+    --tint-amber-35:rgba(245,158,11,.35);
+    --tint-warn-10:rgba(196,123,0,.10);
+    --tint-warn2-12:rgba(180,83,9,.12);
+    --glow-orange-28:rgba(234,88,12,.28);
+    --tint-ok3-10:rgba(34,197,94,.10);
+    --tint-cyan-10:rgba(56,189,248,.10);
+    --tint-cyan-35:rgba(56,189,248,.35);
+    --tint-blue-12:rgba(120,170,255,.12);
+    --scrim-modal:rgba(11,11,12,.45);
+    --chart-grid-18:rgba(128,128,128,.18);
+    --skeleton-1:rgba(128,128,128,.12);
+    --skeleton-2:rgba(128,128,128,.22);
     --text:var(--text-1); --muted:var(--text-3);
   }
   [data-theme="dark"]{
@@ -78,6 +132,12 @@
     --border:var(--c-border); --divider:var(--c-fill-1); --fill:var(--c-fill-1);
     --bg:var(--c-bg); --card:var(--c-card);
     --shadow:var(--c-shadow); --shadow-hover:0 4px 12px rgba(0,0,0,.4);
+    --status-ok:#5fd98a; --status-ok-bg:rgba(0,200,120,.14); --status-ok-solid:#4ade80;
+    --status-warn:#ffb56b; --status-warn-bg:rgba(255,154,46,.14); --status-warn-solid:#fbbf24;
+    --status-err:#ff8a85; --status-err-bg:rgba(247,105,101,.16); --status-err-solid:#f87171;
+    --link:#7cb3ff; --link-hover:#a9d4ff;
+    --scrim:rgba(15,23,42,.4);
+    --chart-grid:rgba(255,255,255,.12); --chart-axis:#9aa1ad;
     --text:var(--text-1); --muted:var(--text-3);
   }
   *{box-sizing:border-box;margin:0;padding:0}
@@ -107,12 +167,12 @@
   /* 图标透明背景：直接浮在页面背景上，暗色下不会有白色底板 */
   .tab img.ic,.hero-ic img.ic{background:transparent;border-radius:0;padding:0;box-shadow:none}
   .tab:hover{background:var(--c-fill-1)}
-  .tab.active{background:#fff;color:var(--primary);font-weight:600;box-shadow:0 1px 4px rgba(0,0,0,.12);border-left:3px solid var(--primary);padding-left:9px}
+  .tab.active{background:var(--c-card);color:var(--primary);font-weight:600;box-shadow:0 1px 4px rgba(0,0,0,.12);border-left:3px solid var(--primary);padding-left:9px}
   .content{flex:1;min-width:0}
   .panel{display:none}
   /* 移动端抽屉导航（桌面隐藏，仅手机显示汉堡按钮） */
   .menu-toggle{display:none}
-  .nav-overlay{display:none;position:fixed;inset:0;background:rgba(15,23,42,.4);z-index:45}
+  .nav-overlay{display:none;position:fixed;inset:0;background:var(--scrim);z-index:45}
   .modal-overlay{display:none;position:fixed;inset:0;background:rgba(var(--semi-grey-9),.45);z-index:10000;align-items:center;justify-content:center;padding:16px;backdrop-filter:blur(2px)}
   .modal-overlay.show{display:flex}
   .modal-box{width:100%;max-width:420px;background:var(--c-card);border:1px solid var(--c-border);border-radius:var(--r-lg);box-shadow:var(--shadow-hover);padding:22px 24px 20px;display:flex;flex-direction:column;gap:14px;animation:modalIn .18s ease}
@@ -125,22 +185,22 @@
 .modal-overlay.modal-wide .modal-box{max-width:min(1000px, calc(100vw - 32px));width:100%}
 /* 自检历史表格：grid 固定列宽，中文 nowrap + 溢出省略；只有说明列允许换行 */
 .hist-head,.hist-row{display:grid;grid-template-columns:48px 120px 60px 80px 90px 1fr 140px;column-gap:12px;align-items:center;font-size:13px;padding:8px 4px}
-.hist-head{font-size:12px;color:var(--text-3);font-weight:600;border-bottom:1px solid var(--border,#e5e7eb)}
-.hist-row{border-bottom:1px solid var(--border,#e5e7eb);color:var(--text-1)}
+.hist-head{font-size:12px;color:var(--text-3);font-weight:600;border-bottom:1px solid var(--border)}
+.hist-row{border-bottom:1px solid var(--border);color:var(--text-1)}
 .hist-row .c1{font-weight:700}
 .hist-row .c2,.hist-row .c3,.hist-row .c4,.hist-row .c5,.hist-row .c7{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .hist-row .c6{color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12px}
 .hist-foot{padding:10px 4px 0;font-size:12px;color:var(--text-3)}
   .logstat{margin-bottom:10px;font-size:13px;color:var(--text-1)}
   .logstat b{font-size:13px;margin:0 2px}
-  .logstat b.danger{color:#e0394a}
-  .logstat b.warn{color:#c47b00}
+  .logstat b.danger{color:var(--status-err-solid)}
+  .logstat b.warn{color:var(--status-warn-solid)}
   .log-list{border:1px solid var(--c-border);border-radius:8px;max-height:min(480px, 58vh);overflow:auto;background:var(--c-fill-2)}
   .log-line{font-family:Consolas,Menlo,monospace;font-size:12px;padding:5px 12px;border-bottom:1px solid var(--c-border);white-space:pre-wrap;word-break:break-all;line-height:1.55;color:var(--text-1)}
   .log-line:last-child{border-bottom:none}
   .log-line .lt{color:var(--muted);margin-right:8px;font-size:11px}
-  .log-line.lv-err{background:rgba(224,57,74,.10);color:#e0394a}
-  .log-line.lv-warn{background:rgba(196,123,0,.10);color:#c47b00}
+  .log-line.lv-err{background:var(--tint-err-10);color:var(--status-err-solid)}
+  .log-line.lv-warn{background:var(--tint-warn-10);color:var(--status-warn-solid)}
   .log-empty{padding:18px 12px;color:var(--muted);text-align:center;font-size:13px}
   .panel.active{display:block}
   .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}
@@ -151,12 +211,13 @@
   .kv .k{color:var(--muted);flex:0 0 auto;max-width:60%}
   .kv .v{font-weight:500;text-align:right;word-break:break-all;flex:1;min-width:0}
   .badge{display:inline-block;padding:2px 10px;border-radius:var(--r-sm);font-size:12px;font-weight:600}
-  .b-ok{background:rgba(0,180,42,.12);color:#0A8C20}
-  .b-warn{background:rgba(255,125,0,.12);color:#C85A00}
-  .b-bad{background:rgba(245,63,63,.12);color:#C7392F}
-  .tag-sleep{display:inline-block;margin-left:6px;padding:1px 7px;border-radius:var(--r-sm);font-size:11px;font-weight:600;background:rgba(0,180,42,.12);color:#0A8C20;vertical-align:middle}
+  .b-ok{background:var(--status-ok-bg);color:var(--status-ok)}
+  .b-warn{background:var(--status-warn-bg);color:var(--status-warn)}
+  .b-bad{background:var(--status-err-bg);color:var(--status-err)}
+  .tag-sleep{display:inline-block;margin-left:6px;padding:1px 7px;border-radius:var(--r-sm);font-size:11px;font-weight:600;background:var(--status-ok-bg);color:var(--status-ok);vertical-align:middle}
   .disk-busy{display:block;font-size:11px;color:var(--text-3);margin-top:2px;font-weight:400}
   .b-info{background:var(--c-primary-bg);color:var(--primary)}
+  .cloud-tag{display:table;margin-top:3px;padding:1px 8px;border-radius:var(--r-sm);font-size:11px;line-height:1.6;background:var(--c-primary-bg);color:var(--primary);white-space:nowrap}
   .b-muted{background:var(--fill);color:var(--text-3)}
   .disk-card{position:relative}
   .disk-card.bad{border-color:var(--red);background:#fef2f2}
@@ -172,6 +233,7 @@
   .table td{color:var(--text-2)}
   .progress{height:20px;background:var(--fill);border-radius:10px;overflow:hidden;position:relative}
   .progress-fill{height:100%;display:flex;align-items:center;justify-content:flex-end;padding-right:8px;color:#fff;font-size:11px;font-weight:600}
+  .progress-pct{position:absolute;top:0;height:100%;display:flex;align-items:center;font-size:11px;font-weight:600;line-height:1;white-space:nowrap;color:var(--text-2)}
   .btn{border:1px solid var(--border);border-radius:var(--r-sm);padding:7px 16px;font-size:14px;cursor:pointer;transition:.2s;font-weight:500;background:transparent;color:var(--text-2)}
   .btn:hover{border-color:var(--primary);color:var(--primary)}
   .btn-primary{background:var(--primary);color:#fff;border-color:var(--primary)}
@@ -212,8 +274,8 @@
   .cb-add{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:8px}
   .pill{display:inline-block;padding:1px 8px;border-radius:6px;font-size:11px;margin-left:6px}
   .pill.gray{background:var(--fill);color:var(--text-3)}
-  .pill.red{background:rgba(245,63,63,.12);color:var(--danger)}
-  .pill.green{background:rgba(0,180,42,.12);color:var(--success)}
+  .pill.red{background:var(--status-err-bg);color:var(--danger)}
+  .pill.green{background:var(--status-ok-bg);color:var(--success)}
   .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start}
   .split-col{display:flex;flex-direction:column;gap:14px}
   .disk-scroll{overflow:auto;padding-right:4px}
@@ -232,8 +294,8 @@
   .gpu-legend{display:flex;gap:16px;font-size:11px;color:var(--muted)}
   .gpu-legend-item{display:flex;align-items:center;gap:5px}
   .gpu-dot{width:10px;height:3px;border-radius:2px;display:inline-block}
-  .gpu-dot.temp{background:var(--orange,#fb923c)}
-  .gpu-dot.mem{background:var(--blue,#38bdf8)}
+  .gpu-dot.temp{background:var(--orange)}
+  .gpu-dot.mem{background:var(--blue)}
   .gpu-combo{width:100%}
   .gpu-combo canvas{width:100%;height:90px;display:block}
   .gpu-head-row{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:2px}
@@ -242,8 +304,8 @@
   .detect-title{font-size:16px;font-weight:500;margin-bottom:2px;color:var(--text-1)}
   .detect-sub{font-size:13px;color:var(--text-3);margin-bottom:14px}
   /* ===== hero 横幅（对齐飞牛虚拟机概览页）===== */
-  .hero{background:#fff;border:1px solid rgba(0,0,0,.06);box-shadow:0 1px 3px rgba(0,0,0,.05);border-radius:var(--r-md);padding:20px 24px;margin-bottom:16px;color:#1f2329;position:relative;overflow:hidden}
-  .hero::after{content:"";position:absolute;right:-40px;top:-60px;width:220px;height:220px;border-radius:50%;background:rgba(117,191,255,.05)}
+  .hero{background:var(--c-card);border:1px solid rgba(0,0,0,.06);box-shadow:0 1px 3px rgba(0,0,0,.05);border-radius:var(--r-md);padding:20px 24px;margin-bottom:16px;color:#1f2329;position:relative;overflow:hidden}
+  .hero::after{content:"";position:absolute;right:-40px;top:-60px;width:220px;height:220px;border-radius:50%;background:var(--glow-brand)}
   .hero-head{display:flex;align-items:center;justify-content:space-between;gap:14px;position:relative;z-index:1;flex-wrap:nowrap;min-height:54px}
   .hero-left{display:flex;align-items:center;gap:14px;flex:1 1 auto;min-width:0;overflow:hidden}
   .hero-text{min-width:0}
@@ -251,17 +313,17 @@
   .hero-ic{width:52px;height:52px;flex:none;border-radius:var(--r-md);background:transparent;border:1px solid transparent;box-shadow:none;display:flex;align-items:center;justify-content:center;font-size:26px;line-height:1}
   .hero-title{font-size:18px;font-weight:500;color:#1f2329;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .hero-sub{font-size:12px;color:#646a73;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .hero-badge{display:inline-flex;align-items:center;gap:6px;background:rgba(117,191,255,.14);border-radius:var(--r-round);padding:5px 12px;font-size:12px;color:#2a6fd6;white-space:nowrap;flex-shrink:0}
+  .hero-badge{display:inline-flex;align-items:center;gap:6px;background:var(--tint-brand-14);border-radius:var(--r-round);padding:5px 12px;font-size:12px;color:var(--link);white-space:nowrap;flex-shrink:0}
   .hero-badge .dot{width:6px;height:6px;border-radius:50%;background:#4ADE80}
   .hero-badge.warn .dot{background:#FDE047}
   .hero-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(104px,1fr));gap:8px;margin-top:18px;position:relative;z-index:1}
-  .hs{background:rgba(117,191,255,.06);border:1px solid rgba(0,0,0,.05);border-radius:var(--r-md);padding:14px 16px;display:flex;flex-direction:column;justify-content:center;align-items:center;min-height:78px;text-align:center}
+  .hs{background:var(--tint-brand-06);border:1px solid rgba(0,0,0,.05);border-radius:var(--r-md);padding:14px 16px;display:flex;flex-direction:column;justify-content:center;align-items:center;min-height:78px;text-align:center}
   .hs-v{font-size:28px;font-weight:600;color:#1f2329;line-height:1.15;white-space:nowrap;text-align:center}
   .hs-v small{font-size:13px;font-weight:500;opacity:.7;margin-left:3px}
   .hs-k{font-size:13px;color:#646a73;margin-top:5px;font-weight:500;text-align:center}
   .hs-uptime .hs-v{white-space:normal;word-break:break-all;font-size:20px;line-height:1.25}
-  .hs.bad .hs-v{color:#E5484D;background:rgba(229,72,77,.12);padding:1px 8px;border-radius:6px;display:inline-block}
-  .hs.warn .hs-v{color:#B45309;background:rgba(180,83,9,.12);padding:1px 8px;border-radius:6px;display:inline-block}
+  .hs.bad .hs-v{color:#E5484D;background:var(--tint-err2-12);padding:1px 8px;border-radius:6px;display:inline-block}
+  .hs.warn .hs-v{color:#B45309;background:var(--tint-warn2-12);padding:1px 8px;border-radius:6px;display:inline-block}
   /* 网络卡：与下方 sys-area-netlive 同款 grid 写法；inline-grid 在 .hs-v(text-align:center) 内居中，
      不嵌套 flex，从根上避免任何跳动。颜色与字号由 netVal 内联样式控制。 */
   .hs.net .hs-v{font-size:22px;line-height:1.3;padding:2px 0}
@@ -285,8 +347,8 @@
   [data-theme="dark"] .hs.warn .hs-v{color:#FCD34D;background:rgba(245,158,11,.16);padding:1px 8px;border-radius:6px;display:inline-block}
   [data-theme="dark"] .tab.active{background:var(--c-primary-bg);color:var(--c-primary);box-shadow:var(--c-shadow);border-left:3px solid var(--c-primary)}
   .hero-action{display:inline-flex;align-items:center;gap:8px;flex-wrap:nowrap;justify-content:flex-end}
-  .hero-action .btn-mini{background:rgba(117,191,255,.14);border-color:transparent;color:#2a6fd6}
-  .hero-action .btn-mini:hover{background:rgba(117,191,255,.24);color:#1d5fc0}
+  .hero-action .btn-mini{background:var(--tint-brand-14);border-color:transparent;color:var(--link)}
+  .hero-action .btn-mini:hover{background:var(--tint-brand-24);color:var(--link-hover)}
   .hero-ctrls{display:inline-flex;align-items:center;gap:6px;flex-wrap:nowrap;justify-content:flex-end}
   .hero-ctrls .hd-time{color:#646a73;font-size:12px;margin-right:2px;white-space:nowrap}
   .hero-ctrls .icon-btn{color:#646a73;border-color:rgba(0,0,0,.12)}
@@ -324,7 +386,7 @@
   .mem-slot .ms-size{font-size:14px;font-weight:600;color:var(--text)}
   .mem-slot .ms-info{font-size:11px;color:var(--muted);margin-top:3px}
   .temp-wall{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px;margin-top:6px}
-  .temp-chip{border-radius:10px;padding:10px 12px;border:1px solid var(--border);background:var(--bg);display:flex;flex-direction:column;gap:4px}
+  .temp-chip{border-radius:var(--r-md);padding:10px 12px;border:1px solid var(--border);background:var(--bg);display:flex;flex-direction:column;gap:4px}
   .temp-chip .tc-name{font-size:12px;color:var(--muted);word-break:break-all}
   .temp-chip .best-tag{display:inline-block;white-space:nowrap;word-break:keep-all;font-size:10px;color:#fff;background:#16a34a;border-radius:4px;padding:1px 5px;margin-left:4px;vertical-align:middle}
   .temp-chip .tc-val{font-size:16px;font-weight:600}
@@ -441,7 +503,7 @@
   .inp{padding:6px 8px;font-size:13px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text)}
   /* 风扇控制独立页面 */
   .fan-page{display:flex;flex-direction:column;gap:16px}
-  .btn-mini.danger{border-color:rgba(245,63,63,.4);color:var(--danger);background:rgba(245,63,63,.08)}
+  .btn-mini.danger{border-color:var(--tint-err-40);color:var(--danger);background:var(--tint-err-08)}
   .btn-mini.danger:hover{background:#b91c1c;color:#fff;border-color:#b91c1c}
   .fan-presets{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:14px;background:var(--card);border:1px solid var(--border);border-radius:10px}
   .fan-presets .label{font-size:13px;color:var(--muted);margin-right:2px}
@@ -449,11 +511,11 @@
   .preset-btn:hover{border-color:var(--blue);color:var(--blue)}
   .preset-btn.full{background:var(--red);color:#fff;border-color:var(--red)}
   .preset-btn.full:hover{opacity:.85;color:#fff}
-  .preset-btn.active{background:var(--blue);color:#fff;border-color:var(--blue);box-shadow:0 0 0 2px rgba(57,125,255,.25)}
-  .preset-btn.full.active{background:var(--red);border-color:var(--red);box-shadow:0 0 0 2px rgba(220,53,69,.25)}
+  .preset-btn.active{background:var(--blue);color:#fff;border-color:var(--blue);box-shadow:0 0 0 2px var(--glow-brand-25)}
+  .preset-btn.full.active{background:var(--red);border-color:var(--red);box-shadow:0 0 0 2px var(--glow-red-25)}
   .fan-global-state{font-size:13px;color:var(--muted);margin-left:auto}
   .fan-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px}
-  .fan-card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px}
+  .fan-card{background:var(--card);border:1px solid var(--border);border-radius:var(--r-md);padding:14px}
   .fan-card-head{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:6px}
   .fan-card-name{font-size:14px;font-weight:600}
   .fan-label-input{flex:1 1 140px;min-width:120px;padding:5px 8px;font-size:13px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text)}
@@ -477,9 +539,9 @@
   .volt-pro>summary:hover{color:var(--text-1)}
   .fan-rpm{font-size:26px;font-weight:700;color:var(--blue);line-height:1.1}
   .fan-rpm small{font-size:12px;color:var(--muted);font-weight:400;margin-left:4px}
-  .fan-hw-note{margin-top:8px;padding:6px 10px;border-radius:7px;background:rgba(245,158,11,.10);border:1px solid rgba(245,158,11,.35);font-size:12px;line-height:1.5;display:none;align-items:center;flex-wrap:wrap;gap:8px}
+  .fan-hw-note{margin-top:8px;padding:6px 10px;border-radius:7px;background:var(--tint-amber-10);border:1px solid var(--tint-amber-35);font-size:12px;line-height:1.5;display:none;align-items:center;flex-wrap:wrap;gap:8px}
   /* DC(电压)调速提示：该接口用电压高低调速，低档更易停转，与 PWM 行为不同需明确告知 */
-  .fan-dc-note{margin-top:8px;padding:6px 10px;border-radius:7px;background:rgba(56,189,248,.10);border:1px solid rgba(56,189,248,.35);font-size:12px;line-height:1.5}
+  .fan-dc-note{margin-top:8px;padding:6px 10px;border-radius:7px;background:var(--tint-cyan-10);border:1px solid var(--tint-cyan-35);font-size:12px;line-height:1.5}
   .fan-hw-sum{font-weight:600;color:var(--orange)}
   .fan-hw-toggle{margin-left:auto;font-size:11px;font-weight:400;color:var(--muted);background:none;border:1px solid var(--border);border-radius:5px;padding:1px 7px;cursor:pointer}
   .fan-hw-toggle:hover{color:var(--orange);border-color:var(--orange)}
@@ -557,7 +619,7 @@
   .temp-chip-name{color:var(--muted);font-variant-numeric:tabular-nums}
   .temp-chip-val{font-weight:700;font-variant-numeric:tabular-nums;min-width:38px;text-align:right}
   .temp-chip-tag{font-size:10px;padding:1px 5px;border-radius:6px;line-height:1.3}
-  .temp-chip-tag.off{color:var(--blue);background:rgba(120,170,255,.12)}
+  .temp-chip-tag.off{color:var(--blue);background:var(--tint-blue-12)}
   .temp-chip-tag.on{color:var(--muted);background:#fff;border:1px solid var(--border)}
   .temp-chip-empty{font-size:12px;color:var(--muted);padding:4px 0}
   /* 风扇曲线编辑器：横向自适应（节点放成表格，单元更紧凑） */
@@ -571,7 +633,7 @@
   .curve-pt-input input:focus{outline:none;background:#eff6ff}
   .curve-pt-input .unit{padding:4px 6px;font-size:11px;color:var(--muted);background:var(--bg);border-left:1px solid var(--border);min-width:22px;text-align:center}
   .curve-pt-del{background:none;border:1px solid var(--border);color:var(--muted);border-radius:6px;padding:3px 7px;cursor:pointer;font-size:12px}
-  .curve-pt-del:hover{color:var(--red);border-color:rgba(245,63,63,.4)}
+  .curve-pt-del:hover{color:var(--red);border-color:var(--tint-err-40)}
   .curve-canvas{width:100%;height:120px;background:var(--bg);border:1px solid var(--border);border-radius:8px;margin-top:8px;display:block}
   /* 硬盘温度控制风扇面板 */
   .dt-panel{--dt-gap:16px;padding:18px}
@@ -670,9 +732,9 @@
   .auto-card h3{margin:0 0 14px;font-size:15px;color:var(--text);display:flex;align-items:center;gap:8px}
   .auto-alerts{list-style:none;padding:0;margin:0}
   .auto-alerts li{padding:9px 12px;border-radius:8px;margin-bottom:8px;font-size:13px;line-height:1.5;color:var(--text)}
-  .auto-alerts li.danger{background:rgba(239,68,68,.12);color:#b91c1c;border-left:3px solid #ef4444}
-  .auto-alerts li.warn{background:rgba(245,158,11,.15);color:#b45309;border-left:3px solid #f59e0b}
-  .auto-alerts li.ok{background:rgba(34,197,94,.1);color:#15803d;border-left:3px solid #22c55e}
+  .auto-alerts li.danger{background:var(--tint-err3-12);color:#b91c1c;border-left:3px solid #ef4444}
+  .auto-alerts li.warn{background:var(--tint-amber-15);color:#b45309;border-left:3px solid #f59e0b}
+  .auto-alerts li.ok{background:var(--tint-ok3-10);color:#15803d;border-left:3px solid #22c55e}
   .auto-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px}
   .auto-field{display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--muted)}
   .auto-field input[type=number],.auto-field input[type=text]{width:100%;padding:7px 9px;background:#fff;border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px}
@@ -715,6 +777,27 @@
   [data-theme="dark"] .b-ok{color:var(--success)} [data-theme="dark"] .b-warn{color:var(--warning)} [data-theme="dark"] .b-bad{color:var(--danger)}
   [data-theme="dark"] .curve-pt-input input:focus{background:var(--fill)}
   [data-theme="dark"] .auto-alerts li.danger{color:#ff8a85} [data-theme="dark"] .auto-alerts li.warn{color:#ffb56b} [data-theme="dark"] .auto-alerts li.ok{color:#5fd98a}
+
+  /* ===== 阶段 2：被新壳内嵌时的「嵌入模式」（URL 加 ?embed=1 触发）=====
+     新壳（/）自带侧边栏与顶栏，这里必须收起旧页自己的那套，否则会出现两层侧边栏套娃。
+     内容区改为整宽无内边距，由外层壳提供留白。 */
+  html.embed-mode .header{display:none!important}
+  html.embed-mode .sidebar{display:none!important}
+  html.embed-mode .nav-overlay{display:none!important}
+  html.embed-mode .container{max-width:none;padding:0;display:block}
+  html.embed-mode .content{flex:none;width:100%}
+  html.embed-mode body{padding-bottom:8px}
+  /* 首帧压制：内嵌且带 ?tab= 时，先不画写死 active 的默认面板，避免闪一下「硬件配置检测」。
+     底部 bootstrap 切到目标页签后摘掉 embed-pending，内容随即出现（通常只压住几十毫秒）。 */
+  html.embed-pending .panel.active{display:none!important}
+
+  /* 阶段 3 观感修正（迭代定稿）：hero 保留原有卡片背景 + 暗色下左侧飞牛蓝标识条；
+     标题下那条 1px 分隔线改为「按需画」—— 画在统计行(.hero-stats)顶部：只有确实有统计行时才出现，
+     既保住标题与统计之间的层次感，又不会在没有统计行的页面（如控制与自动化）露出悬空的线 + 空带。
+     统计项保持原来的小方块、不另套外框（避免"框套框"）。 */
+  .hero-head{border-bottom:none;padding-bottom:0}
+  [data-theme="dark"] .hero-head{border-bottom:none;padding-bottom:0}
+  [data-theme="dark"] .hero-stats{border-top:1px solid rgba(255,255,255,.07);padding-top:16px}
 </style>
 </head>
 <body>
@@ -770,6 +853,32 @@
 <div class="nav-overlay" id="navOverlay" onclick="closeSidebar()"></div>
 
 <script>
+// ===== 网关适配（唯一一处 fetch 垫片）：给根绝对路径 /api/* 统一补前缀 =====
+// 本页可能的访问形态：
+//   ① 飞牛网关根路径 : /cgi/ThirdParty/<appid>/index.cgi/            → 前缀补到 …/index.cgi
+//   ② 飞牛网关子路径 : /cgi/ThirdParty/<appid>/index.cgi/legacy/     → 同上（新壳内嵌入口）
+//   ③ 旧式 /app/<name> 部署                                          → 前缀补到 /app/<name>
+//   ④ 本地直连       : http://127.0.0.1:9800/ 或 /legacy/            → 应用就在根，不补
+// ⚠️ 全局只能有这一个垫片：早期另有一处「统一网关适配」垫片（按 dirname 取前缀），
+//    在子路径下会算错 base 并与本垫片叠加成双前缀（…/index.cgi/index.cgi/… 直接报错），已合并删除。
+(function(){
+  try{
+    var m = location.pathname.match(/^(.*\/index\.cgi)\/?/);
+    var base = '';
+    if(m){
+      base = m[1];                                     // 形态 ①②：补到 index.cgi 为止
+    }else{
+      var dir = (location.pathname || '/').replace(/\/[^\/]*$/, '');
+      base = /^\/(app|cgi)\//.test(dir) ? dir : '';    // 仅旧式 /app/<name> 才补；本地直连（/、/legacy/）不补
+    }
+    if(!base) return;                                  // 本地直连：保持原样，零改动
+    var _fetch = window.fetch.bind(window);
+    window.fetch = function(u, o){
+      if(typeof u === 'string' && u.charAt(0) === '/' && u.charAt(1) !== '/') u = base + u;
+      return _fetch(u, o);
+    };
+  }catch(e){}
+})();
 // 2.0 明暗主题切换：明 / 暗 / 自动（跟随系统），单按钮循环切换
 function getThemeMode(){
   try{var t=localStorage.getItem('nasdash_theme');if(t==='light'||t==='dark'||t==='auto')return t;}catch(e){}
@@ -878,19 +987,8 @@ function updateThemeBtn(){
 })();
 // 初始化时先按当前模式对齐一次 data-theme，再刷新按钮（修正任何初始偏差）
 document.addEventListener('DOMContentLoaded',applyTheme);
-// 统一网关适配：页面位于 /app/{appname} 路径下时，自动为所有绝对根路径 fetch 补上前缀；
-// 本地 TCP 模式（根路径）下前缀为空，行为完全不变。无需逐个改 fetch 调用。
-(function(){
-  var _orig = window.fetch ? window.fetch.bind(window) : null;
-  if (!_orig) return;
-  var base = (location.pathname || '/').replace(/\/[^\/]*$/, '');
-  window.fetch = function(u, o){
-    if (typeof u === 'string' && u.charAt(0) === '/' && u.charAt(1) !== '/') {
-      u = base + u;
-    }
-    return _orig(u, o);
-  };
-})();
+// （注：早期这里还有一处「统一网关适配」fetch 垫片，已与本脚本顶部的唯一垫片合并删除——
+//  两处叠加会在 /legacy/ 等子路径下算出双前缀。详见顶部注释。）
 let DATA=null, timer=null;
 // 移动端：抽屉式侧栏开合（桌面端 .menu-toggle 隐藏，此函数无副作用）
 function toggleSidebar(){
@@ -2810,16 +2908,28 @@ async function saveFanRule(hwmon, idx, activeMode){
   if(!src){
     body4.rule=null;  // 关闭 → 清除该风扇联动
   }else{
-    var start=parseFloat(document.getElementById(id+'-'+pre+'rstart').value);
-    var full=parseFloat(document.getElementById(id+'-'+pre+'rfull').value);
-    var minp=parseFloat(document.getElementById(id+'-'+pre+'rmin').value);
-    var maxp=parseFloat(document.getElementById(id+'-'+pre+'rmax').value);
-    var rec=parseFloat(document.getElementById(id+'-'+pre+'rrec').value);
-    var stopEl=document.getElementById(id+'-'+pre+'rstop');
-    var stopv=stopEl?stopEl.checked:false;
-    if(!(full>start)){ if(st){ st.textContent='全速温度须大于开转温度'; st.className='fan-rule-state'; } return; }
-    if(!(rec<start)){ if(st){ st.textContent='恢复温度须小于开转温度'; st.className='fan-rule-state'; } return; }
     var pts=readCurve(id+'-r');
+    var start,full,minp,maxp,rec,stopv;
+    if(body==='curve'){
+      // 曲线体没有线性输入框（存量缺陷：曾致「保存为曲线」静默失败、从未发出 POST）。
+      // 基线字段从曲线节点推导，与后端缺省语义对齐（start_temp 缺省取首点温度、recover 取 start-5）。
+      if(!pts||pts.length<2){ if(st){ st.textContent='请先添加至少 2 个曲线节点'; st.className='fan-rule-state'; } return; }
+      var temps=pts.map(function(p){return Number(p[0]);}), pwms=pts.map(function(p){return Number(p[1]);});
+      start=Math.min.apply(null,temps); full=Math.max.apply(null,temps);
+      if(!(full>start)){ if(st){ st.textContent='曲线节点温度需有跨度（至少两个不同温度）'; st.className='fan-rule-state'; } return; }
+      minp=Math.min.apply(null,pwms); maxp=Math.max.apply(null,pwms);
+      rec=Math.max(0,start-5); stopv=false;
+    }else{
+      start=parseFloat(document.getElementById(id+'-'+pre+'rstart').value);
+      full=parseFloat(document.getElementById(id+'-'+pre+'rfull').value);
+      minp=parseFloat(document.getElementById(id+'-'+pre+'rmin').value);
+      maxp=parseFloat(document.getElementById(id+'-'+pre+'rmax').value);
+      rec=parseFloat(document.getElementById(id+'-'+pre+'rrec').value);
+      var stopEl=document.getElementById(id+'-'+pre+'rstop');
+      stopv=stopEl?stopEl.checked:false;
+      if(!(full>start)){ if(st){ st.textContent='全速温度须大于开转温度'; st.className='fan-rule-state'; } return; }
+      if(!(rec<start)){ if(st){ st.textContent='恢复温度须小于开转温度'; st.className='fan-rule-state'; } return; }
+    }
     // 保留旧 active_mode：仅当「保存为线性/曲线」显式指定时才覆盖。
     // 旧配置可能没 active_mode 字段，按「曲线优先」推断（兼容老数据）。
     var f=(DATA.system&&DATA.system.sensors&&DATA.system.sensors.fans||[]).find(function(x){ return x.hwmon===hwmon && x.idx===idx; });
@@ -2913,6 +3023,16 @@ function updateLiveStats(d){
       let c = parseFloat(lv)>threads?'var(--red)':parseFloat(lv)>threads*0.7?'var(--orange)':'var(--green)';
       el.style.color=c; el.textContent=fmtLoad(lv);
     });
+  }
+  // CPU 当前频率（全核平均）：/api/metrics 每秒带回，检测页频率行原地改字（蓝色＝实时更新中，同 CPU 使用率口径）。
+  // 检测页整页重渲（30s 快照）后 span 会重建，这里下一秒自动接上，无需特殊处理。
+  if(d.cpu_freq_mhz!=null){
+    let f = Math.round(parseFloat(d.cpu_freq_mhz));
+    if(!isNaN(f)){
+      document.querySelectorAll('.js-cpu-freq-live').forEach(function(el){
+        el.textContent = (el.getAttribute('data-pref')?el.getAttribute('data-pref')+' ':'') + f + ' MHz';
+      });
+    }
   }
 }
 let _netRatesBusy=false;
@@ -3503,12 +3623,26 @@ function renderStorage(st){
     return `<tr><td>${a.name}</td><td><span class="badge ${ok?'b-ok':'b-bad'}">${a.level}</span></td><td>${a.state}</td><td>${a.size}</td><td>${(a.disks||[]).join(', ')}</td></tr>`;
   }).join('');
   let vols = (st.volumes||[]).map(v=>{
+    // 云挂载（飞牛「远程挂载」的网盘）：容量由云端掌握、后端不报配额，
+    // 与其显示 rclone 的占位值，不如如实标出「是哪个云盘 + 归属名」。
+    if (v.cloud){
+      let label = v.cloud_type + (v.cloud_name ? ' · ' + v.cloud_name : '');
+      return `<tr><td>${v.mount}<div class="cloud-tag">☁ ${label}</div></td><td>${v.cloud_proto||'rclone WebDAV'}</td><td style="color:var(--c-text-2)">—</td><td style="color:var(--c-text-2)">—</td><td style="color:var(--c-text-2)">云端挂载 · 不提供容量</td></tr>`;
+    }
     let pct = parseInt(v.pcent);
     let col = pct>85?'var(--red)':pct>70?'var(--orange)':'var(--green)';
-    return `<tr><td>${v.mount}</td><td>${v.fstype}</td><td>${v.size}</td><td>${v.used} / ${v.avail}</td><td style="min-width:140px"><div class="progress"><div class="progress-fill" style="width:${pct}%;background:${col}">${pct}%</div></div></td></tr>`;
+    // 智能两态：色条够宽时白字嵌在条内（保持原观感，锚在色条末端）；太窄时数字挪到色条右侧并按语义色显示，避免被圆角切掉
+    let inside = pct >= 25;
+    let fillTxt = inside ? `${pct}%` : '';
+    // 数字在条外时去掉色条内边距：否则 0% 也会被 padding 撑出一小块绿色，且小比例色条会偏长
+    let fillStyle = `width:${pct}%;background:${col}` + (inside ? '' : ';padding-right:0');
+    let outSpan = inside ? '' : `<span class="progress-pct" style="left:calc(${pct}% + 8px);color:${col}">${pct}%</span>`;
+    return `<tr><td>${v.mount}</td><td>${v.fstype}</td><td>${v.size}</td><td>${v.used} / ${v.avail}</td><td style="min-width:140px"><div class="progress"><div class="progress-fill" style="${fillStyle}">${fillTxt}</div>${outSpan}</div></td></tr>`;
   }).join('');
   let _raids=(st.raid_arrays||[]), _vols=(st.volumes||[]);
-  let _avgPct = _vols.length ? Math.round(_vols.reduce((a,v)=>a+parseInt(v.pcent||0),0)/_vols.length) : 0;
+  // 平均使用率只算本地卷：云挂载无使用率（后端置空），计入会把均值拉低成假象
+  let _local = _vols.filter(v=>!v.cloud);
+  let _avgPct = _local.length ? Math.round(_local.reduce((a,v)=>a+parseInt(v.pcent||0),0)/_local.length) : 0;
   return `
   ${panelHero({icon:ICON_STORAGE,title:'存储卷',sub:'RAID 阵列 / 卷容量 / 拓扑',stats:[
     {v:_raids.length,k:'RAID 阵列'},
@@ -3516,7 +3650,7 @@ function renderStorage(st){
     {v:_avgPct+'%',k:'平均使用率',cls:(_avgPct>85?'bad':_avgPct>70?'warn':'')},
     {v:(st.topology?'有':'无'),k:'拓扑'}
   ]})}
-  <div class="section-title">RAID 阵列 (mdadm)</div>
+  <div class="section-title">RAID 阵列</div>
   <div class="card">
     <table class="table"><thead><tr><th>阵列</th><th>级别</th><th>状态</th><th>容量</th><th>成员盘</th></tr></thead><tbody>${raids||'<tr><td colspan=5>无</td></tr>'}</tbody></table>
   </div>
@@ -3524,7 +3658,7 @@ function renderStorage(st){
   <div class="card">
     <table class="table"><thead><tr><th>挂载点</th><th>文件系统</th><th>总容量</th><th>已用/可用</th><th>使用率</th></tr></thead><tbody>${vols||'<tr><td colspan=5>无</td></tr>'}</tbody></table>
   </div>
-  <div class="section-title">存储拓扑 (lsblk)</div>
+  <div class="section-title">存储拓扑</div>
   <div class="card"><pre>${(st.topology||'').replace(/</g,'&lt;')}</pre></div>`;
 }
 
@@ -3804,15 +3938,16 @@ function renderDetect(D){
       <div class="kv"><span class="k">型号</span><span class="v">${s.cpu_model||'-'}</span></div>
       <div class="kv"><span class="k">核心/线程</span><span class="v">${s.cpu_cores||0}核 / ${s.cpu_threads||0}线程</span></div>
       ${(()=>{
-        let cur = ci.current_freq_mhz!=null ? Math.round(ci.current_freq_mhz)+' MHz' : null;
         let min = ci.min_freq_mhz!=null ? Math.round(ci.min_freq_mhz)+' MHz' : null;
         let max = ci.max_freq_mhz!=null ? Math.round(ci.max_freq_mhz)+' MHz' : null;
-        let txt = '';
-        if(cur) txt += '当前 '+cur;
-        if(min && max) txt += (txt?' · ':'')+'范围 '+min+' - '+max;
-        else if(max) txt += (txt?' · ':'')+max;
-        else if(s.cpu_freq!=null) txt = Math.round(parseFloat(s.cpu_freq))+' MHz';
-        return `<div class="kv"><span class="k">频率</span><span class="v">${txt||'N/A'}</span></div>`;
+        let range = (min && max) ? '范围 '+min+' - '+max : (max ? max : (s.cpu_freq!=null ? '最大 '+Math.round(parseFloat(s.cpu_freq))+' MHz' : ''));
+        // 当前频率带 .js-cpu-freq-live：由 updateLiveStats() 随 /api/metrics 每秒原地改字（蓝色＝实时更新中）；
+        // 范围是静态参数，仍跟随 /api/system 快照，不需要秒级刷。
+        let live = ci.current_freq_mhz!=null
+          ? `<span class="js-cpu-freq-live" data-pref="当前" style="color:var(--blue)" title="每秒刷新：全部核心瞬时频率的平均值（各核负载不同会各自变频）">当前 ${Math.round(ci.current_freq_mhz)} MHz</span>`
+          : '';
+        let txt = live + (live&&range?' · ':'') + range;
+        return `<div class="kv"><span class="k" title="当前频率＝全部核心瞬时频率的平均值（各核负载不同会各自变频），蓝色数字每秒刷新；范围为最小~最大频率">频率</span><span class="v">${txt||'N/A'}</span></div>`;
       })()}
       <div class="kv"><span class="k">CPU 温度</span><span class="v" id="sys-cpu-temp-kv" style="color:${tempColor(cpuTempUnified(),100)}">${cpuTempUnified()!=null?cpuTempUnified()+'°C':'N/A'}</span></div>
       <div class="kv"><span class="k">CPU 使用率</span><span class="v">${cpuPct}%</span></div>
@@ -3832,7 +3967,7 @@ function renderDetect(D){
         det += gpuRow('插槽数', ci.sockets!=null?ci.sockets+' 个':null);
         det += gpuRow('每插槽核心', ci.cores_per_socket!=null?ci.cores_per_socket+' 核':null);
         det += gpuRow('每核心线程', ci.threads_per_core!=null?ci.threads_per_core+' 线程':null);
-        det += gpuRow('当前频率', ci.current_freq_mhz!=null?Math.round(ci.current_freq_mhz)+' MHz':null);
+        det += gpuRow('当前频率（各核平均）', ci.current_freq_mhz!=null?`<span class="js-cpu-freq-live" style="color:var(--blue)" title="每秒刷新">${Math.round(ci.current_freq_mhz)} MHz</span>`:null);
         let freqRange = '';
         if(ci.min_freq_mhz!=null && ci.max_freq_mhz!=null) freqRange = Math.round(ci.min_freq_mhz)+' - '+Math.round(ci.max_freq_mhz)+' MHz';
         else if(ci.max_freq_mhz!=null) freqRange = Math.round(ci.max_freq_mhz)+' MHz';
@@ -4453,7 +4588,10 @@ async function showRunLog(){
   html+='<div class="log-list">';
   for(var j2=0;j2<entries.length;j2++){
     var e=entries[j2];
-    html+='<div class="log-line lv-'+e.lvl.toLowerCase()+'">';
+    // 类名须与 CSS 对齐：.log-line.lv-err / .lv-warn（此前误用 lvl.toLowerCase() 生成
+    // 「lv-error」，CSS 里没有这条，导致错误行从未被标红；警告行因 lv-warn 恰好匹配才正常）
+    var _logClsMap={ERROR:'err',WARN:'warn',INFO:'info'};
+    html+='<div class="log-line lv-'+(_logClsMap[e.lvl]||'info')+'">';
     if(e.ts) html+='<span class="lt">'+esc(e.ts)+'</span>';
     html+=esc(e.txt)+'</div>';
   }
@@ -4961,6 +5099,50 @@ loadData();  // 首屏仍全量拉取一次，打底填充所有板块 DATA
 startNetRateTimer();  // 启动轻量实时流量刷新（每 1s 只拉 /api/metrics，不动重采集）
 startSysNetTimer();  // 启动网络卡片轻量刷新（每 5s 拉独立 /api/network，不依赖 60s 缓存）
 ensureTempPolling();  // 全局开启温度轮询，让检测/风扇页也用实时 CPU 温度，避免各页温度不一致
+
+// ---------- 阶段 2：作为新壳内嵌页运行（?embed=1&tab=xxx）----------
+// 新壳（/）里尚未迁移的模块用 iframe 内嵌本页：embed=1 收起本页侧边栏与顶栏，
+// tab=xxx 指明首屏打开哪一页；主题由新壳通过 postMessage 通知后再套用，两边保持一致。
+// 后续在壳里换页签不再重载本页，而是发 {type:'nasdash-tab'} 消息就地 switchTab（省掉 3MB 重载）。
+(function(){
+  var q;
+  try{ q = new URLSearchParams(location.search); }catch(e){ return; }
+  if(q.get('embed') !== '1') return;
+  document.documentElement.classList.add('embed-mode');
+
+  // 目标页签按钮（模板里 11 个 .tab 都是静态渲染的，直接按 onclick 里的 id 找）
+  function tabBtn(want){
+    var bs = document.querySelectorAll('.tab');
+    for(var i=0;i<bs.length;i++){
+      if((bs[i].getAttribute('onclick')||'').indexOf("'"+want+"'") >= 0) return bs[i];
+    }
+    return null;
+  }
+  function releasePending(){ document.documentElement.classList.remove('embed-pending'); }
+
+  // 首屏：切到 ?tab= 指定的页签。DOM 到这里已解析完，可直接切，无需再等
+  var want = q.get('tab');
+  if(want){
+    var b = tabBtn(want);
+    if(b && typeof switchTab === 'function'){ switchTab(want, b); releasePending(); }
+    else { releasePending(); setTimeout(function(){ var b2=tabBtn(want); if(b2) switchTab(want,b2); }, 120); }
+    // 兜底：无论如何 1s 后必须放开压制，绝不能让内容区一直空着
+    setTimeout(releasePending, 1000);
+  }
+
+  // 与外壳通信：主题同步 / 就地换页签（不重载本页）
+  window.addEventListener('message', function(ev){
+    try{
+      var d = ev && ev.data; if(!d) return;
+      if(d.type === 'nasdash-theme'){
+        if(typeof applyTheme === 'function') applyTheme();
+      } else if(d.type === 'nasdash-tab' && d.tab && typeof switchTab === 'function'){
+        var bb = tabBtn(d.tab);
+        if(bb) switchTab(d.tab, bb);
+      }
+    }catch(e){}
+  });
+})();
 
 // ---------- 检测新版本 ----------
 let updateDismissed = false;

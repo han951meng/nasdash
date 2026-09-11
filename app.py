@@ -5,7 +5,7 @@
 单文件 Flask 应用：阵列卡状态 / 硬盘 SMART / 系统资源 / 存储卷
 部署目录: /opt/fnos-dash/
 """
-import subprocess, json, re, os, time, socket, signal, platform, shutil, sys, glob, functools, errno, urllib.request, urllib.error, base64
+import subprocess, json, re, os, time, socket, signal, platform, shutil, sys, glob, functools, errno, collections, urllib.request, urllib.error, base64
 from flask import Flask, jsonify, render_template, render_template_string, request, make_response, Response, stream_with_context, send_from_directory
 try:
     from markupsafe import Markup
@@ -14,6 +14,73 @@ except Exception:
 from functools import wraps
 
 app = Flask(__name__)
+
+# ===================== 错误历史圈（不受日志尾部 60 行限制） =====================
+# 背景：运行日志弹窗只展示 app.log 最后 60 行，而 app.log 里混着每条 HTTP 请求
+# 记录（风扇 1s 轮询一分钟就能灌满 60 行），一个报错很快就被冲出窗口、找不回来。
+# 方案：包一层 stderr——报错类行（Traceback/Error/Exception/failed/错误/失败/异常）
+# 在照常写日志的同时，额外留存一份在内存（最后 100 条、连续重复合并计数、带捕获时间），
+# 随健康报告 error_ring 字段暴露给前端置顶展示。
+_ERR_RING = collections.deque(maxlen=100)
+
+class _StderrTee:
+    """透传 stderr 并逐行扫描，报错类行留存进 _ERR_RING。"""
+
+    def __init__(self, raw):
+        self.raw = raw
+        self._buf = ""
+
+    def write(self, s):
+        try:
+            self.raw.write(s)
+        except Exception:
+            pass
+        self._buf += s
+        while "\n" in self._buf:
+            line, self._buf = self._buf.split("\n", 1)
+            self._scan(line)
+        return len(s)
+
+    def _scan(self, line):
+        s = line.rstrip()
+        if not s:
+            return
+        # HTTP 访问行（wsgiref 每请求一条）默认不进圈：路径里碰巧带 error 字样的
+        # 正常请求（包括 /api/errors/clear 自己）会被误收，造成「越清越多」。
+        # 访问行只有 5xx（真出事）才留；其余行走关键词判断。
+        m_acc = re.match(r'^\S+ \S+ \S+ \[[^\]]+\] "[^"]*" (\d{3}) ', s)
+        is_5xx = False
+        if m_acc:
+            if int(m_acc.group(1)) < 500:
+                return
+            is_5xx = True
+        else:
+            low = s.lower()
+            if not ("traceback" in low or "error" in low or "exception" in low or "failed" in low
+                    or "错误" in s or "失败" in s or "异常" in s):
+                return
+        # 行若自带「[YYYY-MM-DD HH:MM:SS]」时间戳前缀，剥掉并用它作捕获时间
+        # （避免错误记录弹窗里捕获时间列与内容开头重复显示同一时间）
+        m_ts = re.match(r'^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\] ?(.*)$', s)
+        if m_ts:
+            ring_ts, body = m_ts.group(1), m_ts.group(2)
+        else:
+            ring_ts, body = time.strftime("%Y-%m-%d %H:%M:%S"), s
+        if _ERR_RING:
+            last = _ERR_RING[-1]
+            if last["text"] == body:
+                # 与上一条相同：合并计数，避免循环报错灌圈
+                last["n"] += 1
+                return
+        _ERR_RING.append({"ts": ring_ts, "text": body[:400], "n": 1})
+
+    def flush(self):
+        try:
+            self.raw.flush()
+        except Exception:
+            pass
+
+sys.stderr = _StderrTee(sys.stderr)
 
 # ===================== 飞牛统一网关用户身份 =====================
 # 官方文档要求：访问经网关时，fnOS 先校验登录态，再通过 Header 转发用户信息
@@ -45,6 +112,23 @@ def require_admin():
             return fn(*args, **kwargs)
         return wrapper
     return decorator
+
+@app.route("/api/errors/clear", methods=["POST"])
+@require_admin()
+def api_errors_clear():
+    """清空错误历史圈（问题解决后用户手动清掉，不必等重启）。"""
+    _ERR_RING.clear()
+    return jsonify({"ok": True, "cleared": True})
+
+@app.route("/api/errors/test", methods=["POST"])
+def api_errors_test():
+    """人为写入一条测试错误记录（验证「错误记录」捕获→展示→清除全链路用）。
+
+    走的是与真实报错完全相同的链路：stderr 打印 → _StderrTee 扫描 → 入圈 →
+    report.error_ring 暴露 → 前端弹窗展示。文案明确标注「测试」，避免被当真 bug 排查。
+    """
+    print(time.strftime("[%Y-%m-%d %H:%M:%S] ") + "[ERROR] 测试错误记录：这是一条人为写入的示例报错（验证错误记录功能用），不是真实故障，可放心清除", file=sys.stderr)
+    return jsonify({"ok": True})
 
 @app.route("/api/me")
 def api_me():
@@ -3284,6 +3368,13 @@ def _mem_brand_cn(manu):
         ("WD", "西数"), ("INTEL", "英特尔"), ("RAMAXEL", "记忆科技"),
         ("ELPIDA", "尔必达"), ("NANYA", "南亚"),
         ("GALAXY MICROSYSTEMS", "影驰"), ("GALAX", "影驰"),
+        # —— 国产 / 工控·工规厂商（固件里常是原始英文串，此前会原样显示，见论坛反馈①）——
+        # 注：POWERCHIP 须排在 PSC 之前，先命中更长的键，避免 "PSC" 抢先。
+        ("UNIIC", "紫光"), ("JINHUA", "晋华"), ("JHICC", "晋华"),
+        ("CXMT", "长鑫存储"), ("GIGADEVICE", "兆易创新"),
+        ("POWERCHIP", "力晶"), ("PSC", "力晶"),
+        ("WINBOND", "华邦"), ("ESMT", "晶豪科技"),
+        ("ETRON", "钰创"), ("RENESAS", "瑞萨"),
     ]
     for key, cn in table:
         if key in m:
@@ -3959,6 +4050,8 @@ def _collect_system_full():
     m = re.search(r"Core\(s\) per socket:\s*(\d+)", lscpu)
     d["cpu_cores"] = int(m.group(1)) if m else 0
     m = re.search(r"CPU max MHz:\s*([\d.]+)", lscpu)
+    # ⚠️ 语义提醒：cpu_freq 取自 lscpu 的 "CPU max MHz"，是**最大频率**（历史命名）。
+    # 真正的当前频率见下方 cpu_info.current_freq_mhz，勿再拿本字段当"当前频率"显示。
     d["cpu_freq"] = m.group(1) if m else "?"
 
     def _int(s, default=0):
@@ -3982,6 +4075,21 @@ def _collect_system_full():
         if "processor" in line and len(first_core) > 5:
             break
     flags = first_core.get("flags", first_core.get("Features", "")).split()
+    # 当前频率：/proc/cpuinfo 的 "cpu MHz" 是**每个核的瞬时值**，单核采样会随负载在
+    # min~max 间大幅跳动（容易被误读成"显示的是最大频率"）。取**全部核心的平均**更能
+    # 代表整机当前频率（论坛反馈②）。若无该字段（部分 ARM / 虚拟机）则回退首核值。
+    _core_mhz = []
+    for _ln in cpuinfo.splitlines():
+        if _ln[:7].lower() == "cpu mhz" and ":" in _ln:
+            try:
+                _core_mhz.append(float(_ln.split(":", 1)[1].strip()))
+            except Exception:
+                pass
+    current_freq_mhz = (
+        round(sum(_core_mhz) / len(_core_mhz), 1)
+        if _core_mhz
+        else _float(first_core.get("cpu MHz"))
+    )
     virt = None
     if "vmx" in flags:
         virt = "Intel VT-x"
@@ -4002,7 +4110,7 @@ def _collect_system_full():
         "numa_nodes": _int(lscpu_field("NUMA node(s)"), 1),
         "min_freq_mhz": _float(lscpu_field("CPU min MHz")),
         "max_freq_mhz": _float(lscpu_field("CPU max MHz")) or _float(d.get("cpu_freq")),
-        "current_freq_mhz": _float(first_core.get("cpu MHz")),
+        "current_freq_mhz": current_freq_mhz,   # 全部核心瞬时频率的平均值（见上方说明）
         "bogomips": _float(first_core.get("BogoMIPS") or first_core.get("bogomips")),
         "l1d": lscpu_field("L1d cache"),
         "l1i": lscpu_field("L1i cache"),
@@ -4688,9 +4796,61 @@ def fmt_kb(kb):
     return f"{kb} KB"
 
 # ===================== 采集：存储卷 =====================
+CLOUD_MOUNT_INFO = "/etc/mountmgr/mount_info.json"
+
+def _cloud_mount_map():
+    """飞牛「远程挂载」的**云盘**归属：mountPoint -> {type, name, proto}。
+
+    数据源 /etc/mountmgr/mount_info.json（root 专属，本进程以 root 运行可直接读）。
+
+    ⚠️ 该文件是所有「远程挂载」共用的（SMB / NFS / FTP / SFTP / WebDAV 也在里面），
+    只有云盘（夸克/百度/阿里/123 等）才带 cloudStorageTypeStr 品牌字段；非云端远程挂载
+    该字段为空。故只认「品牌名非空」的条目，避免把 SMB/NFS 当云盘、误把它们的真实容量抹掉。
+
+    返回值语义：
+      None  → 文件读不到/格式异常（降级模式，调用方回退按 fuse.rclone 识别）
+      {}    → 读取成功，但当前没有云盘挂载
+      {...} → mountPoint -> 云盘信息
+    例：{"cloudStorageTypeStr": "夸克网盘", "comment": "兴奋的柚子"}（comment 是网盘账号名）。
+    """
+    try:
+        raw = read_file(CLOUD_MOUNT_INFO, "")
+        if not raw.strip():
+            return {}
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            return None
+    except Exception:
+        return None
+    out = {}
+    for _uid, mounts in data.items():
+        if not isinstance(mounts, dict):
+            continue
+        for _mid, info in mounts.items():
+            if not isinstance(info, dict):
+                continue
+            brand = (info.get("cloudStorageTypeStr") or "").strip()
+            if not brand:
+                continue          # 非云端远程挂载（SMB/NFS/FTP…），不当云盘处理
+            name = (info.get("comment") or "").strip()
+            # proto 是底层传输（云盘统一经本机 WebDAV 桥 15244 + rclone 挂载），
+            # http/https/webdav* 一律展示为「rclone WebDAV」更好读；异常值原样带出。
+            p = (info.get("proto") or "").strip()
+            proto = "rclone WebDAV" if p.lower() in ("", "http", "https", "webdav", "webdavnative", "webdavproxy") else f"rclone {p}"
+            # mountPoint 单数；防御性兼容 mountPoints 数组
+            mps = []
+            if info.get("mountPoint"):
+                mps.append(str(info["mountPoint"]).strip())
+            if isinstance(info.get("mountPoints"), list):
+                mps += [str(x).strip() for x in info["mountPoints"] if x]
+            for mp in mps:
+                if mp:
+                    out[mp] = {"type": brand, "name": name, "proto": proto}
+    return out
+
 @_ttl_cache(60)
 def get_storage():
-    d = {"raid_arrays": [], "volumes": [], "topology": ""}
+    d = {"raid_arrays": [], "volumes": [], "topology": "", "cloud_mounts": []}
     # mdadm RAID
     mdstat = read_file("/proc/mdstat")
     d["mdstat"] = mdstat
@@ -4712,6 +4872,7 @@ def get_storage():
     if cur:
         d["raid_arrays"].append(cur)
     # 挂载点容量（排除 docker overlay / tmpfs 等非存储卷）
+    cloud_map = _cloud_mount_map()
     df = run_cmd(["df", "-h", "--output=target,size,used,avail,pcent,fstype"], 5)
     skip_fs = ("overlay", "tmpfs", "devtmpfs", "squashfs")
     for line in df.strip().splitlines()[1:]:
@@ -4723,10 +4884,39 @@ def get_storage():
             if "docker" in mount or "overlay" in mount:
                 continue
             if mount in ("/", "/fs", "/boot", "/boot/efi") or mount.startswith("/vol"):
-                d["volumes"].append({
+                row = {
                     "mount": mount, "size": size, "used": used,
                     "avail": avail, "pcent": pcent, "fstype": fstype,
-                })
+                }
+                # 云盘（飞牛「远程挂载」的网盘，经 rclone/FUSE 挂成本地目录）
+                #  - cloud_map 读到过（非 None）→ 只认品牌字段命中的，SMB/NFS 等不受影响
+                #  - cloud_map 读不到（None，降级）→ 退回按 fuse.rclone 文件系统识别
+                cinfo = None if cloud_map is None else cloud_map.get(mount)
+                _degraded = cloud_map is None and fstype.startswith("fuse.rclone")
+                if cinfo or _degraded:
+                    cinfo = cinfo or {}
+                    row.update({
+                        "cloud": True,
+                        "cloud_type": cinfo.get("type") or "云盘",
+                        "cloud_name": cinfo.get("name") or "",
+                        "cloud_proto": cinfo.get("proto") or "rclone WebDAV",
+                    })
+                    # df 对云挂载给出的容量是 rclone 在「后端不报配额」时填的占位值
+                    # （1 PB），既非真实容量也算不出已用，一律置空避免误导；
+                    # 前端对这些字段显示「—」，并把该行排除出平均使用率。
+                    row["size"] = row["used"] = row["avail"] = row["pcent"] = None
+                    d["volumes"].append(row)
+                    d["cloud_mounts"].append(row)
+                    continue
+                d["volumes"].append(row)
+    # 存储拓扑：lsblk 只列块设备，看不到 FUSE 云挂载，单独补一段说明
+    if d["cloud_mounts"]:
+        lines = [d["topology"].rstrip(), "", "── 云端挂载（远程挂载 / rclone FUSE，非本地磁盘）──"]
+        for c in d["cloud_mounts"]:
+            # comment 字段是云盘账号名（如夸克账号「兴奋的柚子」），多账号时用于区分
+            label = c["cloud_type"] + (f"（账号：{c['cloud_name']}）" if c["cloud_name"] else "")
+            lines.append(f"{c['mount']}  {label}  {c['cloud_proto']}  已挂载")
+        d["topology"] = "\n".join(lines)
     return d
 
 def fmt_blocks(blocks):
@@ -5028,8 +5218,13 @@ def ui_images(filename):
     """暴露 ui/images 下的静态图标，供页面内 <img> 引用。"""
     return send_from_directory(os.path.join(os.path.dirname(__file__), "ui", "images"), filename)
 
-@app.route("/")
-def index():
+def _render_legacy_panel():
+    """旧版单页面板（阶段 0/1 的产物）。
+
+    阶段 2 起不再是主入口，但**完整保留**为回滚通道（/legacy/）：
+    新版界面出任何问题，用户都能从这里拿到全功能面板；同时它也是新壳里
+    尚未迁移模块的内嵌数据源（?embed=1&tab=xxx）。
+    """
     # no-store：防止浏览器/代理缓存 HTML，避免发版或重启后用户仍看到旧页面（曾导致 FCS 卡片永久“加载中”）
     resp = make_response(render_template(
         "index.html",
@@ -5050,6 +5245,43 @@ def index():
     resp.headers["Pragma"] = "no-cache"
     resp.headers["Expires"] = "0"
     return resp
+
+
+def _serve_vue_app():
+    """主界面（阶段 2 起）：frontend-vue/ 构建产物，单文件 HTML。
+
+    产物 `templates/vue/index.html` 已提交进仓库（无 Node 环境也能打包）。
+    文件缺失时自动回退旧页面板，保证面板永远不会白屏。
+    """
+    vue_dir = os.path.join(os.path.dirname(__file__), "templates", "vue")
+    vue_index = os.path.join(vue_dir, "index.html")
+    if not os.path.isfile(vue_index):
+        return _render_legacy_panel()
+    resp = make_response(send_from_directory(vue_dir, "index.html"))
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
+
+
+@app.route("/")
+def index():
+    """主入口：阶段 2 起由 Vue 应用接管（系统资源页 + 温度监控页为原生页，
+    其余模块在壳内 iframe 内嵌 /legacy/ 对应页签）。"""
+    return _serve_vue_app()
+
+# ===================== Vue 试点入口（阶段 1a 探针） =====================
+# 阶段 2 起 /vue/ 与 / 同物，保留该路径只为让阶段 1a 的旧链接继续可用。
+@app.route("/vue")
+@app.route("/vue/")
+def vue_pilot():
+    return _serve_vue_app()
+
+# ===================== 旧版完整面板（回滚通道） =====================
+@app.route("/legacy")
+@app.route("/legacy/")
+def legacy_panel():
+    return _render_legacy_panel()
 
 # ===================== 操作手册（/manual 路由，离线可读） =====================
 _MANUAL_CSS = """
@@ -5277,10 +5509,21 @@ def _read_net_bytes():
     return res
 
 def _read_disk_stats():
-    """返回 {dev: (rd_sectors, wr_sectors, io_ticks)}，过滤分区(数字结尾)与 loop/ram。
+    """返回 {dev: (rd_sectors, wr_sectors, io_ticks)}，只保留**物理整盘**。
     io_ticks = /proc/diskstats 第13列：设备累计花在 I/O 上的毫秒数；
-    两次采样差 / 采样间隔毫秒 = 该盘 busy 占用率(%)。"""
+    两次采样差 / 采样间隔毫秒 = 该盘 busy 占用率(%)。
+
+    过滤规则（2026-09-11 修正，见论坛反馈③）：
+    - loop/ram/sr/zram/nbd/rbd：回环、内存盘、光驱、网络块设备，非物理硬盘。
+    - md*/dm-*/drbd*：软 RAID / device-mapper / DRBD 等**虚拟聚合设备**——
+      它们的 I/O 由下面的物理成员盘累加而来，一并显示会重复计数。
+    - 分区：以 /sys/class/block/<dev>/partition 是否存在判定。
+      ⚠️ 旧写法用「名字末位是数字就跳过」，本意只跳过分区（sda1），
+      却把 nvme0n1 / mmcblk0 / md0 / dm-0 这类**名字以数字结尾的整盘**也一并误杀，
+      导致 NVMe 系统盘永远不出现在「磁盘 I/O」里。
+    """
     res = {}
+    _VIRTUAL = ("loop", "ram", "sr", "zram", "md", "dm-", "drbd", "nbd", "rbd")
     try:
         with open("/proc/diskstats") as f:
             for line in f:
@@ -5288,7 +5531,10 @@ def _read_disk_stats():
                 if len(cols) < 13:
                     continue
                 dev = cols[2]
-                if dev.startswith(("loop", "ram")) or dev[-1].isdigit():
+                if dev.startswith(_VIRTUAL):
+                    continue
+                # 真分区判定（sda1 / nvme0n1p1 / mmcblk0p1 都命中，整盘不命中）
+                if os.path.exists("/sys/class/block/%s/partition" % dev):
                     continue
                 res[dev] = (int(cols[5]), int(cols[9]), int(cols[12]))
     except Exception:
@@ -6162,7 +6408,9 @@ def api_system():
                 system["raid_temp"] = _raid.get("controller_temp")
         except Exception:
             system["raid_temp"] = None
-        return jsonify({"system": system, "time": _panel_time(), "elapsed": round(time.time() - t0, 2)})
+        # fnos_version 顶层暴露：旧版「关于」页的 fnOS 版本取自 /api/all 的 DATA，
+        # 现「关于」Vue 原生页只拉轻量的 /api/system，故在此补一项，避免为一条版本号拉全量 /api/all。
+        return jsonify({"system": system, "fnos_version": _fnos_version(), "time": _panel_time(), "elapsed": round(time.time() - t0, 2)})
     except Exception as e:
         return jsonify({"error": str(e), "time": _panel_time()})
 
@@ -6690,8 +6938,17 @@ def api_metrics():
             load = list(os.getloadavg())
         except Exception:
             load = None
+        # CPU 当前频率（全部核心瞬时值的平均，口径同 /api/system 的 cpu_info.current_freq_mhz）。
+        # /proc/cpuinfo 是内核内存里的虚拟文件，每秒读一次开销极小（几 KB），供检测页频率行 1s 增量刷新。
+        try:
+            with open("/proc/cpuinfo") as _f:
+                _mhz = [float(_ln.split(":", 1)[1]) for _ln in _f if _ln[:7].lower() == "cpu mhz" and ":" in _ln]
+            cpu_freq_mhz = round(sum(_mhz) / len(_mhz), 1) if _mhz else None
+        except Exception:
+            cpu_freq_mhz = None
         return jsonify({"net": list(merged.values()), "diskio": diskio,
                         "cpu_usage": cpu_usage, "mem_percent": mem_percent, "load": load,
+                        "cpu_freq_mhz": cpu_freq_mhz,
                         "gpu": _get_gpu_live(),
                         "time": time.strftime("%Y-%m-%d %H:%M:%S")})
     except Exception as e:
@@ -7766,6 +8023,7 @@ def build_health_report():
         "raid": raid, "disks": disks, "system": system_full,
         "storage": storage, "docker": docker, "fans": fans, "alerts": alerts,
         "log_tail": _read_app_log(),
+        "error_ring": list(_ERR_RING)[-30:],
     }
 
 def build_diagnostics():
@@ -7993,7 +8251,7 @@ def _render_report_html(rep):
     sys_rows = [
         ["CPU 型号", fmt(sys_.get("cpu_model"))],
         ["CPU 核心/线程", f"{fmt(sys_.get('cpu_cores'))} / {fmt(sys_.get('cpu_threads'))}"],
-        ["CPU 频率", fmt(sys_.get("cpu_freq"), " MHz")],
+        ["CPU 最大频率", fmt(sys_.get("cpu_freq"), " MHz")],
         ["负载 (1/5/15)", " / ".join(fmt(x) for x in (sys_.get("load") or []))],
         ["内存", f"{fmt(mem.get('used'))} / {fmt(mem.get('total'))}（{fmt(mem.get('percent'))}%）"],
         ["交换分区", f"{fmt(swap.get('used'))} / {fmt(swap.get('total'))}"],
@@ -8053,7 +8311,13 @@ def _render_report_html(rep):
     raid_info = "阵列卡：{m}（{mode}）".format(m=fmt(raid.get("model")), mode=fmt(raid.get("mode")))
     if raid.get("note"):
         raid_info += " ｜ " + fmt(raid.get("note"))
-    vol_rows = [[fmt(v.get("mount")), fmt(v.get("fstype")), fmt(v.get("size")), fmt(v.get("used")),
+    def _vol_fs(v):
+        # 云挂载：文件系统名（fuse.rclone）对用户无意义，改显示是哪个云盘 + 账号
+        if v.get("cloud"):
+            name = v.get("cloud_name") or ""
+            return (v.get("cloud_type") or "云盘") + (f"（账号：{name}）" if name else "")
+        return v.get("fstype")
+    vol_rows = [[fmt(v.get("mount")), fmt(_vol_fs(v)), fmt(v.get("size")), fmt(v.get("used")),
                  fmt(v.get("avail")), fmt(v.get("pcent"))] for v in (storage.get("volumes") or [])]
     c_rows = []
     for c in (docker.get("containers") or []):
@@ -8119,7 +8383,7 @@ def _render_report_html(rep):
         + cat("Docker 容器")
         + note(f"运行中 {docker.get('running',0)} / 共 {docker.get('total',0)}")
         + data(["名称", "镜像", "状态", "端口", "CPU", "内存%", "内存", "网络 RX/TX"], c_rows)
-        + (cat("存储拓扑 (lsblk)")
+        + (cat("存储拓扑")
            + f"<div class='note'><pre style='margin:0;white-space:pre-wrap;font-family:Consolas,Menlo,monospace;font-size:12px'>{esc(topology)}</pre></div>"
            if topology.strip() else "")
         + "<div class='footer'>本报告由 nasdash 自动生成，仅供硬件健康参考。</div>"
