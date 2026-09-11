@@ -2908,16 +2908,28 @@ async function saveFanRule(hwmon, idx, activeMode){
   if(!src){
     body4.rule=null;  // 关闭 → 清除该风扇联动
   }else{
-    var start=parseFloat(document.getElementById(id+'-'+pre+'rstart').value);
-    var full=parseFloat(document.getElementById(id+'-'+pre+'rfull').value);
-    var minp=parseFloat(document.getElementById(id+'-'+pre+'rmin').value);
-    var maxp=parseFloat(document.getElementById(id+'-'+pre+'rmax').value);
-    var rec=parseFloat(document.getElementById(id+'-'+pre+'rrec').value);
-    var stopEl=document.getElementById(id+'-'+pre+'rstop');
-    var stopv=stopEl?stopEl.checked:false;
-    if(!(full>start)){ if(st){ st.textContent='全速温度须大于开转温度'; st.className='fan-rule-state'; } return; }
-    if(!(rec<start)){ if(st){ st.textContent='恢复温度须小于开转温度'; st.className='fan-rule-state'; } return; }
     var pts=readCurve(id+'-r');
+    var start,full,minp,maxp,rec,stopv;
+    if(body==='curve'){
+      // 曲线体没有线性输入框（存量缺陷：曾致「保存为曲线」静默失败、从未发出 POST）。
+      // 基线字段从曲线节点推导，与后端缺省语义对齐（start_temp 缺省取首点温度、recover 取 start-5）。
+      if(!pts||pts.length<2){ if(st){ st.textContent='请先添加至少 2 个曲线节点'; st.className='fan-rule-state'; } return; }
+      var temps=pts.map(function(p){return Number(p[0]);}), pwms=pts.map(function(p){return Number(p[1]);});
+      start=Math.min.apply(null,temps); full=Math.max.apply(null,temps);
+      if(!(full>start)){ if(st){ st.textContent='曲线节点温度需有跨度（至少两个不同温度）'; st.className='fan-rule-state'; } return; }
+      minp=Math.min.apply(null,pwms); maxp=Math.max.apply(null,pwms);
+      rec=Math.max(0,start-5); stopv=false;
+    }else{
+      start=parseFloat(document.getElementById(id+'-'+pre+'rstart').value);
+      full=parseFloat(document.getElementById(id+'-'+pre+'rfull').value);
+      minp=parseFloat(document.getElementById(id+'-'+pre+'rmin').value);
+      maxp=parseFloat(document.getElementById(id+'-'+pre+'rmax').value);
+      rec=parseFloat(document.getElementById(id+'-'+pre+'rrec').value);
+      var stopEl=document.getElementById(id+'-'+pre+'rstop');
+      stopv=stopEl?stopEl.checked:false;
+      if(!(full>start)){ if(st){ st.textContent='全速温度须大于开转温度'; st.className='fan-rule-state'; } return; }
+      if(!(rec<start)){ if(st){ st.textContent='恢复温度须小于开转温度'; st.className='fan-rule-state'; } return; }
+    }
     // 保留旧 active_mode：仅当「保存为线性/曲线」显式指定时才覆盖。
     // 旧配置可能没 active_mode 字段，按「曲线优先」推断（兼容老数据）。
     var f=(DATA.system&&DATA.system.sensors&&DATA.system.sensors.fans||[]).find(function(x){ return x.hwmon===hwmon && x.idx===idx; });
