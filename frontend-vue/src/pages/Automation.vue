@@ -309,6 +309,16 @@ function statusLvl(code: number): LogLvl {
   return 'INFO'
 }
 
+/** 状态码翻译成普通用户能懂的话（悬停可看原始状态码，给开发者排查用） */
+function statusText(e: LogEntry): string {
+  if (!e.status) return e.lvl === 'ERROR' ? '错误' : e.lvl === 'WARN' ? '警告' : '—'
+  const code = parseInt(e.status, 10)
+  if (code >= 500) return '服务器出错'
+  if (code >= 400) return '请求异常'
+  if (code >= 300) return '重定向'
+  return '成功'
+}
+
 function fmtBytes(n: number): string {
   if (!isFinite(n)) return '—'
   if (n < 1024) return n + ' B'
@@ -629,7 +639,10 @@ onUnmounted(() => {
                     <td class="c-ts">{{ e.ts }}</td>
                     <td class="c-req">{{ e.req || e.txt }}</td>
                     <td class="c-st">
-                      <span :class="e.lvl === 'ERROR' ? 'danger' : e.lvl === 'WARN' ? 'warn' : 'muted'">{{ e.status || (e.lvl === 'ERROR' ? '错误' : e.lvl === 'WARN' ? '警告' : '—') }}</span>
+                      <span
+                        :class="e.lvl === 'ERROR' ? 'danger' : e.lvl === 'WARN' ? 'warn' : 'muted'"
+                        :title="e.status ? 'HTTP ' + e.status : ''"
+                      >{{ statusText(e) }}</span>
                     </td>
                     <td class="c-sz">{{ e.size || '—' }}</td>
                   </tr>
