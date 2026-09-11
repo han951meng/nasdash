@@ -13,6 +13,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import PanelHero from '../components/PanelHero.vue'
 import type { HeroStat } from '../components/PanelHero.vue'
 import { apiFetch } from '../lib/api'
+import { pageCacheGet, pageCacheSet } from '../lib/pageCache'
 import { tempColor } from '../lib/format'
 
 // ============ 通用小工具（与老页 templates/index.html 同源口径）============
@@ -896,6 +897,11 @@ const sub = computed(() => {
 // ============ 拉取 ============
 async function fetchAll(force = false): Promise<void> {
   if (busy.value && !force) return
+  // 切页签回来先上缓存秒开，再拉最新数据替换
+  if (!data.value) {
+    const cached = pageCacheGet<any>('detect')
+    if (cached) data.value = cached
+  }
   busy.value = true
   try {
     const r = await apiFetch('/api/all' + (force ? '?force=1&_=' : '?_=') + Date.now(), 60000)
@@ -907,6 +913,7 @@ async function fetchAll(force = false): Promise<void> {
     }
     err.value = ''
     data.value = j
+    pageCacheSet('detect', j)
     if (j.system && j.system.cpu_temp != null && cpuTempVal.value == null) {
       cpuTempVal.value = j.system.cpu_temp
     }

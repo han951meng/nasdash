@@ -15,6 +15,7 @@
 import { nextTick, onMounted, onUnmounted, ref } from 'vue'
 import PanelHero from '../components/PanelHero.vue'
 import { apiFetch } from '../lib/api'
+import { pageCacheGet, pageCacheSet } from '../lib/pageCache'
 
 const busy = ref(true)
 const lastUpdate = ref('')
@@ -59,8 +60,16 @@ function toggleToc(): void {
 }
 
 async function loadManual(): Promise<void> {
-  busy.value = true
   error.value = ''
+  // 切页签回来先上缓存秒开（手册内容随版本走、基本不变），随后仍拉一次最新
+  const cached = pageCacheGet<string>('manual-html')
+  if (cached && !contentHtml.value) {
+    contentHtml.value = cached
+    busy.value = false
+    await nextTick()
+    buildTocAndRed()
+  }
+  busy.value = true
   try {
     // 当前版本：用于 hero 副标题 + 「本版本新增」自动标红
     try {
@@ -79,6 +88,7 @@ async function loadManual(): Promise<void> {
     if (!r.ok) throw new Error('HTTP ' + r.status)
     const html = await r.text()
     contentHtml.value = html
+    pageCacheSet('manual-html', html)
     lastUpdate.value = '更新于 ' + new Date().toLocaleTimeString('zh-CN')
     await nextTick()
     buildTocAndRed()

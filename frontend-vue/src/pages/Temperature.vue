@@ -13,6 +13,7 @@ import PanelHero from '../components/PanelHero.vue'
 import type { HeroStat } from '../components/PanelHero.vue'
 import { apiFetch } from '../lib/api'
 import { tempColor } from '../lib/format'
+import { pageCacheGet, pageCacheSet } from '../lib/pageCache'
 
 // ===== 类型 =====
 interface SensorItem {
@@ -139,6 +140,8 @@ interface OvChip {
   color: string
   tag: string
   tagClass: string
+  /** 整卡压暗（只给「休眠」盘用；NVMe 被动散热只灰标签、不暗整卡，与旧页口径一致） */
+  dim: boolean
   title: string
 }
 interface OvCat {
@@ -154,8 +157,8 @@ const overviewCats = computed<OvCat[]>(() => {
   out.push({
     label: '核心',
     chips: [
-      { name: 'CPU', val: cpu, color: tempColor(cpu, 100), tag: '', tagClass: '', title: '' },
-      { name: '主板', val: mb, color: tempColor(mb, 90), tag: '', tagClass: '', title: '' },
+      { name: 'CPU', val: cpu, color: tempColor(cpu, 100), tag: '', tagClass: '', dim: false, title: '' },
+      { name: '主板', val: mb, color: tempColor(mb, 90), tag: '', tagClass: '', dim: false, title: '' },
     ],
   })
   const cats = [
@@ -167,40 +170,45 @@ const overviewCats = computed<OvCat[]>(() => {
     const inCat = (d.disks || []).filter(x => x.category === c.k)
     if (!inCat.length) return
     inCat.sort((a, b) => (b.is_system ? 1 : 0) - (a.is_system ? 1 : 0))
-    const chips: OvChip[] = inCat.map(x => {
-      const isNv = !!x.is_nvme
-      let v = x.temp ?? null
-      if (v == null && x.asleep && lastDiskTemps.value[x.dev] != null) v = lastDiskTemps.value[x.dev]
-      const trip = isNv ? 75 : 60
-      let tag = ''
-      let tagClass = ''
-      let title = ''
-      if (x.asleep) {
-        tag = '休眠'
-        tagClass = 'off'
-      } else if (isNv) {
-        tag = '被动散热'
-        tagClass = 'off'
-        title =
-          'M.2 固态多为被动散热（自带散热片、贴在主板上），机箱风扇的气流基本吹不到它，而且 ' +
-          (x.nvme_start_temp ?? 65) +
-          '°C 以下对固态属于完全正常的工作温度。\n' +
-          '因此它不会去催风扇转、也不会阻止风扇停转；只有超过 ' +
-          (x.nvme_start_temp ?? 65) +
-          '°C（接近降频保护线）才会参与风扇温控。'
-      } else if (x.no_sleep) {
-        tag = '常驻'
-        tagClass = 'on'
-      }
-      return {
-        name: x.name || (x.dev || '').replace(/^\/dev\//, ''),
-        val: v,
-        color: tempColor(v, trip),
-        tag,
-        tagClass,
-        title,
-      }
-    })
+      const chips: OvChip[] = inCat.map(x => {
+        const isNv = !!x.is_nvme
+        let v = x.temp ?? null
+        if (v == null && x.asleep && lastDiskTemps.value[x.dev] != null) v = lastDiskTemps.value[x.dev]
+        const trip = isNv ? 75 : 60
+        let tag = ''
+        let tagClass = ''
+        let dim = false
+        let title = ''
+        if (x.asleep) {
+          tag = '休眠'
+          tagClass = 'off'
+          dim = true
+        } else if (isNv) {
+          // 只让「被动散热」小标签变灰，整卡保持正常亮度（之前整卡 opacity 0.65，
+          // 看起来像这块盘数据不可信，与 CPU/SSD 等正常盘字色不一致）
+          tag = '被动散热'
+          tagClass = 'off'
+          title =
+            'M.2 固态多为被动散热（自带散热片、贴在主板上），机箱风扇的气流基本吹不到它，而且 ' +
+            (x.nvme_start_temp ?? 65) +
+            '°C 以下对固态属于完全正常的工作温度。\n' +
+            '因此它不会去催风扇转、也不会阻止风扇停转；只有超过 ' +
+            (x.nvme_start_temp ?? 65) +
+            '°C（接近降频保护线）才会参与风扇温控。'
+        } else if (x.no_sleep) {
+          tag = '常驻'
+          tagClass = 'on'
+        }
+        return {
+          name: x.name || (x.dev || '').replace(/^\/dev\//, ''),
+          val: v,
+          color: tempColor(v, trip),
+          tag,
+          tagClass,
+          dim,
+          title,
+        }
+      })
     out.push({ label: c.label, chips })
   })
   return out
@@ -208,6 +216,11 @@ const overviewCats = computed<OvCat[]>(() => {
 
 // ===== 拉取 =====
 async function fetchTemps(): Promise<void> {
+  // 切页签回来先上缓存秒开，再拉最新（缓存只补首次空屏，之后照常轮询）
+  if (!data.value) {
+    const cached = pageCacheGet<TempsResp>('temps')
+    if (cached) data.value = cached
+  }
   busy.value = true
   try {
     const res = await apiFetch('/api/fan/temps', 30000)
@@ -217,6 +230,7 @@ async function fetchTemps(): Promise<void> {
       if (x.temp != null) lastDiskTemps.value[x.dev] = x.temp
     })
     data.value = j
+    pageCacheSet('temps', j)
     lastUpdate.value = '更新于 ' + new Date().toLocaleTimeString('zh-CN')
   } catch {
     /* 忽略，下一轮再试 */
@@ -283,7 +297,7 @@ onUnmounted(() => {
             v-for="(c, i) in cat.chips"
             :key="cat.label + i"
             class="ochip"
-            :class="{ off: c.tagClass === 'off' }"
+            :class="{ off: c.dim }"
             :title="c.title"
           >
             <span class="temp-chip-name">{{ c.name }}</span>

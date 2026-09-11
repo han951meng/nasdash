@@ -19,6 +19,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import PanelHero from '../components/PanelHero.vue'
 import AppIcon from '../components/AppIcon.vue'
 import { apiFetch } from '../lib/api'
+import { pageCacheGet, pageCacheSet } from '../lib/pageCache'
 import { tempColor } from '../lib/format'
 
 interface Disk {
@@ -227,6 +228,14 @@ const badDisks = computed(() => disks.value.filter(d => d.health_ok === false))
 /* ================= 数据加载 ================= */
 async function loadDisks(force = false): Promise<void> {
   if (disposed) return
+  // 切页签回来先上缓存秒开，再拉最新数据替换
+  if (!disks.value.length) {
+    const cached = pageCacheGet<{ disks: Disk[]; time: string }>('disks')
+    if (cached) {
+      disks.value = cached.disks || []
+      lastUpdate.value = cached.time || ''
+    }
+  }
   busy.value = true
   try {
     const r = await apiFetch('/api/disks' + (force ? '?force=1' : ''), 30000)
@@ -237,6 +246,7 @@ async function loadDisks(force = false): Promise<void> {
       error.value = ''
       disks.value = j.disks || []
       lastUpdate.value = j.time || ''
+      pageCacheSet('disks', { disks: disks.value, time: lastUpdate.value })
     }
   } catch (e) {
     error.value = '获取硬盘数据失败：' + String((e as Error).message || e)

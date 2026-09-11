@@ -17,7 +17,8 @@
  *   后端该方法注释即写明「供 #system 与 #fan 按需刷新」，比 /api/all 轻得多；
  *   返回的 system.sensors.fans 已含 label / voltage / hidden / rule / rule_source /
  *   active_mode / has_curve / pwm_mode / manual_active / target_pct 等全字段。
- * 实时轮询：/api/fan/status 5s（转速 / 占空比 / 目标 / 徽标 / 预设高亮就地更新）
+ * 实时轮询：/api/fan/status 1s（转速 / 占空比 / 目标 / 徽标 / 预设高亮就地更新；
+ *          转速数字与 CPU 频率同款秒级刷新，接口是 hwmon 直读、开销很小）
  *          /api/fan/temps  5s（「当前温度」概览 chip）
  * 写接口（全部 POST，后端均 @require_admin）：/api/fan/control、/api/fan/set、
  *          /api/fan/rules、/api/fan/labels（读-改-写整份 map）、/api/fan/disk_temp。
@@ -27,6 +28,7 @@ import PanelHero from '../components/PanelHero.vue'
 import { apiFetch } from '../lib/api'
 import { ICON_SVG } from '../lib/icons'
 import { tempColor } from '../lib/format'
+import { pageCacheGet, pageCacheSet } from '../lib/pageCache'
 
 /* ============================== 工具 ============================== */
 
@@ -104,10 +106,20 @@ function computeHeroStats(): void {
 
 /** 取一份完整风扇数据并整体重渲染（旧页 loadData() 在本页的等价物） */
 async function loadFanData(force = true): Promise<void> {
+  // 切页签回来先用缓存把整页画出来（秒开），随后 force=1 拉最新替换
+  if (!pageHtml.value) {
+    const cached = pageCacheGet<typeof DATA>('fan:system')
+    if (cached) {
+      DATA = cached
+      computeHeroStats()
+      renderBody()
+    }
+  }
   busy.value = true
   try {
     const r = await apiFetch('/api/system' + (force ? '?force=1' : ''), 30000)
     DATA = await r.json()
+    pageCacheSet('fan:system', DATA)
     loadError.value = ''
   } catch (e) {
     loadError.value = '获取风扇数据失败'
@@ -1033,7 +1045,8 @@ async function fetchFanStatus(): Promise<void> {
 function startFanStatusPolling(): void {
   if (fanTimer) return
   fetchFanStatus()
-  fanTimer = window.setInterval(fetchFanStatus, 5000)
+  // 1 秒一拍（与系统资源页 CPU 频率同款秒级刷新）；_fanStatusBusy 防堆叠，请求慢时自动跳过
+  fanTimer = window.setInterval(fetchFanStatus, 1000)
 }
 
 /* ============================== 曲线编辑器 ============================== */

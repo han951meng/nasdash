@@ -16,6 +16,7 @@ import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { apiFetch } from '../lib/api'
 import AppIcon from '../components/AppIcon.vue'
 import PanelHero from '../components/PanelHero.vue'
+import { pageCacheGet, pageCacheSet } from '../lib/pageCache'
 
 type Alert = { title?: string; detail?: string; level?: string }
 type LogLvl = 'ERROR' | 'WARN' | 'INFO'
@@ -99,6 +100,15 @@ function setLastUpdate(at?: string): void {
 }
 
 async function loadConfig(): Promise<void> {
+  // 切页签回来先上缓存秒开（表单值随后会被服务器数据覆盖，未保存的编辑不依赖缓存）
+  if (!alerts.value.length) {
+    const cached = pageCacheGet<{ config: Record<string, any>; alerts: Alert[]; evaluated_at?: string }>('automation')
+    if (cached) {
+      fillConfig(cached.config || {})
+      alerts.value = cached.alerts || []
+      setLastUpdate(cached.evaluated_at)
+    }
+  }
   busy.value = true
   try {
     const r = await apiFetch('/api/alerts?_=' + Date.now(), 30000)
@@ -106,6 +116,7 @@ async function loadConfig(): Promise<void> {
     fillConfig(j.config || {})
     alerts.value = j.alerts || []
     setLastUpdate(j.evaluated_at)
+    pageCacheSet('automation', { config: j.config || {}, alerts: j.alerts || [], evaluated_at: j.evaluated_at })
   } catch {
     /* 与旧页一致：静默失败，不打断页面 */
   }
@@ -538,7 +549,7 @@ onUnmounted(() => {
             </div>
             <div class="log-list">
               <div v-for="(e, i) in logEntries" :key="i" class="log-line" :class="'lv-' + lvlCls(e.lvl)">
-                <span v-if="e.ts" class="lt">{{ e.ts }}</span>{{ e.txt }}
+                <span class="ln">{{ i + 1 }}</span><span v-if="e.ts" class="lt">{{ e.ts }}</span>{{ e.txt }}
               </div>
             </div>
           </template>

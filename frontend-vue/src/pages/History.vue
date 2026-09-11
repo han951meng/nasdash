@@ -13,6 +13,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import PanelHero from '../components/PanelHero.vue'
 import { apiFetch } from '../lib/api'
 import { fmtSpeed } from '../lib/format'
+import { pageCacheGet, pageCacheSet } from '../lib/pageCache'
 
 type Metric = 'disk' | 'net' | 'power' | 'temp' | 'fan' | 'mem'
 type Range = '24h' | '7d' | '30d'
@@ -98,6 +99,8 @@ const UNIT_TEXT: Record<string, string> = {
 const histMetric = ref<Metric>('disk')
 const histRange = ref<Range>('24h')
 const busy = ref(true)
+/** hero 右上角的刷新时间（之前没传，控件一直显示「加载中…」） */
+const lastUpdate = ref('')
 const canvasEl = ref<HTMLCanvasElement | null>(null)
 const legendHtml = ref('')
 let lastHist: { points?: HistPoint[] } | null = null
@@ -202,12 +205,24 @@ function drawHist(d: { points?: HistPoint[] } | null): void {
 }
 
 async function loadHistory(): Promise<void> {
+  // 切页签回来先用缓存把图画出来（秒开），再拉最新数据替换
+  const cacheKey = 'hist:' + histRange.value
+  if (!lastHist) {
+    const cached = pageCacheGet<{ points?: HistPoint[] }>(cacheKey)
+    if (cached?.points?.length) {
+      busy.value = false
+      await nextTick()
+      drawHist(cached)
+    }
+  }
   busy.value = true
   try {
     const r = await apiFetch('/api/history?range=' + histRange.value + '&_=' + Date.now(), 20000)
     const d = await r.json()
     await nextTick()
     drawHist(d)
+    pageCacheSet(cacheKey, d)
+    lastUpdate.value = '更新于 ' + new Date().toLocaleTimeString('zh-CN')
   } catch {
     /* 拉取失败保持上一次的图，不打断页面（与旧页一致） */
   } finally {
@@ -611,6 +626,7 @@ onUnmounted(() => {
     title="历史趋势"
     sub="多维度趋势（自适应时间范围）"
     :stats="heroStats"
+    :last-update="lastUpdate"
     :busy="busy"
     @refresh="loadHistory"
   />

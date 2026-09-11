@@ -11,6 +11,7 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import PanelHero from '../components/PanelHero.vue'
 import type { HeroStat } from '../components/PanelHero.vue'
 import { apiFetch } from '../lib/api'
+import { pageCacheGet, pageCacheSet } from '../lib/pageCache'
 import { fmtSpeed } from '../lib/format'
 
 interface DockerContainer {
@@ -100,6 +101,11 @@ async function load(force = false): Promise<void> {
   if (fetching) return
   fetching = true
   if (force) busy.value = true
+  // 切页签回来先上缓存秒开，再拉最新数据替换
+  if (!docker.value) {
+    const cached = pageCacheGet<DockerResp>('docker')
+    if (cached) docker.value = cached
+  }
   try {
     const r = await apiFetch('/api/docker', 15000)
     if (!r.ok) {
@@ -108,6 +114,7 @@ async function load(force = false): Promise<void> {
     }
     const j = (await r.json()) as { docker?: DockerResp }
     docker.value = j.docker || null
+    pageCacheSet('docker', docker.value)
     error.value = ''
     lastUpdate.value = '更新于 ' + new Date().toLocaleTimeString('zh-CN')
   } catch (e) {

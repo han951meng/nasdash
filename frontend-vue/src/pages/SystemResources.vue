@@ -12,6 +12,7 @@ import Sparkline from '../components/Sparkline.vue'
 import PanelHero from '../components/PanelHero.vue'
 import type { HeroStat } from '../components/PanelHero.vue'
 import { apiFetch } from '../lib/api'
+import { pageCacheGet, pageCacheSet } from '../lib/pageCache'
 import { clampPct, fmtLoad, fmtSpeed } from '../lib/format'
 
 interface MemInfo {
@@ -204,11 +205,17 @@ async function fetchSys(force = false): Promise<void> {
   if (sysBusy && !force) return
   sysBusy = true
   if (force) busy.value = true
+  // 切页签回来先上缓存秒开，再拉最新数据替换
+  if (!sys.value) {
+    const cached = pageCacheGet<SysInfo>('system')
+    if (cached) sys.value = cached
+  }
   try {
     const r = await apiFetch('/api/system', 60000)
     if (!r.ok) return
     const j = (await r.json()) as { system?: SysInfo } & SysInfo
     sys.value = j.system || j
+    pageCacheSet('system', sys.value)
   } catch {
     /* 网络抖动忽略，下一轮再试 */
   } finally {

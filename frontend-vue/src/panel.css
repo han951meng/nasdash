@@ -173,6 +173,7 @@
   .log-line{font-family:Consolas,Menlo,monospace;font-size:12px;padding:5px 12px;border-bottom:1px solid var(--c-border);white-space:pre-wrap;word-break:break-all;line-height:1.55;color:var(--text-1)}
   .log-line:last-child{border-bottom:none}
   .log-line .lt{color:var(--muted);margin-right:8px;font-size:11px}
+  .log-line .ln{color:var(--muted);opacity:.75;font-size:11px;min-width:26px;text-align:right;margin-right:8px;user-select:none;font-variant-numeric:tabular-nums}
   .log-line.lv-err{background:var(--tint-err-10);color:var(--status-err-solid)}
   .log-line.lv-warn{background:var(--tint-warn-10);color:var(--status-warn-solid)}
   .log-empty{padding:18px 12px;color:var(--muted);text-align:center;font-size:13px}

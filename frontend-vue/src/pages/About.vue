@@ -13,11 +13,14 @@
 import { onMounted, ref } from 'vue'
 import PanelHero from '../components/PanelHero.vue'
 import { apiFetch } from '../lib/api'
+import { pageCacheGet, pageCacheSet } from '../lib/pageCache'
 
 const appVersion = ref('')
 const fnosVersion = ref('')
 const kernel = ref('')
 const error = ref('')
+/** hero 右上角的刷新时间（之前没传，控件一直显示「加载中…」） */
+const lastUpdate = ref('')
 
 // 检查更新状态（本地内联提示，不复用旧页全局 #updateBanner）
 const checking = ref(false)
@@ -39,6 +42,13 @@ function normV(x: string): string {
 
 async function loadInfo(): Promise<void> {
   error.value = ''
+  // 切页签回来先上缓存秒开，再拉最新
+  const cached = pageCacheGet<{ appVersion: string; fnosVersion: string; kernel: string }>('about')
+  if (cached) {
+    appVersion.value = cached.appVersion
+    fnosVersion.value = cached.fnosVersion
+    kernel.value = cached.kernel
+  }
   try {
     // 当前安装版本（用于 hero 副标题）
     try {
@@ -57,6 +67,8 @@ async function loadInfo(): Promise<void> {
     const sj = (await sr.json()) as { fnos_version?: string; system?: { kernel?: string } }
     fnosVersion.value = sj.fnos_version || ''
     kernel.value = sj.system?.kernel || ''
+    lastUpdate.value = '更新于 ' + new Date().toLocaleTimeString('zh-CN')
+    pageCacheSet('about', { appVersion: appVersion.value, fnosVersion: fnosVersion.value, kernel: kernel.value })
   } catch (e) {
     error.value = '关于页加载失败：' + esc(String(e))
   }
@@ -105,6 +117,7 @@ onMounted(() => {
       icon="about"
       title="关于 nasdash"
       :sub="appVersion ? 'nasdash ' + appVersion : 'nasdash'"
+      :last-update="lastUpdate"
     />
 
     <div v-if="error" class="about-err">{{ error }}</div>

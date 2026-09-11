@@ -13,6 +13,7 @@ import { computed, onMounted, ref } from 'vue'
 import PanelHero from '../components/PanelHero.vue'
 import type { HeroStat } from '../components/PanelHero.vue'
 import { apiFetch } from '../lib/api'
+import { pageCacheGet, pageCacheSet } from '../lib/pageCache'
 
 interface RaidArray {
   name?: string
@@ -101,6 +102,11 @@ function outStyle(v: Volume): string {
 
 async function load(force = false): Promise<void> {
   if (force) busy.value = true
+  // 切页签回来先上缓存秒开，再拉最新数据替换
+  if (!st.value) {
+    const cached = pageCacheGet<StorageResp>('storage')
+    if (cached) st.value = cached
+  }
   try {
     const r = await apiFetch('/api/storage', 20000)
     if (!r.ok) {
@@ -113,6 +119,7 @@ async function load(force = false): Promise<void> {
       return
     }
     st.value = j.storage || null
+    pageCacheSet('storage', st.value)
     error.value = ''
     lastUpdate.value = '更新于 ' + new Date().toLocaleTimeString('zh-CN')
   } catch (e) {
