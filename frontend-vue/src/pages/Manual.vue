@@ -67,7 +67,9 @@ async function loadManual(): Promise<void> {
       const vr = await apiFetch('/api/version', 15000)
       if (vr.ok) {
         const vj = (await vr.json()) as { current?: string }
-        appVersion.value = vj.current || ''
+        // 接口返回的是带 v 前缀的完整版本（如 v2.1.0），统一去前缀，
+        // 模板里补 'v' 拼接，避免出现「vv2.1.0」；标红匹配用子串不受影响
+        appVersion.value = (vj.current || '').replace(/^v/i, '')
       }
     } catch {
       /* 版本取不到不影响主体 */
