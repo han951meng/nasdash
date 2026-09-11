@@ -790,6 +790,14 @@
   /* 首帧压制：内嵌且带 ?tab= 时，先不画写死 active 的默认面板，避免闪一下「硬件配置检测」。
      底部 bootstrap 切到目标页签后摘掉 embed-pending，内容随即出现（通常只压住几十毫秒）。 */
   html.embed-pending .panel.active{display:none!important}
+
+  /* 阶段 3 观感修正：hero 标题不再套卡、去掉标题下那条多余的分隔线（深色下 hero-head 的 1px 底边）；
+     统计项保持原来的 4 个小方块（不再另套一层外框，避免"框套框"）。 */
+  .hero{background:none;border:none;box-shadow:none;border-radius:0;padding:0;overflow:visible}
+  .hero::after{display:none}
+  .hero-head{border-bottom:none;padding-bottom:0}
+  [data-theme="dark"] .hero{background:none;border:none;box-shadow:none;border-left:none}
+  [data-theme="dark"] .hero-head{border-bottom:none;padding-bottom:0}
 </style>
 </head>
 <body>
