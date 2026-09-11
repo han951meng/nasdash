@@ -752,8 +752,10 @@
   [data-theme="dark"] .curve-pt-input input:focus{background:var(--fill)}
   [data-theme="dark"] .auto-alerts li.danger{color:#ff8a85} [data-theme="dark"] .auto-alerts li.warn{color:#ffb56b} [data-theme="dark"] .auto-alerts li.ok{color:#5fd98a}
 
-  /* 阶段 3 观感修正（迭代定稿）：hero 保留原有卡片背景 + 暗色下左侧飞牛蓝标识条（观感饱满）；
-     仅去掉 .hero-head 那条 1px 分隔线 —— 它在没有统计行的页面（如控制与自动化）会变成
-     一条悬空的线 + 空带。统计项保持原来的小方块、不另套外框（避免"框套框"）。 */
+  /* 阶段 3 观感修正（迭代定稿）：hero 保留原有卡片背景 + 暗色下左侧飞牛蓝标识条；
+     标题下那条 1px 分隔线改为「按需画」—— 画在统计行(.hero-stats)顶部：只有确实有统计行时才出现，
+     既保住标题与统计之间的层次感，又不会在没有统计行的页面（如控制与自动化）露出悬空的线 + 空带。
+     统计项保持原来的小方块、不另套外框（避免"框套框"）。 */
   .hero-head{border-bottom:none;padding-bottom:0}
   [data-theme="dark"] .hero-head{border-bottom:none;padding-bottom:0}
+  [data-theme="dark"] .hero-stats{border-top:1px solid rgba(255,255,255,.07);padding-top:16px}
