@@ -69,7 +69,8 @@ async function loadManual(): Promise<void> {
     await nextTick()
     buildTocAndRed()
   }
-  busy.value = true
+  // 有内容就不转圈：后台静默拉最新
+  if (!contentHtml.value) busy.value = true
   try {
     // 当前版本：用于 hero 副标题 + 「本版本新增」自动标红
     try {

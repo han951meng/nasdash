@@ -20,7 +20,18 @@ import { pageCacheGet, pageCacheSet } from '../lib/pageCache'
 
 type Alert = { title?: string; detail?: string; level?: string }
 type LogLvl = 'ERROR' | 'WARN' | 'INFO'
-type LogEntry = { ts: string; lvl: LogLvl; txt: string; raw: string }
+type LogEntry = {
+  ts: string
+  lvl: LogLvl
+  txt: string
+  raw: string
+  /** 访问日志专用列：请求（方法 + 路径，已去掉缓存参数与协议尾巴） */
+  req?: string
+  /** HTTP 状态码（如 200） */
+  status?: string
+  /** 响应大小（人性化格式，如 2.8 KB） */
+  size?: string
+}
 
 const LEVELS = [
   { id: 'danger', label: '严重 (danger)' },
@@ -109,7 +120,8 @@ async function loadConfig(): Promise<void> {
       setLastUpdate(cached.evaluated_at)
     }
   }
-  busy.value = true
+  // 有内容就不转圈：后台静默拉最新
+  if (!alerts.value.length) busy.value = true
   try {
     const r = await apiFetch('/api/alerts?_=' + Date.now(), 30000)
     const j = await r.json()
@@ -290,14 +302,60 @@ function lvlCls(lvl: LogLvl): string {
   return lvl === 'ERROR' ? 'err' : lvl === 'WARN' ? 'warn' : 'info'
 }
 
+/** 304 -> OK 绿；3xx/4xx -> 警告黄；5xx -> 错误红 */
+function statusLvl(code: number): LogLvl {
+  if (code >= 500) return 'ERROR'
+  if (code >= 300) return 'WARN'
+  return 'INFO'
+}
+
+function fmtBytes(n: number): string {
+  if (!isFinite(n)) return '—'
+  if (n < 1024) return n + ' B'
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB'
+  return (n / 1024 / 1024).toFixed(2) + ' MB'
+}
+
+const MONTH_NUM: Record<string, string> = {
+  Jan: '01', Feb: '02', Mar: '03', Apr: '04', May: '05', Jun: '06',
+  Jul: '07', Aug: '08', Sep: '09', Oct: '10', Nov: '11', Dec: '12',
+}
+
+/** 12/Sep/2026 00:53:01 这类格式统一成 09-12 00:53:01（年份极少排障用不到，省宽度） */
+function normTime(dd: string, mon: string, hhmmss: string): string {
+  const m = MONTH_NUM[mon] || mon
+  return `${m}-${dd} ${hhmmss}`
+}
+
 function parseLog(text: string): LogEntry[] {
   const out: LogEntry[] = []
   for (const line of String(text || '').split('\n')) {
     const s = line.replace(/^\s+|\s+$/g, '')
     if (!s) continue
-    const m = s.match(/^(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2})[ ,]*(.*)$/)
-    const ts = m ? m[1] : ''
-    const txt = m ? m[2] : s
+
+    // 访问日志（nginx 风格）：IP - - [12/Sep/2026 00:53:01] "GET /api/x HTTP/1.1" 200 2907
+    // IP 是访问来源（面板经本机网关转发，恒为本机），对排障无意义，不展示；
+    // 路径里的 ?_=时间戳 是前端防缓存的随机参数，也一并去掉
+    const am = s.match(/^\S+ \S+ \S+ \[(\d{2})\/(\w{3})\/\d{4} (\d{2}:\d{2}:\d{2})\] "([A-Z]+) (\S+)(?: [^"]*)?" (\d{3}) (\d+|-)$/)
+    if (am) {
+      const code = parseInt(am[6], 10)
+      const path = am[5].replace(/[?&]_=\d+/g, '').replace(/\?$/, '')
+      out.push({
+        ts: normTime(am[1], am[2], am[3]),
+        lvl: statusLvl(code),
+        txt: s,
+        raw: s,
+        req: am[4] + ' ' + path,
+        status: String(code),
+        size: am[7] === '-' ? '—' : fmtBytes(parseInt(am[7], 10)),
+      })
+      continue
+    }
+
+    // 应用日志：2026-09-12 00:53:01 消息内容
+    const m = s.match(/^\d{4}-(\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})[ ,]*(.*)$/)
+    const ts = m ? `${m[1]} ${m[2]}` : ''
+    const txt = m ? m[3] : s
     const low = txt.toLowerCase()
     let lvl: LogLvl = 'INFO'
     if (
@@ -554,10 +612,29 @@ onUnmounted(() => {
               运行日志共 <b>{{ logEntries.length }}</b> 行：<b class="danger">错误 {{ nE }}</b> ·
               <b class="warn">警告 {{ nW }}</b> · 常规 {{ logEntries.length - nE - nW }}（错误/警告置顶着色，方便先看 bug）
             </div>
-            <div class="log-list">
-              <div v-for="(e, i) in logEntries" :key="i" class="log-line" :class="'lv-' + lvlCls(e.lvl)">
-                <span class="ln">{{ i + 1 }}</span><span v-if="e.ts" class="lt">{{ e.ts }}</span>{{ e.txt }}
-              </div>
+            <div class="log-table-wrap">
+              <table class="log-table">
+                <thead>
+                  <tr>
+                    <th class="c-ln">#</th>
+                    <th class="c-ts">时间</th>
+                    <th>请求 / 内容</th>
+                    <th class="c-st">状态</th>
+                    <th class="c-sz">大小</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="(e, i) in logEntries" :key="i" :class="'lv-' + lvlCls(e.lvl)">
+                    <td class="c-ln">{{ i + 1 }}</td>
+                    <td class="c-ts">{{ e.ts }}</td>
+                    <td class="c-req">{{ e.req || e.txt }}</td>
+                    <td class="c-st">
+                      <span :class="e.lvl === 'ERROR' ? 'danger' : e.lvl === 'WARN' ? 'warn' : 'muted'">{{ e.status || (e.lvl === 'ERROR' ? '错误' : e.lvl === 'WARN' ? '警告' : '—') }}</span>
+                    </td>
+                    <td class="c-sz">{{ e.size || '—' }}</td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
           </template>
         </div>
@@ -600,5 +677,77 @@ onUnmounted(() => {
   font-weight: 400;
   color: var(--muted, #8a8f98);
   font-variant-numeric: tabular-nums;
+}
+/* 运行日志表格 */
+.log-table-wrap {
+  border: 1px solid var(--border, rgba(128, 138, 155, 0.25));
+  border-radius: 10px;
+  overflow: auto;
+  max-height: 52vh;
+}
+.log-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.log-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--card, #1a2232);
+  color: var(--muted, #8a8f98);
+  text-align: left;
+  font-weight: 600;
+  font-size: 12px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border, rgba(128, 138, 155, 0.25));
+  white-space: nowrap;
+  z-index: 1;
+}
+.log-table tbody td {
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border, rgba(128, 138, 155, 0.12));
+  vertical-align: top;
+  font-variant-numeric: tabular-nums;
+}
+.log-table tbody tr:last-child td {
+  border-bottom: none;
+}
+.log-table .c-ln {
+  color: var(--muted, #8a8f98);
+  text-align: right;
+  width: 34px;
+  user-select: none;
+}
+.log-table .c-ts {
+  white-space: nowrap;
+  color: var(--muted, #8a8f98);
+}
+.log-table .c-req {
+  word-break: break-all;
+}
+.log-table .c-st {
+  white-space: nowrap;
+  text-align: right;
+}
+.log-table .c-sz {
+  white-space: nowrap;
+  text-align: right;
+  color: var(--muted, #8a8f98);
+}
+.log-table tr.lv-err td {
+  background: var(--danger-bg, rgba(245, 80, 80, 0.12));
+}
+.log-table tr.lv-err .c-req {
+  color: var(--danger, #f55050);
+}
+.log-table tr.lv-warn td {
+  background: var(--warning-bg, rgba(240, 165, 30, 0.1));
+}
+.log-table tr.lv-warn .c-req {
+  color: var(--warning, #f0a51e);
+}
+.log-table .muted {
+  color: var(--muted, #8a8f98);
 }
 </style>

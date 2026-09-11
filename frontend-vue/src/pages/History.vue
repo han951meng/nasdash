@@ -215,7 +215,8 @@ async function loadHistory(): Promise<void> {
       drawHist(cached)
     }
   }
-  busy.value = true
+  // 已有图（缓存或上次的）就不转圈：后台静默拉最新
+  if (!lastHist) busy.value = true
   try {
     const r = await apiFetch('/api/history?range=' + histRange.value + '&_=' + Date.now(), 20000)
     const d = await r.json()

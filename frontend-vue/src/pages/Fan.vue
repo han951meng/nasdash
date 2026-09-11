@@ -115,7 +115,9 @@ async function loadFanData(force = true): Promise<void> {
       renderBody()
     }
   }
-  busy.value = true
+  // 有内容（缓存或已有数据）就不转圈：后台静默拉最新，避免每次切页签都闪一下
+  // （直接赋值而非仅置真：busy 初值是 true，命中缓存时须显式关掉）
+  busy.value = !pageHtml.value
   try {
     const r = await apiFetch('/api/system' + (force ? '?force=1' : ''), 30000)
     DATA = await r.json()

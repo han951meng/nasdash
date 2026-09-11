@@ -902,7 +902,8 @@ async function fetchAll(force = false): Promise<void> {
     const cached = pageCacheGet<any>('detect')
     if (cached) data.value = cached
   }
-  busy.value = true
+  // 有内容（缓存或已有数据）就不转圈：后台静默拉最新
+  if (!data.value) busy.value = true
   try {
     const r = await apiFetch('/api/all' + (force ? '?force=1&_=' : '?_=') + Date.now(), 60000)
     if (!r.ok) return

@@ -236,7 +236,8 @@ async function loadDisks(force = false): Promise<void> {
       lastUpdate.value = cached.time || ''
     }
   }
-  busy.value = true
+  // 有内容就不转圈：后台静默拉最新
+  if (!disks.value.length) busy.value = true
   try {
     const r = await apiFetch('/api/disks' + (force ? '?force=1' : ''), 30000)
     const j = await r.json()

@@ -221,7 +221,8 @@ async function fetchTemps(): Promise<void> {
     const cached = pageCacheGet<TempsResp>('temps')
     if (cached) data.value = cached
   }
-  busy.value = true
+  // 有内容就不转圈：后台静默拉最新，避免每次切页签都闪一下
+  if (!data.value) busy.value = true
   try {
     const res = await apiFetch('/api/fan/temps', 30000)
     if (!res.ok) return
