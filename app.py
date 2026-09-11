@@ -101,6 +101,13 @@ def require_admin():
         return wrapper
     return decorator
 
+@app.route("/api/errors/clear", methods=["POST"])
+@require_admin()
+def api_errors_clear():
+    """清空错误历史圈（问题解决后用户手动清掉，不必等重启）。"""
+    _ERR_RING.clear()
+    return jsonify({"ok": True, "cleared": True})
+
 @app.route("/api/me")
 def api_me():
     """返回当前网关登录用户，供前端展示登录身份。"""

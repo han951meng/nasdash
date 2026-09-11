@@ -433,6 +433,18 @@ function closeRunLog(): void {
   stopLogTimer()
 }
 
+async function clearErrRing(): Promise<void> {
+  try {
+    await apiFetch('/api/errors/clear', 10000, { method: 'POST' })
+  } catch {
+    /* 清除失败不弹错，下次自动刷新会再同步 */
+  }
+  errRing.value = []
+  toastMsg.value = '已清除历史错误'
+  window.clearTimeout(toastTimer)
+  toastTimer = window.setTimeout(() => (toastMsg.value = ''), 2000)
+}
+
 function onKey(e: KeyboardEvent): void {
   if (e.key === 'Escape' && logOpen.value) closeRunLog()
 }
@@ -687,8 +699,13 @@ onUnmounted(() => {
               </table>
             </div>
           </template>
+          <div class="log-footnote">
+            说明：运行日志是滚动窗口，最多保留最近 <b>60 行</b>，更早的会被新日志自动顶掉；
+            报错内容不受此限制——会长期保留在「历史错误」区（最近 <b>100</b> 条，问题解决后可点下方按钮清除）。
+          </div>
         </div>
         <div class="modal-actions">
+          <button v-if="errRing.length" class="btn" @click="clearErrRing">清除历史错误</button>
           <button v-if="errRing.length" class="btn" @click="copyText(errRing.join('\n'), '复制历史错误')">复制历史错误</button>
           <button v-if="nE > 0" class="btn" @click="copyText(errText, '复制错误日志')">复制错误日志</button>
           <button v-if="nW > 0" class="btn" @click="copyText(warnText, '复制警告日志')">复制警告日志</button>
@@ -762,6 +779,17 @@ onUnmounted(() => {
 }
 .log-ring .ring-line:last-child {
   border-bottom: none;
+}
+/* 弹窗底部说明文字 */
+.log-footnote {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--muted, #8a8f98);
+  line-height: 1.6;
+}
+.log-footnote b {
+  color: var(--text, #d5dae2);
+  font-weight: 600;
 }
 /* 运行日志表格 */
 .log-table-wrap {
