@@ -7,8 +7,9 @@
  *  - 左侧：11 个模块页签（分组与老页面一致）
  *  - 右侧内容区：
  *      已迁 Vue 原生：硬件配置检测 / 系统资源 / 温度监控 / 历史趋势 /
- *                     操作手册 / 关于 / Docker / 控制与自动化 / 存储卷（9 个）
- *      尚未迁移的 2 个模块（硬盘 SMART / 风扇控制）→ iframe 内嵌旧版面板对应页
+ *                     操作手册 / 关于 / Docker / 控制与自动化 / 存储卷 /
+ *                     硬盘 SMART（10 个）
+ *      尚未迁移的 1 个模块（风扇控制）→ iframe 内嵌旧版面板对应页
  *      （?embed=1 隐藏旧页自己的侧边栏，避免套娃）
  *
  * 回滚通道：旧版完整面板仍在 /legacy/，随时可切回。
@@ -24,6 +25,7 @@ import Docker from './pages/Docker.vue'
 import Detect from './pages/Detect.vue'
 import Automation from './pages/Automation.vue'
 import Storage from './pages/Storage.vue'
+import Disks from './pages/Disks.vue'
 import { legacyUrl } from './lib/api'
 import { useTheme } from './lib/useTheme'
 
@@ -69,7 +71,7 @@ const NAV: NavBlock[] = [
 const ALL_TABS: TabDef[] = NAV.flatMap(b => b.tabs)
 
 /** 已迁成 Vue 原生页的模块；其余仍靠内嵌旧页 */
-const NATIVE_TABS = new Set(['detect', 'system', 'temps', 'sys-hist', 'manual', 'about', 'docker', 'automation', 'storage'])
+const NATIVE_TABS = new Set(['detect', 'system', 'temps', 'sys-hist', 'manual', 'about', 'docker', 'automation', 'storage', 'disks'])
 
 /**
  * 首屏落点：默认「硬件配置检测」（与老版本一致 —— 打开先看整机体检总览）。
@@ -208,6 +210,7 @@ watch(tab, t => {
         <Docker v-else-if="tab === 'docker'" />
         <Automation v-else-if="tab === 'automation'" />
         <Storage v-else-if="tab === 'storage'" />
+        <Disks v-else-if="tab === 'disks'" />
         <!-- 尚未迁移的模块：内嵌旧局面板（embed=1 让它收起自己的侧边栏/顶栏）。
              这里必须用 v-show 而不是 v-else：切到 Vue 原生页时只把旧页藏起来、
              不销毁，否则从「系统资源」回到任一旧模块都要重载一次约 3MB 的旧页面。 -->
