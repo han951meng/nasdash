@@ -61,16 +61,11 @@ class _StderrTee:
                 return
         if _ERR_RING:
             last = _ERR_RING[-1]
-            base = last.rsplit("  (x", 1)[0]
-            if base.endswith(s):
+            if last["text"] == s:
                 # 与上一条相同：合并计数，避免循环报错灌圈
-                try:
-                    n = int(last.rsplit("(x", 1)[1].rstrip(")")) + 1
-                except Exception:
-                    n = 2
-                _ERR_RING[-1] = base + "  (x%d)" % n
+                last["n"] += 1
                 return
-        _ERR_RING.append(time.strftime("[%Y-%m-%d %H:%M:%S] ") + s[:400])
+        _ERR_RING.append({"ts": time.strftime("%Y-%m-%d %H:%M:%S"), "text": s[:400], "n": 1})
 
     def flush(self):
         try:

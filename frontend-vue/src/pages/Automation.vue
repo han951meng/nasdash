@@ -292,7 +292,7 @@ const logRawText = ref('')
 /** 本次拉取日志的时间（弹窗标题右侧显示，方便确认看的是什么时候的日志） */
 const logFetchedAt = ref('')
 /** 错误历史圈（后端内存长期保留，不被 60 行日志尾部刷掉） */
-const errRing = ref<string[]>([])
+const errRing = ref<{ ts: string; text: string; n: number }[]>([])
 
 const nE = computed(() => logEntries.value.filter(e => e.lvl === 'ERROR').length)
 const nW = computed(() => logEntries.value.filter(e => e.lvl === 'WARN').length)
@@ -435,6 +435,10 @@ function closeRunLog(): void {
 
 /** 错误记录二级弹窗 */
 const ringOpen = ref(false)
+/** 复制用的纯文本版（[时间] 内容（连续出现 N 次）） */
+const ringRawText = computed(() =>
+  errRing.value.map(e => '[' + e.ts + '] ' + e.text + (e.n > 1 ? '（连续出现 ' + e.n + ' 次）' : '')).join('\n'),
+)
 /** 清除按钮二次确认态：第一下点亮（3 秒内再点才真清） */
 const ringConfirm = ref(false)
 let ringConfirmTimer = 0
@@ -742,13 +746,28 @@ onUnmounted(() => {
             <div class="logstat">
               共 <b class="danger">{{ errRing.length }}</b> 条（连续重复已合并计数）；这些记录不会被运行日志刷掉，应用重启后清零。
             </div>
-            <div class="ring-body">
-              <div v-for="(e, i) in errRing" :key="i" class="ring-line">{{ e }}</div>
+            <div class="log-table-wrap ring-table-wrap">
+              <table class="log-table ring-table">
+                <thead>
+                  <tr>
+                    <th class="c-ln">#</th>
+                    <th class="c-ts">捕获时间</th>
+                    <th>错误内容</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="(e, i) in errRing" :key="i" class="lv-err">
+                    <td class="c-ln">{{ i + 1 }}</td>
+                    <td class="c-ts">{{ e.ts }}</td>
+                    <td class="c-txt">{{ e.text }}<span v-if="e.n > 1" class="xN">（连续出现 {{ e.n }} 次）</span></td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
           </template>
         </div>
         <div class="modal-actions">
-          <button v-if="errRing.length" class="btn" @click="copyText(errRing.join('\n'), '复制错误记录')">复制错误记录</button>
+          <button v-if="errRing.length" class="btn" @click="copyText(ringRawText, '复制错误记录')">复制错误记录</button>
           <button
             v-if="errRing.length"
             class="btn"
@@ -797,39 +816,20 @@ onUnmounted(() => {
   color: #fff;
   background: var(--danger, #f55050);
 }
-/* 错误记录列表 */
-.log-ring {
-  border: 1px solid var(--danger, #f55050);
-  border-radius: 10px;
-  margin-bottom: 10px;
-  overflow: hidden;
+/* 错误记录表格（复用 .log-table 样式，整行红色） */
+.ring-table-wrap {
+  max-height: 46vh;
 }
-.log-ring .ring-title {
-  padding: 8px 12px;
-  font-size: 13px;
-  background: var(--danger-bg, rgba(245, 80, 80, 0.12));
-}
-.log-ring .ring-note {
-  font-size: 12px;
-  color: var(--muted, #8a8f98);
-  font-weight: 400;
-}
-.log-ring .ring-body {
-  max-height: 140px;
-  overflow: auto;
-  padding: 6px 12px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
-}
-.log-ring .ring-line {
-  padding: 3px 0;
-  border-bottom: 1px solid var(--border, rgba(128, 138, 155, 0.12));
+.ring-table .c-txt {
   color: var(--danger, #f55050);
   word-break: break-all;
   white-space: pre-wrap;
 }
-.log-ring .ring-line:last-child {
-  border-bottom: none;
+.ring-table .xN {
+  margin-left: 8px;
+  color: var(--muted, #8a8f98);
+  font-size: 11.5px;
+  white-space: nowrap;
 }
 /* 弹窗底部说明文字 */
 .log-footnote {
