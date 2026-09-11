@@ -709,13 +709,22 @@ onUnmounted(() => {
                     <td class="c-ln">{{ i + 1 }}</td>
                     <td class="c-ts">{{ e.ts || '—' }}</td>
                     <td class="c-req">{{ e.req || e.txt }}</td>
-                    <td class="c-st">
+                    <!-- 网页请求行：状态 + 大小两列；程序日志行没有"响应大小"概念，两列合并成一格，避免出现莫名其妙的"—" -->
+                    <template v-if="e.size !== undefined">
+                      <td class="c-st">
+                        <span
+                          :class="e.lvl === 'ERROR' ? 'danger' : e.lvl === 'WARN' ? 'warn' : 'muted'"
+                          :title="e.status ? 'HTTP ' + e.status : ''"
+                        >{{ statusText(e) }}</span>
+                      </td>
+                      <td class="c-sz">{{ e.size }}</td>
+                    </template>
+                    <td v-else class="c-st" colspan="2">
                       <span
                         :class="e.lvl === 'ERROR' ? 'danger' : e.lvl === 'WARN' ? 'warn' : 'muted'"
-                        :title="e.status ? 'HTTP ' + e.status : ''"
+                        title="程序日志行（非网页请求），没有响应大小"
                       >{{ statusText(e) }}</span>
                     </td>
-                    <td class="c-sz">{{ e.size || '—' }}</td>
                   </tr>
                 </tbody>
               </table>
@@ -836,8 +845,10 @@ onUnmounted(() => {
   word-break: break-all;
   white-space: pre-wrap;
 }
-/* 记录行垂直居中：单条短记录顶着上沿、下面拖一大块红底很难看 */
-.ring-table tbody td {
+/* 记录行垂直居中：单条短记录顶着上沿、下面拖一大块红底很难看。
+   注意：下面的 .log-table tbody td 也设了 vertical-align:top 且写在后面，
+   同权重时后来者赢，这里必须抬高权重（双类名）才能真正生效 */
+.log-table.ring-table tbody td {
   vertical-align: middle;
   line-height: 1.6;
 }
