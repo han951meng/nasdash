@@ -4576,7 +4576,10 @@ async function showRunLog(){
   html+='<div class="log-list">';
   for(var j2=0;j2<entries.length;j2++){
     var e=entries[j2];
-    html+='<div class="log-line lv-'+e.lvl.toLowerCase()+'">';
+    // 类名须与 CSS 对齐：.log-line.lv-err / .lv-warn（此前误用 lvl.toLowerCase() 生成
+    // 「lv-error」，CSS 里没有这条，导致错误行从未被标红；警告行因 lv-warn 恰好匹配才正常）
+    var _logClsMap={ERROR:'err',WARN:'warn',INFO:'info'};
+    html+='<div class="log-line lv-'+(_logClsMap[e.lvl]||'info')+'">';
     if(e.ts) html+='<span class="lt">'+esc(e.ts)+'</span>';
     html+=esc(e.txt)+'</div>';
   }
