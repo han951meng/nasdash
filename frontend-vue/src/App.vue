@@ -15,6 +15,7 @@ import { computed, ref, watch } from 'vue'
 import AppIcon from './components/AppIcon.vue'
 import SystemResources from './pages/SystemResources.vue'
 import Temperature from './pages/Temperature.vue'
+import History from './pages/History.vue'
 import Manual from './pages/Manual.vue'
 import About from './pages/About.vue'
 import Docker from './pages/Docker.vue'
@@ -64,7 +65,7 @@ const NAV: NavBlock[] = [
 const ALL_TABS: TabDef[] = NAV.flatMap(b => b.tabs)
 
 /** 已迁成 Vue 原生页的模块；其余仍靠内嵌旧页 */
-const NATIVE_TABS = new Set(['detect', 'system', 'temps', 'manual', 'about', 'docker'])
+const NATIVE_TABS = new Set(['detect', 'system', 'temps', 'sys-hist', 'manual', 'about', 'docker'])
 
 /**
  * 首屏落点：默认「硬件配置检测」（与老版本一致 —— 打开先看整机体检总览）。
@@ -197,6 +198,7 @@ watch(tab, t => {
         <Detect v-if="tab === 'detect'" />
         <SystemResources v-else-if="tab === 'system'" />
         <Temperature v-else-if="tab === 'temps'" />
+        <History v-else-if="tab === 'sys-hist'" />
         <Manual v-else-if="tab === 'manual'" />
         <About v-else-if="tab === 'about'" />
         <Docker v-else-if="tab === 'docker'" />
