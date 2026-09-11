@@ -11,11 +11,16 @@ export const API_BASE = (() => {
   return m ? m[1] : ''
 })()
 
-/** 带超时的 fetch：普通 30s、重接口可传更长，避免飞牛慢通道把请求挂死 */
-export function apiFetch(path: string, ms = 30000): Promise<Response> {
+/**
+ * 带超时的 fetch：普通 30s、重接口可传更长，避免飞牛慢通道把请求挂死。
+ * init 用于 POST 等（method / headers / body）；credentials / cache / signal 强制由本函数接管，
+ * 避免调用方误改导致带不上会话 cookie 或不走 no-store。
+ */
+export function apiFetch(path: string, ms = 30000, init: RequestInit = {}): Promise<Response> {
   const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null
   const to = ctrl ? window.setTimeout(() => { try { ctrl.abort() } catch { /* 忽略 */ } }, ms) : 0
   const p = fetch(API_BASE + path, {
+    ...init,
     credentials: 'include',
     cache: 'no-store',
     ...(ctrl ? { signal: ctrl.signal } : {}),
