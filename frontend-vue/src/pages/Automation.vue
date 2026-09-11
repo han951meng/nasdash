@@ -707,7 +707,7 @@ onUnmounted(() => {
                 <tbody>
                   <tr v-for="(e, i) in logEntries" :key="i" :class="'lv-' + lvlCls(e.lvl)">
                     <td class="c-ln">{{ i + 1 }}</td>
-                    <td class="c-ts">{{ e.ts }}</td>
+                    <td class="c-ts">{{ e.ts || '—' }}</td>
                     <td class="c-req">{{ e.req || e.txt }}</td>
                     <td class="c-st">
                       <span
@@ -744,7 +744,7 @@ onUnmounted(() => {
 
     <!-- 错误记录弹窗（二级）：后端内存长期保留，不受 60 行日志尾部限制 -->
     <div class="modal-overlay" :class="{ show: ringOpen }" @click.self="closeRing">
-      <div class="modal-box">
+      <div class="modal-box ring-box">
         <div class="modal-title">错误记录（长期保留，最多 100 条）</div>
         <div class="modal-body">
           <div v-if="!errRing.length" class="log-empty">（当前没有错误记录）</div>
@@ -823,6 +823,11 @@ onUnmounted(() => {
   background: var(--danger, #f55050);
 }
 /* 错误记录表格（复用 .log-table 样式，整行红色） */
+/* 弹窗加宽到与日志弹窗协调（默认 420px 太窄，内容列挤成细长条） */
+.ring-box {
+  width: 100%;
+  max-width: min(720px, calc(100vw - 32px));
+}
 .ring-table-wrap {
   max-height: 46vh;
 }
