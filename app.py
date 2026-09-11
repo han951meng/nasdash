@@ -6324,7 +6324,9 @@ def api_system():
                 system["raid_temp"] = _raid.get("controller_temp")
         except Exception:
             system["raid_temp"] = None
-        return jsonify({"system": system, "time": _panel_time(), "elapsed": round(time.time() - t0, 2)})
+        # fnos_version 顶层暴露：旧版「关于」页的 fnOS 版本取自 /api/all 的 DATA，
+        # 现「关于」Vue 原生页只拉轻量的 /api/system，故在此补一项，避免为一条版本号拉全量 /api/all。
+        return jsonify({"system": system, "fnos_version": _fnos_version(), "time": _panel_time(), "elapsed": round(time.time() - t0, 2)})
     except Exception as e:
         return jsonify({"error": str(e), "time": _panel_time()})
 
