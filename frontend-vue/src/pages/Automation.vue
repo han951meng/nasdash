@@ -365,7 +365,7 @@ function parseLog(text: string): LogEntry[] {
     }
 
     // 应用日志：2026-09-12 00:53:01 消息内容
-    const m = s.match(/^\d{4}-(\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})[ ,]*(.*)$/)
+    const m = s.match(/^\[?\d{4}-(\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})\]?[ ,]*(.*)$/)
     const ts = m ? `${m[1]} ${m[2]}` : ''
     const txt = m ? m[3] : s
     const low = txt.toLowerCase()
@@ -835,6 +835,11 @@ onUnmounted(() => {
   color: var(--danger, #f55050);
   word-break: break-all;
   white-space: pre-wrap;
+}
+/* 记录行垂直居中：单条短记录顶着上沿、下面拖一大块红底很难看 */
+.ring-table tbody td {
+  vertical-align: middle;
+  line-height: 1.6;
 }
 .ring-table .xN {
   margin-left: 8px;

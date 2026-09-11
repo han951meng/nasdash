@@ -59,13 +59,20 @@ class _StderrTee:
             if not ("traceback" in low or "error" in low or "exception" in low or "failed" in low
                     or "错误" in s or "失败" in s or "异常" in s):
                 return
+        # 行若自带「[YYYY-MM-DD HH:MM:SS]」时间戳前缀，剥掉并用它作捕获时间
+        # （避免错误记录弹窗里捕获时间列与内容开头重复显示同一时间）
+        m_ts = re.match(r'^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\] ?(.*)$', s)
+        if m_ts:
+            ring_ts, body = m_ts.group(1), m_ts.group(2)
+        else:
+            ring_ts, body = time.strftime("%Y-%m-%d %H:%M:%S"), s
         if _ERR_RING:
             last = _ERR_RING[-1]
-            if last["text"] == s:
+            if last["text"] == body:
                 # 与上一条相同：合并计数，避免循环报错灌圈
                 last["n"] += 1
                 return
-        _ERR_RING.append({"ts": time.strftime("%Y-%m-%d %H:%M:%S"), "text": s[:400], "n": 1})
+        _ERR_RING.append({"ts": ring_ts, "text": body[:400], "n": 1})
 
     def flush(self):
         try:
@@ -120,7 +127,7 @@ def api_errors_test():
     走的是与真实报错完全相同的链路：stderr 打印 → _StderrTee 扫描 → 入圈 →
     report.error_ring 暴露 → 前端弹窗展示。文案明确标注「测试」，避免被当真 bug 排查。
     """
-    print("[ERROR] 测试错误记录：这是一条人为写入的示例报错（验证错误记录功能用），不是真实故障，可放心清除", file=sys.stderr)
+    print(time.strftime("[%Y-%m-%d %H:%M:%S] ") + "[ERROR] 测试错误记录：这是一条人为写入的示例报错（验证错误记录功能用），不是真实故障，可放心清除", file=sys.stderr)
     return jsonify({"ok": True})
 
 @app.route("/api/me")
