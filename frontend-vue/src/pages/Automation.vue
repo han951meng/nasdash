@@ -433,20 +433,48 @@ function closeRunLog(): void {
   stopLogTimer()
 }
 
+/** 错误记录二级弹窗 */
+const ringOpen = ref(false)
+/** 清除按钮二次确认态：第一下点亮（3 秒内再点才真清） */
+const ringConfirm = ref(false)
+let ringConfirmTimer = 0
+
+function showRing(): void {
+  ringOpen.value = true
+}
+
+function closeRing(): void {
+  ringOpen.value = false
+  ringConfirm.value = false
+  window.clearTimeout(ringConfirmTimer)
+}
+
 async function clearErrRing(): Promise<void> {
+  // 两步确认：第一下只亮红色警示，3 秒内再点才真清（防手滑，清除不可恢复）
+  if (!ringConfirm.value) {
+    ringConfirm.value = true
+    window.clearTimeout(ringConfirmTimer)
+    ringConfirmTimer = window.setTimeout(() => (ringConfirm.value = false), 3000)
+    return
+  }
+  ringConfirm.value = false
+  window.clearTimeout(ringConfirmTimer)
   try {
     await apiFetch('/api/errors/clear', 10000, { method: 'POST' })
   } catch {
     /* 清除失败不弹错，下次自动刷新会再同步 */
   }
   errRing.value = []
-  toastMsg.value = '已清除历史错误'
+  toastMsg.value = '错误记录已清除'
   window.clearTimeout(toastTimer)
   toastTimer = window.setTimeout(() => (toastMsg.value = ''), 2000)
 }
 
 function onKey(e: KeyboardEvent): void {
-  if (e.key === 'Escape' && logOpen.value) closeRunLog()
+  if (e.key === 'Escape') {
+    if (ringOpen.value) closeRing()
+    else if (logOpen.value) closeRunLog()
+  }
 }
 
 /* ---------------- toast（复制反馈） ---------------- */
@@ -657,16 +685,6 @@ onUnmounted(() => {
           <div v-else-if="logLoadErr" class="log-empty">{{ logLoadErr }}</div>
           <div v-else-if="!logEntries.length" class="log-empty">（暂无运行日志）</div>
           <template v-else>
-            <!-- 错误历史圈：后端内存长期保留，不受 60 行日志尾部限制 -->
-            <div v-if="errRing.length" class="log-ring">
-              <div class="ring-title">
-                <b class="danger">历史错误 {{ errRing.length }} 条</b>
-                <span class="ring-note">（长期保留，不会被下方请求日志刷掉；连续重复已合并计数）</span>
-              </div>
-              <div class="ring-body">
-                <div v-for="(e, i) in errRing" :key="i" class="ring-line">{{ e }}</div>
-              </div>
-            </div>
             <div class="logstat">
               运行日志共 <b>{{ logEntries.length }}</b> 行：<b class="danger">错误 {{ nE }}</b> ·
               <b class="warn">警告 {{ nW }}</b> · 常规 {{ logEntries.length - nE - nW }}（错误/警告置顶着色，方便先看 bug）
@@ -701,16 +719,43 @@ onUnmounted(() => {
           </template>
           <div class="log-footnote">
             说明：运行日志是滚动窗口，最多保留最近 <b>60 行</b>，更早的会被新日志自动顶掉；
-            报错内容不受此限制——会长期保留在「历史错误」区（最近 <b>100</b> 条，问题解决后可点下方按钮清除）。
+            报错内容不受此限制——会长期保留在<b>错误记录</b>里（最近 <b>100</b> 条，可点下方「查看错误记录」查看或清除）。
           </div>
         </div>
         <div class="modal-actions">
-          <button v-if="errRing.length" class="btn" @click="clearErrRing">清除历史错误</button>
-          <button v-if="errRing.length" class="btn" @click="copyText(errRing.join('\n'), '复制历史错误')">复制历史错误</button>
+          <button v-if="errRing.length" class="btn" @click="showRing">查看错误记录（{{ errRing.length }}）</button>
           <button v-if="nE > 0" class="btn" @click="copyText(errText, '复制错误日志')">复制错误日志</button>
           <button v-if="nW > 0" class="btn" @click="copyText(warnText, '复制警告日志')">复制警告日志</button>
           <button v-if="logEntries.length" class="btn btn-primary" @click="copyText(logRawText, '复制全部日志')">复制全部日志</button>
           <button class="btn" @click="closeRunLog">关闭</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 错误记录弹窗（二级）：后端内存长期保留，不受 60 行日志尾部限制 -->
+    <div class="modal-overlay" :class="{ show: ringOpen }" @click.self="closeRing">
+      <div class="modal-box">
+        <div class="modal-title">错误记录（长期保留，最多 100 条）</div>
+        <div class="modal-body">
+          <div v-if="!errRing.length" class="log-empty">（当前没有错误记录）</div>
+          <template v-else>
+            <div class="logstat">
+              共 <b class="danger">{{ errRing.length }}</b> 条（连续重复已合并计数）；这些记录不会被运行日志刷掉，应用重启后清零。
+            </div>
+            <div class="ring-body">
+              <div v-for="(e, i) in errRing" :key="i" class="ring-line">{{ e }}</div>
+            </div>
+          </template>
+        </div>
+        <div class="modal-actions">
+          <button v-if="errRing.length" class="btn" @click="copyText(errRing.join('\n'), '复制错误记录')">复制错误记录</button>
+          <button
+            v-if="errRing.length"
+            class="btn"
+            :class="{ 'btn-danger': ringConfirm }"
+            @click="clearErrRing"
+          >{{ ringConfirm ? '再点一次确认清除（不可恢复）' : '清除错误记录' }}</button>
+          <button class="btn" @click="closeRing">关闭</button>
         </div>
       </div>
     </div>
@@ -746,7 +791,13 @@ onUnmounted(() => {
   color: var(--muted, #8a8f98);
   font-variant-numeric: tabular-nums;
 }
-/* 错误历史圈 */
+/* 清除按钮二次确认态 */
+.btn-danger {
+  border-color: var(--danger, #f55050);
+  color: #fff;
+  background: var(--danger, #f55050);
+}
+/* 错误记录列表 */
 .log-ring {
   border: 1px solid var(--danger, #f55050);
   border-radius: 10px;

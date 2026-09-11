@@ -45,10 +45,20 @@ class _StderrTee:
         s = line.rstrip()
         if not s:
             return
-        low = s.lower()
-        if not ("traceback" in low or "error" in low or "exception" in low or "failed" in low
-                or "错误" in s or "失败" in s or "异常" in s):
-            return
+        # HTTP 访问行（wsgiref 每请求一条）默认不进圈：路径里碰巧带 error 字样的
+        # 正常请求（包括 /api/errors/clear 自己）会被误收，造成「越清越多」。
+        # 访问行只有 5xx（真出事）才留；其余行走关键词判断。
+        m_acc = re.match(r'^\S+ \S+ \S+ \[[^\]]+\] "[^"]*" (\d{3}) ', s)
+        is_5xx = False
+        if m_acc:
+            if int(m_acc.group(1)) < 500:
+                return
+            is_5xx = True
+        else:
+            low = s.lower()
+            if not ("traceback" in low or "error" in low or "exception" in low or "failed" in low
+                    or "错误" in s or "失败" in s or "异常" in s):
+                return
         if _ERR_RING:
             last = _ERR_RING[-1]
             base = last.rsplit("  (x", 1)[0]
