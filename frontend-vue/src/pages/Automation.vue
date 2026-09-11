@@ -727,7 +727,12 @@ onUnmounted(() => {
           </div>
         </div>
         <div class="modal-actions">
-          <button v-if="errRing.length" class="btn" @click="showRing">查看错误记录（{{ errRing.length }}）</button>
+          <button
+            v-if="errRing.length"
+            class="btn"
+            title="与上方「警告」数口径不同：错误记录只收真正出错的（服务器错误 / 程序异常），长期保留最多 100 条；普通请求异常（如 404）只在上表黄色标注，不进这里"
+            @click="showRing"
+          >查看错误记录（{{ errRing.length }}）</button>
           <button v-if="nE > 0" class="btn" @click="copyText(errText, '复制错误日志')">复制错误日志</button>
           <button v-if="nW > 0" class="btn" @click="copyText(warnText, '复制警告日志')">复制警告日志</button>
           <button v-if="logEntries.length" class="btn btn-primary" @click="copyText(logRawText, '复制全部日志')">复制全部日志</button>
