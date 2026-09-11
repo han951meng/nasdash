@@ -709,22 +709,14 @@ onUnmounted(() => {
                     <td class="c-ln">{{ i + 1 }}</td>
                     <td class="c-ts">{{ e.ts || '—' }}</td>
                     <td class="c-req">{{ e.req || e.txt }}</td>
-                    <!-- 网页请求行：状态 + 大小两列；程序日志行没有"响应大小"概念，两列合并成一格，避免出现莫名其妙的"—" -->
-                    <template v-if="e.size !== undefined">
-                      <td class="c-st">
-                        <span
-                          :class="e.lvl === 'ERROR' ? 'danger' : e.lvl === 'WARN' ? 'warn' : 'muted'"
-                          :title="e.status ? 'HTTP ' + e.status : ''"
-                        >{{ statusText(e) }}</span>
-                      </td>
-                      <td class="c-sz">{{ e.size }}</td>
-                    </template>
-                    <td v-else class="c-st" colspan="2">
+                    <td class="c-st">
                       <span
                         :class="e.lvl === 'ERROR' ? 'danger' : e.lvl === 'WARN' ? 'warn' : 'muted'"
-                        title="程序日志行（非网页请求），没有响应大小"
+                        :title="e.status ? 'HTTP ' + e.status : '程序日志行（非网页请求），没有响应大小'"
                       >{{ statusText(e) }}</span>
                     </td>
+                    <!-- 程序日志行没有"响应大小"概念，此格留空（不画"—"占位），级别文字对齐在"状态"表头下 -->
+                    <td class="c-sz">{{ e.size || '' }}</td>
                   </tr>
                 </tbody>
               </table>
