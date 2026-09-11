@@ -113,6 +113,16 @@ def api_errors_clear():
     _ERR_RING.clear()
     return jsonify({"ok": True, "cleared": True})
 
+@app.route("/api/errors/test", methods=["POST"])
+def api_errors_test():
+    """人为写入一条测试错误记录（验证「错误记录」捕获→展示→清除全链路用）。
+
+    走的是与真实报错完全相同的链路：stderr 打印 → _StderrTee 扫描 → 入圈 →
+    report.error_ring 暴露 → 前端弹窗展示。文案明确标注「测试」，避免被当真 bug 排查。
+    """
+    print("[ERROR] 测试错误记录：这是一条人为写入的示例报错（验证错误记录功能用），不是真实故障，可放心清除", file=sys.stderr)
+    return jsonify({"ok": True})
+
 @app.route("/api/me")
 def api_me():
     """返回当前网关登录用户，供前端展示登录身份。"""
