@@ -5,7 +5,7 @@
 单文件 Flask 应用：阵列卡状态 / 硬盘 SMART / 系统资源 / 存储卷
 部署目录: /opt/fnos-dash/
 """
-import subprocess, json, re, os, time, socket, signal, platform, shutil, sys, glob, functools, errno, urllib.request, urllib.error, base64
+import subprocess, json, re, os, time, socket, signal, platform, shutil, sys, glob, functools, errno, collections, urllib.request, urllib.error, base64
 from flask import Flask, jsonify, render_template, render_template_string, request, make_response, Response, stream_with_context, send_from_directory
 try:
     from markupsafe import Markup
@@ -14,6 +14,61 @@ except Exception:
 from functools import wraps
 
 app = Flask(__name__)
+
+# ===================== 错误历史圈（不受日志尾部 60 行限制） =====================
+# 背景：运行日志弹窗只展示 app.log 最后 60 行，而 app.log 里混着每条 HTTP 请求
+# 记录（风扇 1s 轮询一分钟就能灌满 60 行），一个报错很快就被冲出窗口、找不回来。
+# 方案：包一层 stderr——报错类行（Traceback/Error/Exception/failed/错误/失败/异常）
+# 在照常写日志的同时，额外留存一份在内存（最后 100 条、连续重复合并计数、带捕获时间），
+# 随健康报告 error_ring 字段暴露给前端置顶展示。
+_ERR_RING = collections.deque(maxlen=100)
+
+class _StderrTee:
+    """透传 stderr 并逐行扫描，报错类行留存进 _ERR_RING。"""
+
+    def __init__(self, raw):
+        self.raw = raw
+        self._buf = ""
+
+    def write(self, s):
+        try:
+            self.raw.write(s)
+        except Exception:
+            pass
+        self._buf += s
+        while "\n" in self._buf:
+            line, self._buf = self._buf.split("\n", 1)
+            self._scan(line)
+        return len(s)
+
+    def _scan(self, line):
+        s = line.rstrip()
+        if not s:
+            return
+        low = s.lower()
+        if not ("traceback" in low or "error" in low or "exception" in low or "failed" in low
+                or "错误" in s or "失败" in s or "异常" in s):
+            return
+        if _ERR_RING:
+            last = _ERR_RING[-1]
+            base = last.rsplit("  (x", 1)[0]
+            if base.endswith(s):
+                # 与上一条相同：合并计数，避免循环报错灌圈
+                try:
+                    n = int(last.rsplit("(x", 1)[1].rstrip(")")) + 1
+                except Exception:
+                    n = 2
+                _ERR_RING[-1] = base + "  (x%d)" % n
+                return
+        _ERR_RING.append(time.strftime("[%Y-%m-%d %H:%M:%S] ") + s[:400])
+
+    def flush(self):
+        try:
+            self.raw.flush()
+        except Exception:
+            pass
+
+sys.stderr = _StderrTee(sys.stderr)
 
 # ===================== 飞牛统一网关用户身份 =====================
 # 官方文档要求：访问经网关时，fnOS 先校验登录态，再通过 Header 转发用户信息
@@ -7939,6 +7994,7 @@ def build_health_report():
         "raid": raid, "disks": disks, "system": system_full,
         "storage": storage, "docker": docker, "fans": fans, "alerts": alerts,
         "log_tail": _read_app_log(),
+        "error_ring": list(_ERR_RING)[-30:],
     }
 
 def build_diagnostics():

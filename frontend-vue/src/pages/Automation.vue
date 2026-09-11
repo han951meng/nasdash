@@ -291,6 +291,8 @@ const logEntries = ref<LogEntry[]>([])
 const logRawText = ref('')
 /** 本次拉取日志的时间（弹窗标题右侧显示，方便确认看的是什么时候的日志） */
 const logFetchedAt = ref('')
+/** 错误历史圈（后端内存长期保留，不被 60 行日志尾部刷掉） */
+const errRing = ref<string[]>([])
 
 const nE = computed(() => logEntries.value.filter(e => e.lvl === 'ERROR').length)
 const nW = computed(() => logEntries.value.filter(e => e.lvl === 'WARN').length)
@@ -391,6 +393,7 @@ async function loadLog(silent = false): Promise<void> {
     logLoadErr.value = ''
     logEntries.value = []
     logRawText.value = ''
+    errRing.value = []
     logFetchedAt.value = ''
   }
   try {
@@ -400,6 +403,7 @@ async function loadLog(silent = false): Promise<void> {
     const text = j.log_tail || ''
     logRawText.value = text
     logEntries.value = parseLog(text)
+    errRing.value = j.error_ring || []
     logFetchedAt.value = new Date().toLocaleTimeString('zh-CN')
   } catch (e) {
     if (!silent) logLoadErr.value = '加载日志失败：' + e
@@ -641,6 +645,16 @@ onUnmounted(() => {
           <div v-else-if="logLoadErr" class="log-empty">{{ logLoadErr }}</div>
           <div v-else-if="!logEntries.length" class="log-empty">（暂无运行日志）</div>
           <template v-else>
+            <!-- 错误历史圈：后端内存长期保留，不受 60 行日志尾部限制 -->
+            <div v-if="errRing.length" class="log-ring">
+              <div class="ring-title">
+                <b class="danger">历史错误 {{ errRing.length }} 条</b>
+                <span class="ring-note">（长期保留，不会被下方请求日志刷掉；连续重复已合并计数）</span>
+              </div>
+              <div class="ring-body">
+                <div v-for="(e, i) in errRing" :key="i" class="ring-line">{{ e }}</div>
+              </div>
+            </div>
             <div class="logstat">
               运行日志共 <b>{{ logEntries.length }}</b> 行：<b class="danger">错误 {{ nE }}</b> ·
               <b class="warn">警告 {{ nW }}</b> · 常规 {{ logEntries.length - nE - nW }}（错误/警告置顶着色，方便先看 bug）
@@ -675,6 +689,7 @@ onUnmounted(() => {
           </template>
         </div>
         <div class="modal-actions">
+          <button v-if="errRing.length" class="btn" @click="copyText(errRing.join('\n'), '复制历史错误')">复制历史错误</button>
           <button v-if="nE > 0" class="btn" @click="copyText(errText, '复制错误日志')">复制错误日志</button>
           <button v-if="nW > 0" class="btn" @click="copyText(warnText, '复制警告日志')">复制警告日志</button>
           <button v-if="logEntries.length" class="btn btn-primary" @click="copyText(logRawText, '复制全部日志')">复制全部日志</button>
@@ -713,6 +728,40 @@ onUnmounted(() => {
   font-weight: 400;
   color: var(--muted, #8a8f98);
   font-variant-numeric: tabular-nums;
+}
+/* 错误历史圈 */
+.log-ring {
+  border: 1px solid var(--danger, #f55050);
+  border-radius: 10px;
+  margin-bottom: 10px;
+  overflow: hidden;
+}
+.log-ring .ring-title {
+  padding: 8px 12px;
+  font-size: 13px;
+  background: var(--danger-bg, rgba(245, 80, 80, 0.12));
+}
+.log-ring .ring-note {
+  font-size: 12px;
+  color: var(--muted, #8a8f98);
+  font-weight: 400;
+}
+.log-ring .ring-body {
+  max-height: 140px;
+  overflow: auto;
+  padding: 6px 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+.log-ring .ring-line {
+  padding: 3px 0;
+  border-bottom: 1px solid var(--border, rgba(128, 138, 155, 0.12));
+  color: var(--danger, #f55050);
+  word-break: break-all;
+  white-space: pre-wrap;
+}
+.log-ring .ring-line:last-child {
+  border-bottom: none;
 }
 /* 运行日志表格 */
 .log-table-wrap {
