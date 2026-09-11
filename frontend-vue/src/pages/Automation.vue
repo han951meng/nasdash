@@ -382,13 +382,17 @@ function parseLog(text: string): LogEntry[] {
   return out.sort((a, b) => order[a.lvl] - order[b.lvl])
 }
 
-async function showRunLog(): Promise<void> {
-  logOpen.value = true
-  logLoading.value = true
-  logLoadErr.value = ''
-  logEntries.value = []
-  logRawText.value = ''
-  logFetchedAt.value = ''
+/** 日志弹窗自动刷新定时器：打开期间每 10 秒静默拉一次最新日志 */
+let logTimer: number | undefined
+
+async function loadLog(silent = false): Promise<void> {
+  if (!silent) {
+    logLoading.value = true
+    logLoadErr.value = ''
+    logEntries.value = []
+    logRawText.value = ''
+    logFetchedAt.value = ''
+  }
   try {
     // 从健康报告 JSON 取 log_tail，避免重复后端实现（旧页同做法）
     const r = await apiFetch('/api/report?format=json&_=' + Date.now(), 60000)
@@ -398,13 +402,31 @@ async function showRunLog(): Promise<void> {
     logEntries.value = parseLog(text)
     logFetchedAt.value = new Date().toLocaleTimeString('zh-CN')
   } catch (e) {
-    logLoadErr.value = '加载日志失败：' + e
+    if (!silent) logLoadErr.value = '加载日志失败：' + e
+    // 静默刷新失败不打扰用户，保留上一次内容
   }
   logLoading.value = false
 }
 
+async function showRunLog(): Promise<void> {
+  logOpen.value = true
+  await loadLog()
+  stopLogTimer()
+  logTimer = window.setInterval(() => {
+    if (logOpen.value && !logLoading.value) loadLog(true)
+  }, 10000)
+}
+
+function stopLogTimer(): void {
+  if (logTimer) {
+    window.clearInterval(logTimer)
+    logTimer = undefined
+  }
+}
+
 function closeRunLog(): void {
   logOpen.value = false
+  stopLogTimer()
 }
 
 function onKey(e: KeyboardEvent): void {
@@ -460,6 +482,7 @@ onUnmounted(() => {
   document.removeEventListener('keydown', onKey)
   if (alertTimer) window.clearInterval(alertTimer)
   window.clearTimeout(toastTimer)
+  stopLogTimer()
 })
 </script>
 
@@ -611,7 +634,7 @@ onUnmounted(() => {
       <div class="modal-box">
         <div class="modal-title log-title-row">
           <span>运行日志（诊断）</span>
-          <span v-if="logFetchedAt" class="log-fetched-at">拉取于 {{ logFetchedAt }}</span>
+          <span v-if="logFetchedAt" class="log-fetched-at">自动更新于 {{ logFetchedAt }}（每 10 秒）</span>
         </div>
         <div class="modal-body">
           <div v-if="logLoading" class="log-empty">加载中…</div>
