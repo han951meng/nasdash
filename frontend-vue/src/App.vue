@@ -15,6 +15,7 @@ import { computed, ref, watch } from 'vue'
 import AppIcon from './components/AppIcon.vue'
 import SystemResources from './pages/SystemResources.vue'
 import Temperature from './pages/Temperature.vue'
+import Manual from './pages/Manual.vue'
 import { legacyUrl } from './lib/api'
 import { useTheme } from './lib/useTheme'
 
@@ -60,7 +61,7 @@ const NAV: NavBlock[] = [
 const ALL_TABS: TabDef[] = NAV.flatMap(b => b.tabs)
 
 /** 已迁成 Vue 原生页的模块；其余仍靠内嵌旧页 */
-const NATIVE_TABS = new Set(['system', 'temps'])
+const NATIVE_TABS = new Set(['system', 'temps', 'manual'])
 
 /**
  * 首屏落点：默认「硬件配置检测」（与老版本一致 —— 打开先看整机体检总览）。
@@ -192,6 +193,7 @@ watch(tab, t => {
       <div class="panel active">
         <SystemResources v-if="tab === 'system'" />
         <Temperature v-else-if="tab === 'temps'" />
+        <Manual v-else-if="tab === 'manual'" />
         <!-- 尚未迁移的模块：内嵌旧局面板（embed=1 让它收起自己的侧边栏/顶栏）。
              这里必须用 v-show 而不是 v-else：切到 Vue 原生页时只把旧页藏起来、
              不销毁，否则从「系统资源」回到任一旧模块都要重载一次约 3MB 的旧页面。 -->
