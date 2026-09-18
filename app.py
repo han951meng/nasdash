@@ -5,12 +5,8 @@
 单文件 Flask 应用：阵列卡状态 / 硬盘 SMART / 系统资源 / 存储卷
 部署目录: /opt/fnos-dash/
 """
-import subprocess, json, re, os, time, socket, signal, platform, shutil, sys, glob, functools, errno, collections, urllib.request, urllib.error, base64
-from flask import Flask, jsonify, render_template, render_template_string, request, make_response, Response, stream_with_context, send_from_directory
-try:
-    from markupsafe import Markup
-except Exception:
-    Markup = str
+import subprocess, json, re, os, time, socket, signal, platform, shutil, sys, glob, functools, errno, collections, ipaddress, urllib.request, urllib.error
+from flask import Flask, jsonify, request, make_response, Response, stream_with_context, send_from_directory, send_file
 from functools import wraps
 
 app = Flask(__name__)
@@ -137,8 +133,8 @@ def api_me():
 
 # 应用根目录
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
-# 前端模板目录（index() 用 render_template 渲染 templates/index.html）
-app.template_folder = os.path.join(APP_DIR, "templates")
+# 前端产物目录：templates/vue/index.html（Vue 构建产物，用 send_from_directory 直出）。
+# 第 11 步起全应用已无 Jinja 模板，故不再覆盖 app.template_folder。
 
 # 用户配置持久目录：飞牛运行时通过环境变量 TRIM_PKGVAR 提供 @appdata 持久目录
 # （与应用卸载无关，重装后保留；cmd/main 也用它存 app.pid/app.log）。
@@ -221,28 +217,6 @@ def _app_version():
             pass
     return best[1] if best else "v1.6.2"
 APP_VERSION = _app_version()
-
-def _load_icon_data(name):
-    """把 ui/images/ 下的 PNG 图标读成 base64 data URL，内嵌到页面里避免网关静态资源 302 问题。
-    返回 Markup 对象，避免 Jinja2 autoescape 在 JS/HTML 里把 data URL 转义成可见文本。"""
-    try:
-        path = os.path.join(os.path.dirname(__file__), "ui", "images", name)
-        with open(path, "rb") as f:
-            return Markup("data:image/png;base64," + base64.b64encode(f.read()).decode("ascii"))
-    except Exception:
-        return Markup("")
-# 左侧导航与面板大图标：统一采用用户提供的彩色插画图标，base64 内嵌避免网关静态资源 302 问题。
-ICON_DETECT_DATA = _load_icon_data("icon-detect.png")
-ICON_SYSTEM_DATA = _load_icon_data("icon-system.png")
-ICON_HISTORY_DATA = _load_icon_data("icon-history.png")
-ICON_RAID_DATA = _load_icon_data("icon-raid.png")
-ICON_HDD_DATA = _load_icon_data("icon-hdd.png")
-ICON_STORAGE_DATA = _load_icon_data("icon-storage.png")
-ICON_FAN_DATA = _load_icon_data("icon-fan.png")
-ICON_DOCKER_DATA = _load_icon_data("icon-docker.png")
-ICON_AUTOMATION_DATA = _load_icon_data("icon-automation.png")
-ICON_MANUAL_DATA = _load_icon_data("icon-manual.png")
-ICON_ABOUT_DATA = _load_icon_data("icon-about.png")
 
 def _fnos_version():
     """读取 fnOS 系统版本。优先从 /usr/trim/etc/version 读取；取不到再回退 os-release。"""
@@ -495,6 +469,7 @@ def _ttl_cache(ttl):
             val = fn(*a, **k)
             store[key] = (now, val)
             return val
+        wrapper.cache_clear = store.clear   # 允许在「写操作成功后」主动失效，避免读到旧值
         return wrapper
     return deco
 
@@ -712,6 +687,19 @@ def _fcs_has_board_config():
         return isinstance(_fans, list) and len(_fans) > 0
     except Exception:
         return False
+
+_FCS_BOARD_CFG_CACHE = {"t": 0.0, "v": None}
+
+
+def _fcs_board_cfg_cached():
+    """_fcs_has_board_config 的 60s 缓存版：/api/fan/status 被 1s 轮询，避免重复读 /boot/board.json。"""
+    now = time.time()
+    c = _FCS_BOARD_CFG_CACHE
+    if c["v"] is None or (now - c["t"]) > 60:
+        c["v"] = bool(_fcs_has_board_config())
+        c["t"] = now
+    return c["v"]
+
 
 def _fcs_running_cached():
     """廉价的 FCS 在跑状态：读 15s TTL 缓存，绝不每 tick 跑 systemctl is-active。
@@ -1324,6 +1312,7 @@ def fan_smooth_loop():
             _need_combo = any((r.get("source") or "").startswith("combo") for r in rules.values())
             need_cpu = any((r.get("source") == "cpu") for r in rules.values()) or _need_combo
             need_mb = any((r.get("source") == "mb") for r in rules.values()) or _need_combo
+            need_raid = any((r.get("source") == "raid") for r in rules.values()) or _need_combo
             disk_all_idle, disk_T, disk_has = (False, None, False)
             if need_disk:
                 _dt_eff = dt
@@ -1335,6 +1324,9 @@ def fan_smooth_loop():
                 disk_all_idle, disk_T, disk_has = _disk_source_state(_dt_eff)
             cpu_T = _fan_read_sys_temp("cpu") if need_cpu else None
             mb_T = _fan_read_sys_temp("mb") if need_mb else None
+            # 阵列卡芯片温度（v2.3.0）：读快照里的 raid_temp（由采集线程经 get_raid_card 填）。
+            # 没装卡 / 卡被摘掉 / 采集失败时为 None —— 该风扇本轮交还自动，不会误判成 0。
+            raid_T = _fan_read_sys_temp("raid") if need_raid else None
             for (hwmon, idx) in all_fans:
                 rule = rules.get("%s::%d" % (hwmon, idx))
                 if not rule:
@@ -1347,7 +1339,7 @@ def fan_smooth_loop():
                 else:
                     # cpu / mb / combo_max:cpu,mb / combo_avg:cpu,mb 统一经 _resolve_rule_temp 解析。
                     # 任一子源读数缺失则 T=None，由 _fan_rule_decision 保守交还自动（与旧逻辑一致）。
-                    T, all_idle = _resolve_rule_temp(src, cpu_T, mb_T, disk_T, disk_all_idle, disk_has)
+                    T, all_idle = _resolve_rule_temp(src, cpu_T, mb_T, disk_T, disk_all_idle, disk_has, raid_T)
                 key = (hwmon, idx)
                 # #4 修复（huhaibo820）：用户显式手动调速（FAN_TARGETS 该风扇 mode=manual）
                 # 时，手动优先于温度联动——否则一旦设了温度联控速，手动滑块就完全失效。
@@ -1489,10 +1481,17 @@ def _save_fan_sys_temp(cfg):
 
 def _fan_read_sys_temp(source):
     """温度源单值（统一快照读取，~2s 刷新；控速线程/状态接口不再各自跑 sensors -j）。
-    source='cpu' → CPU 封装温度（coretemp 核心 max / AMD Tdie，见 _parse_cpu_temp）；
-    source='mb'  → 主板温度（SYSTIN 优先，见 _parse_mb_temp）。读不到返回 None。"""
+    source='cpu'  → CPU 封装温度（coretemp 核心 max / AMD Tdie，见 _parse_cpu_temp）；
+    source='mb'   → 主板温度（SYSTIN 优先，见 _parse_mb_temp）；
+    source='raid' → 阵列卡芯片温度（storcli 读；没装卡 / 卡被摘掉时返回 None）。
+    读不到返回 None（调用方按「无值」处理，不会误判成 0）。"""
+    src = (source or "cpu").lower()
     snap = _temp_snapshot_read()
-    return snap.get("mb_temp") if (source or "cpu").lower() == "mb" else snap.get("cpu_temp")
+    if src == "mb":
+        return snap.get("mb_temp")
+    if src == "raid":
+        return snap.get("raid_temp")
+    return snap.get("cpu_temp")
 
 def _fan_curve_pwm(T, cfg, default_min, default_max):
     """自定义温度→PWM 曲线（分段线性）。cfg["curve"]=[[temp,pwm],...]（已按温度升序）。
@@ -2053,7 +2052,7 @@ def _fan_disk_temp_decision(states, cfg):
 #   - fan_rules.json 存「逐风扇覆盖」：某台风扇一旦单独设置，即以它为准，压过全局默认。
 #   - 硬盘温度源共享 disk_temp 的「监控硬盘 + 休眠/空闲停转」设置（同阵列同温源）。
 FAN_RULES_FILE = os.path.join(_config_dir(), "fan_rules.json")
-_FAN_RULE_SOURCES = ("disk", "cpu", "mb")
+_FAN_RULE_SOURCES = ("disk", "cpu", "mb", "raid")
 
 def _load_fan_rules_raw():
     """读取用户保存的逐风扇覆盖规则；无有效文件返回 None（表示未自定义、沿用全局默认）。"""
@@ -2220,16 +2219,18 @@ def _fan_rule_decision(key, rule, T, all_idle=False):
     _FAN_ENGAGED[key] = True
     return ("control", _fan_rule_pwm(T, rule))
 
-def _resolve_rule_temp(src, cpu_T, mb_T, disk_T, disk_all_idle, disk_has):
+def _resolve_rule_temp(src, cpu_T, mb_T, disk_T, disk_all_idle, disk_has, raid_T=None):
     """按温度源解析出 (T, all_idle)，供 _fan_rule_decision 使用。
     src 支持：
       disk                → 硬盘温度（disk_has 为假时返回 (None, False) 表示本轮跳过）
       cpu / mb            → CPU / 主板温度
+      raid                → 阵列卡芯片温度（v2.3.0 新增；读不到返回 (None, False)）
       combo_max:cpu,mb    → 取 CPU 与主板温度的【较大值】
       combo_avg:cpu,mb    → 取 CPU 与主板温度的【平均值】
     子项可递归（combo 里还能套 sensor: 等）。任一子源不可用时忽略该子源；
     全部不可用时返回 (None, False)。移植自 guan-ry/FanControlServerApp 的 resolveSourceTemp。
-    彻底解决「选了主板 CPU 就没了」的单选互斥痛点（论坛 huhaibo820 反馈）。"""
+    彻底解决「选了主板 CPU 就没了」的单选互斥痛点（论坛 huhaibo820 反馈）。
+    raid_T 用默认参数（而非并进前 6 个位置参数）是为了不动既有调用点签名。"""
     src = (src or "disk").strip()
     if src == "disk":
         return (disk_T if disk_has else None, disk_all_idle)
@@ -2237,6 +2238,8 @@ def _resolve_rule_temp(src, cpu_T, mb_T, disk_T, disk_all_idle, disk_has):
         return (cpu_T, False)
     if src == "mb":
         return (mb_T, False)
+    if src == "raid":
+        return (raid_T, False)
     if src.startswith("combo_avg:") or src.startswith("combo_max:"):
         parts = [s.strip() for s in src.split(":", 1)[1].split(",") if s.strip()]
         vals = []
@@ -2247,8 +2250,10 @@ def _resolve_rule_temp(src, cpu_T, mb_T, disk_T, disk_all_idle, disk_has):
                 vals.append(mb_T)
             elif p == "disk":
                 vals.append(disk_T if disk_has else None)
+            elif p == "raid":
+                vals.append(raid_T)
             else:
-                t, _ = _resolve_rule_temp(p, cpu_T, mb_T, disk_T, disk_all_idle, disk_has)
+                t, _ = _resolve_rule_temp(p, cpu_T, mb_T, disk_T, disk_all_idle, disk_has, raid_T)
                 vals.append(t)
         vals = [v for v in vals if isinstance(v, (int, float))]
         if not vals:
@@ -2553,6 +2558,104 @@ def _probe_locate_support(rc_raw=""):
     return False
 
 
+def _pd_health_from_storcli(out):
+    """从 `storcli /c0/eN/sN show all` 文本里取「阵列卡侧」健康字段（v2.3.0 3.4）。
+
+    这条命令 get_raid_card 本来就要为每块盘跑一次（取序列号 / 型号），从这里顺手
+    解析健康字段 **不增加任何 storcli 调用**。纯只读，绝不写盘。
+    拿不到的字段不塞进结果，调用方按「有没有」决定文案（不猜、不造假数据）。
+    """
+    d = {}
+    if not out:
+        return d
+    for key, pat in (
+        ("media_err", r"Media Error Count\s*=\s*(\d+)"),
+        ("other_err", r"Other Error Count\s*=\s*(\d+)"),
+        ("bbm_err", r"BBM Error Count\s*=\s*(\d+)"),
+        ("pred_fail", r"Predictive Failure Count\s*=\s*(\d+)"),
+        ("shield", r"Shield Counter\s*=\s*(\d+)"),
+    ):
+        m = re.search(pat, out)
+        if m:
+            try:
+                d[key] = int(m.group(1))
+            except Exception:
+                pass
+    m = re.search(r"Drive Temperature\s*=\s*(-?\d+)\s*C", out)
+    if m:
+        d["temp"] = int(m.group(1))
+    m = re.search(r"S\.M\.A\.R\.T alert flagged by drive\s*=\s*(Yes|No)", out, re.I)
+    if m:
+        d["smart_alert"] = (m.group(1).strip().lower() == "yes")
+    # SSD 寿命：不同固件字段名不一样，两种都认（"用掉的比例" / "剩余可写比例"）
+    m = re.search(r"Percentage Endurance Utilized\s*=\s*([\d.]+)", out)
+    if m:
+        try:
+            d["endurance_used"] = int(float(m.group(1)))
+        except Exception:
+            pass
+    m = re.search(r"Percentage (?:Remaining )?Rated Write Endurance\s*(?:Remaining)?\s*=\s*([\d.]+)", out)
+    if m and "endurance_used" not in d:
+        try:
+            d["endurance_used"] = max(0, 100 - int(float(m.group(1))))
+        except Exception:
+            pass
+    m = re.search(r"\bWWN\s*=\s*(\S+)", out)
+    if m:
+        d["wwn"] = m.group(1).strip()
+    return d
+
+
+def _parse_pd_show_all(out):
+    """解析 `storcli /c0/eall/sall show all` → {("252","0"): {...}}（v2.3.0）。
+
+    这条命令是**每块盘一段的键值对格式**（`SN = ...` / `Model Number = ...` /
+    `Drive Temperature =  38C` / `Raw size = 6.366 TB`），**不是列对齐表格** ——
+    所以它天然不受 PD LIST 那种「Size 恒占 2 token、SeSz 占 1 或 2 token」造成的
+    **列偏移**影响。修的就是用户报的「7 块盘型号显示成 U/D」：老代码写死
+    `parts[12]` 取型号，在 SeSz="512B"（只占 1 token）的盘上整行左移一格，
+    取到的其实是 Sp 列；而 158 测试机的盘 SeSz="4 KB"（2 token）恰好抵消才蒙对。
+
+    同时它**一条命令给全部盘**，替代原先「逐盘各跑一次 show all」：
+    7 盘从最坏 ~105s（7×15s 超时）降到 ~0.3s，采集线程不再被堵。
+
+    返回 {("252","0"): {"sn","model","temp","wwn","fw","raw_size","state","dg","health"}}
+    拿不到的字段一律不塞进结果（调用方按「有没有」决定文案，不猜、不造假数据）。
+    """
+    res = {}
+    if not out:
+        return res
+    # 段头形如 `Drive /c0/e252/s0 :`；其后还有 `Drive /c0/e252/s0 - Detailed Information :`
+    # 等同前缀段，一并归入同一块（split 后每 4 个一组：c、e、s、body）
+    chunks = re.split(r"^Drive /c(\d+)/e(\d+)/s(\d+)\s*:", out, flags=re.M)
+    for i in range(1, len(chunks) - 3, 4):
+        eid, slot, body = chunks[i + 1], chunks[i + 2], chunks[i + 3]
+        rec = res.setdefault((eid, slot), {})
+        for key, pat in (
+            ("sn", r"^SN\s*=\s*(\S+)"),
+            ("model", r"^Model Number\s*=\s*(.+?)\s*$"),
+            ("wwn", r"^WWN\s*=\s*(\S+)"),
+            ("fw", r"^Firmware Revision\s*=\s*(\S+)"),
+            ("raw_size", r"^Raw size\s*=\s*([\d.]+\s*\w+)"),
+        ):
+            m = re.search(pat, body, re.M)
+            if m and m.group(1).strip() not in ("", "N/A", "NA", "-"):
+                rec[key] = m.group(1).strip()
+        # 健康字段（含 Drive Temperature）复用单盘解析 —— 正文就是同一份输出，零额外命令
+        h = _pd_health_from_storcli(body)
+        if h:
+            rec.setdefault("health", {}).update(h)
+            if h.get("temp") is not None:
+                rec["temp"] = h["temp"]
+        # State / DG：从该盘自己的 PD LIST 小表行取。前 4 列位置固定
+        # （EID:Slt / DID / State / DG，Size 在 DG 之后），故列偏移不波及这里。
+        m = re.search(r"^\s*(\d+:\d+)\s+\d+\s+(\S+)\s+(\S+)\s", body, re.M)
+        if m:
+            rec["state"] = m.group(2)
+            rec["dg"] = m.group(3)
+    return res
+
+
 @_ttl_cache(60)
 def get_raid_card():
     data = {"ok": False, "mode": "none", "model": "未检测到",
@@ -2587,9 +2690,16 @@ def get_raid_card():
             # LSI-9300 等 HBA 卡 /c0 show 不含温度，必须单独跑 /c0 show temperature
             temp = _parse_roc_temp(sudo_cmd([STORCLI, "/c0", "show", "temperature"], 10))
         data["controller_temp"] = temp
-        # 物理盘列表（用 split 解析表格行，更健壮）
+        # 物理盘列表。**一条 `/c0/eall/sall show all` 拿全部盘**（v2.3.0）：
+        #  ① 型号/序列号/温度走键值对，天然不受 PD LIST 的列偏移影响（用户报的 7 块盘
+        #     型号显示成 U/D 就是因为老代码写死 `parts[12]`，而 Size 恒占 2 token、
+        #     SeSz 只占 1（512B）或 2（4 KB）token，右侧整体错位一格）；
+        #  ② 顺带拿到每块盘的 Drive Temperature，不再依赖逐盘调用；
+        #  ③ 7 块盘从最坏 ~105s（7 × 15s 超时）降到 ~0.3s，温度采集线程不再被堵死
+        #     （这正是「配置检测页能看到卡温 55°C、温度页/风扇页却看不到」的根因）。
         # 格式: 252:0 21 JBOD - 6.366 TB SAS HDD N N 4 KB ST14000NM0001 U -
         rpm_map = _smart_rpm_by_serial()
+        pd_map = _parse_pd_show_all(sudo_cmd([STORCLI, "/c0/eall/sall", "show", "all"], 30))
         drives = []
         seen_slots = set()
         for line in out.splitlines():
@@ -2598,29 +2708,39 @@ def get_raid_card():
                 if parts[0] in seen_slots:
                     continue
                 seen_slots.add(parts[0])
-                # 先从 /c0 show 行取 model（标准 MegaRAID 格式）
-                model = parts[12] if len(parts) > 12 else ""
-                # 用每张盘的序列号匹配 smartctl 真实转速（storcli 不提供 RPM）
                 e, s = parts[0].split(":")
-                sn = ""
-                inquiry_model = ""
-                try:
-                    sn_out = sudo_cmd([STORCLI, "/c0", "/e" + str(e), "/s" + str(s), "show", "all"], 15)
-                    sn_m = re.search(r"SN\s*=\s*(\S+)", sn_out)
-                    if sn_m:
-                        sn = sn_m.group(1).strip()
-                    # 某些卡/扩展器下 /c0 show 的 model 列显示 "-"，从 show all 取更准的型号兜底
-                    m = re.search(r"Model Number\s*=\s*(.+)", sn_out) or re.search(r"Inquiry Data\s*=\s*(.+)", sn_out)
-                    if m:
-                        inquiry_model = " ".join(m.group(1).strip().split())
-                except Exception:
-                    pass
+                pd = pd_map.get((e, s)) or {}
+                sn = pd.get("sn", "")
+                inquiry_model = pd.get("model", "")
+                pd_health = pd.get("health") or {}
+                # 兜底：`/c0/eall/sall show all` 在个别老固件/卡上不可用时，退回逐盘调用
+                if not pd:
+                    try:
+                        sn_out = sudo_cmd([STORCLI, "/c0", "/e" + str(e), "/s" + str(s), "show", "all"], 15)
+                        sn_m = re.search(r"SN\s*=\s*(\S+)", sn_out)
+                        if sn_m:
+                            sn = sn_m.group(1).strip()
+                        # 同一份输出里顺带取健康字段（v2.3.0 3.4 单盘健康分级），不额外跑命令
+                        pd_health = _pd_health_from_storcli(sn_out)
+                        m = re.search(r"Model Number\s*=\s*(.+)", sn_out) or re.search(r"Inquiry Data\s*=\s*(.+)", sn_out)
+                        if m:
+                            inquiry_model = " ".join(m.group(1).strip().split())
+                    except Exception:
+                        pass
+                # 表格行的**右侧三列（Model / Sp / Type）靠在行尾、位置恒定**，而左侧
+                # Size(2 token) 与 SeSz(1 或 2 token) 会随固件变化 —— 所以型号从右往左取，
+                # 不用固定下标（老代码的坑）。末列只可能是这几种类型标记，用它做安全性校验。
+                tbl_model = ""
+                sp = parts[-2] if len(parts) >= 2 else ""
+                if len(parts) >= 3 and parts[-1] in ("-", "SSD", "HDD", "SAS", "SATA", "SSD "):
+                    tbl_model = parts[-3]
                 # 表格列的型号常丢厂商前缀（如 SATA 盘只给 SV300S37A/120G，KINGSTON 在上一列），
                 # 直接用该型号做品牌识别会被误判（如 SV 开头误认三星）。
                 # 故品牌识别优先用含厂商前缀的完整型号（Model Number / Inquiry Data）。
-                brand_model = _resolve_brand_model(model, inquiry_model)
+                brand_model = _resolve_brand_model(tbl_model, inquiry_model)
                 brand, feature = disk_brand_and_feature(brand_model)
                 # 展示用 model：表格列已够用则保留（与 HDD 显示风格一致），仅在表格缺失时兜底用完整型号
+                model = tbl_model
                 if (not model or model == "-") and inquiry_model and inquiry_model != "-":
                     model = inquiry_model
                 rpm = rpm_map.get(sn.upper(), "")
@@ -2639,9 +2759,11 @@ def get_raid_card():
                     "slot": parts[0], "did": parts[1], "state": parts[2],
                     "dg": parts[3], "size": size_dec, "size_note": size_note,
                     "intf": parts[6], "media": parts[7],
-                    "model": model, "sp": parts[13] if len(parts) > 13 else "",
+                    "model": model, "sp": sp,
                     "sn": sn, "rpm": rpm,
                     "brand": brand, "feature": feature,
+                    "temp": pd.get("temp"),           # v2.3.0：每块盘的当前温度（show all 键值对）
+                    "pd_health": pd_health,          # v2.3.0 3.4：阵列卡侧健康字段（分级用）
                 })
         data["drives"] = drives
         # 热备盘（全局 GHS / 专用 DHS）
@@ -2746,14 +2868,22 @@ def parse_sas_smart(text):
     d["pending"] = int(m.group(1)) if m else 0
     m = re.search(r"Non-medium error count:\s*(\d+)", text)
     d["non_medium_errors"] = int(m.group(1)) if m else 0
-    # 错误计数表
-    rm = re.search(r"read:.*?(\d+)\s*$", text, re.M)
-    wm = re.search(r"write:.*?(\d+)\s*$", text, re.M)
-    # 更稳妥地抓 uncorrected
+    # 错误计数表（转 int：分级函数的 _int 只认整数，字符串会被静默丢掉）
     read_line = re.search(r"read:.*?(\d+)\s+(\d+)$", text, re.M)
-    d["read_errors"] = read_line.group(2) if read_line else "0"
+    d["read_errors"] = int(read_line.group(2)) if read_line else 0
     write_line = re.search(r"write:.*?(\d+)\s+(\d+)$", text, re.M)
-    d["write_errors"] = write_line.group(2) if write_line else "0"
+    d["write_errors"] = int(write_line.group(2)) if write_line else 0
+    # 累计读写量：Error counter log 的 "Gigabytes processed" 列（10^9 字节，盘固件终身累计）。
+    # SAS 盘只在这一处报总读写（已与希捷私有日志双通道核对一致）；老 SATA 机械盘固件不记，天然拿不到。
+    for key, tag in (("data_units_read", "read"), ("data_units_written", "write")):
+        m = re.search(rf"^{tag}:(?:\s+\d+){{5}}\s+(\d+(?:\.\d+)?)\s+\d+\s*$", text, re.M)
+        if m:
+            try:
+                gb = float(m.group(1))
+                # 与 ATA 241/242 同格式："精确值 [人话值]"，前端 dataUnitShort 取中括号
+                d[key] = f"{gb:,.0f} GB [{gb/1000:.1f} TB]"
+            except ValueError:
+                pass
     return d
 
 def parse_ata_smart(text):
@@ -2795,6 +2925,33 @@ def parse_ata_smart(text):
             elif aid == "1":
                 d["raw_read_errors"] = raw_str.strip()
     d["attrs"] = attrs
+
+    # 总读写量（SMART 241/242，部分盘才提供；命名随厂商：Lifetime_Writes_GiB / Total_LBAs_Written 等）
+    # 统一转成与 NVMe 一致的 "原始值 [人话容量]" 格式；盘不提供就是 None，前端不显示。
+    def _fmt_rw(raw, kind):
+        try:
+            n = int(str(raw).replace(",", "").strip())
+        except Exception:
+            return None
+        if n <= 0:
+            return None
+        if kind == "gib":  # raw 值即 GiB（金士顿等盘的 Lifetime_Writes/Reads_GiB）
+            tb = n * (1024 ** 3) / 1e12
+        else:  # raw 值是 LBA 数（Total_LBAs_Written/Read，512B/扇区）
+            tb = n * 512 / 1e12
+        m = f"{n:,}"
+        return f"{m} [{tb:.1f} TB]" if tb >= 0.1 else f"{m} [{tb * 1000:.0f} GB]"
+
+    for aid, key in (("241", "data_units_written"), ("242", "data_units_read")):
+        if d.get(key):
+            continue
+        a = attrs.get(aid)
+        if not a:
+            continue
+        name = (a.get("name") or "")
+        if "Writes" in name or "Reads" in name or "Written" in name:
+            kind = "gib" if "GiB" in name else "lba"
+            d[key] = _fmt_rw(a.get("raw"), kind)
     return d
 
 def parse_nvme_smart(text):
@@ -3549,6 +3706,110 @@ def _clean_mfr(s):
     return s
 
 
+def _real_serial(s: str) -> str:
+    """dmidecode 的序列号常有占位假值（00000000 / Not Specified / To Be Filled By O.E.M.），
+    这类不算真序列号，返回空串让前端显示「不适用」。"""
+    s = (s or "").strip()
+    if not s:
+        return ""
+    if s.lower() in ("00000000", "not specified", "none", "n/a", "unknown",
+                     "to be filled by o.e.m.", "填充"):
+        return ""
+    return s
+
+
+def _spd_mfg_date_and_serial(dev_path: str):
+    """从 SPD EEPROM 原始字节解析生产日期(字节 120-121)与序列号(122-125)。
+    返回 (mfg_date, serial)；取不到或字节为非法填充(0x00/0xFF/0xC0)则返回 ('', '')。
+    廉价/工控条常不写这两项（158 这根 Galaxy 8G DDR4-2133 即如此，字节是 0xC0 填充），
+    属正常——前端据此显示「不适用（该内存条未写入）」。与 decode-dimms 同源（读同一份 eeprom），
+    decode-dimms 4.3 对这些条也选择不显示这两项。"""
+    if not dev_path:
+        return "", ""
+    base = dev_path.rstrip("/").split("/")[-1]
+    cands = [dev_path] if dev_path.endswith("eeprom") else []
+    cands.append(f"/sys/bus/i2c/devices/{base}/eeprom")
+    dev = next((c for c in cands if os.path.exists(c)), None)
+    if not dev:
+        return "", ""
+    try:
+        with open(dev, "rb") as f:
+            raw = f.read(320)
+    except Exception:
+        return "", ""
+    def bcd(b):
+        return (b >> 4) * 10 + (b & 0xF)
+    # 生产日期：DDR3/DDR4 字节 120=年(BCD，偏移 2000)、121=周(BCD)
+    mfg = ""
+    if len(raw) >= 122:
+        yb, wb = raw[120], raw[121]
+        if yb not in (0x00, 0xFF, 0xC0) and wb not in (0x00, 0xFF, 0xC0):
+            y, w = bcd(yb), bcd(wb)
+            if 8 <= y <= 99 and 1 <= w <= 53:
+                mfg = "20%02d 年第 %d 周" % (y, w)
+    # 序列号：字节 122-125 为 ASCII（常见 4 字节，可能带尾随空格）
+    ser = ""
+    if len(raw) >= 126:
+        sb = raw[122:126]
+        if sb not in (b"\x00\x00\x00\x00", b"\xff\xff\xff\xff", b"\xc0\xc0\x00\xc2"):
+            txt = "".join(chr(b) if 32 <= b < 127 else "" for b in sb).strip()
+            if txt:
+                ser = txt
+    return mfg, ser
+
+
+def _mem_ecc_flag(total_width):
+    """由 Total Width 推断是否带 ECC（72/80/144/256 bit 含校验位即 ECC；64/32 为非 ECC）。"""
+    tw = (total_width or "").strip()
+    if not tw:
+        return ""
+    if re.search(r"\b(72|80|144|256)\b", tw):
+        return "ECC"
+    if re.search(r"\b(64|32)\b", tw):
+        return "非 ECC"
+    return ""
+
+
+def get_memory_edac():
+    """读取 EDAC 子系统内存错误计数（ce=可纠正 / ue=不可纠正）。
+    消费级主板通常未启用 EDAC（/sys/devices/system/edac/mc 不存在），
+    此时 available=False，前端显「本机未启用 EDAC（消费级主板常见）」。"""
+    base = "/sys/devices/system/edac/mc"
+    if not os.path.isdir(base):
+        return {"available": False, "ce": 0, "ue": 0, "controllers": []}
+    ce = ue = 0
+    controllers = []
+    try:
+        for mc in sorted(os.listdir(base)):
+            mcp = os.path.join(base, mc)
+
+            def _rd(p):
+                try:
+                    with open(p) as f:
+                        return f.read().strip()
+                except Exception:
+                    return ""
+
+            mc_ce = _rd(os.path.join(mcp, "ce_count"))
+            mc_ue = _rd(os.path.join(mcp, "ue_count"))
+            if mc_ce != "" or mc_ue != "":
+                c = int(mc_ce or 0)
+                u = int(mc_ue or 0)
+            else:
+                c = u = 0
+                for cs in os.listdir(mcp):
+                    if cs.startswith("csrow"):
+                        csp = os.path.join(mcp, cs)
+                        c += int(_rd(os.path.join(csp, "ce_count")) or 0)
+                        u += int(_rd(os.path.join(csp, "ue_count")) or 0)
+            ce += c
+            ue += u
+            controllers.append({"name": mc, "ce": c, "ue": u})
+    except Exception:
+        pass
+    return {"available": True, "ce": ce, "ue": ue, "controllers": controllers}
+
+
 def get_memory_from_decodedimms():
     """用 decode-dimms 直读 SPD（JEP106 解码），拿到权威的模组厂/颗粒厂/型号/频率。
     仅在 i2c-tools 已安装且 SPD 可读时返回非空列表。"""
@@ -3568,6 +3829,9 @@ def get_memory_from_decodedimms():
         if s.startswith("Guessing DIMM") or s.startswith("Decoding EEPROM") or s.startswith("Memory Serial Presence Detect"):
             flush(cur)
             cur = {}
+            if s.startswith("Decoding EEPROM"):
+                mm = re.match(r"Decoding EEPROM:\s*(\S+)", s)
+                cur["_dev"] = mm.group(1) if mm else ""
             continue
         # decode-dimms 用「字段名<多个空格>值」的固定列格式，按 2+ 空格切分
         parts = re.split(r"\s{2,}", s, 1)
@@ -3597,6 +3861,12 @@ def get_memory_from_decodedimms():
         elif k == "Part Number":
             cur["part"] = "" if v.lower() in ("undefined", "none", "-") else v
     flush(cur)
+    # 原始 SPD 补生产日期 / 序列号（decode-dimms 对空字段不输出，这里直接读 eeprom 字节）
+    for m in mods:
+        dev = m.pop("_dev", "")
+        mfg, ser = _spd_mfg_date_and_serial(dev)
+        m["manufacture_date"] = mfg
+        m["spd_serial"] = ser
     # 编号 + 品牌中文
     for i, m in enumerate(mods, 1):
         m["locator"] = f"DIMM{i}"
@@ -3626,7 +3896,7 @@ def get_memory_modules():
     spd_mods = get_memory_from_decodedimms()
     spd_by_idx = {i: m for i, m in enumerate(spd_mods)}
 
-    # 2) dmidecode -t 17 枚举全部物理插槽（含空）
+    # 2) dmidecode -t 17 枚举全部物理插槽（含空），尽量抓全可用字段
     out = sudo_cmd([DMIDECODE, "-t", "17"], 12)
     slots_raw = []
     cur = {}
@@ -3659,8 +3929,36 @@ def get_memory_modules():
             cur["speed"] = v
         elif k == "Configured Memory Speed":
             cur["cfg_speed"] = v
+        elif k == "Rank":
+            cur["rank"] = v
+        elif k == "Total Width":
+            cur["total_width"] = v
+        elif k == "Data Width":
+            cur["data_width"] = v
+        elif k == "Configured Voltage":
+            cur["voltage"] = v
+        elif k == "Form Factor":
+            cur["form_factor"] = v
+        elif k == "Type Detail":
+            cur["type_detail"] = v
     if cur:
         slots_raw.append(cur)
+
+    # 2.5) dmidecode -t 16 板级内存阵列（最大支持容量 / 插槽总数 / ECC 类型）
+    board_out = sudo_cmd([DMIDECODE, "-t", "16"], 12)
+    board_mem = {}
+    for line in board_out.splitlines():
+        s = line.strip()
+        if ":" not in s:
+            continue
+        k, v = s.split(":", 1)
+        k, v = k.strip(), v.strip()
+        if k == "Maximum Capacity":
+            board_mem["max_capacity"] = v
+        elif k == "Number Of Devices":
+            board_mem["num_devices"] = v
+        elif k == "Error Correction Type":
+            board_mem["ecc_type"] = "" if v.lower() in ("none", "not specified") else v
 
     # 3) 组装：空槽标记 installed=False；已安装槽优先用 SPD 品牌
     modules = []
@@ -3686,7 +3984,16 @@ def get_memory_modules():
                     "size_gb": mgb,
                     "type": (spd.get("type") if spd else slot.get("type", "")),
                     "speed": (spd.get("speed") if spd else (slot.get("cfg_speed") or slot.get("speed", ""))),
-                    "serial": slot.get("serial", ""),
+                    "cfg_speed": slot.get("cfg_speed", ""),
+                    "rank": slot.get("rank", ""),
+                    "total_width": slot.get("total_width", ""),
+                    "data_width": slot.get("data_width", ""),
+                    "voltage": slot.get("voltage", ""),
+                    "form_factor": slot.get("form_factor", ""),
+                    "type_detail": slot.get("type_detail", ""),
+                    "ecc": _mem_ecc_flag(slot.get("total_width", "")),
+                    "manufacture_date": (spd.get("manufacture_date") if spd else ""),
+                    "serial": _real_serial(slot.get("serial", "")) or (spd.get("spd_serial") if spd else ""),
                     "source": "spd" if spd else "dmidecode",
                 })
             else:
@@ -3720,7 +4027,16 @@ def get_memory_modules():
                 "size_gb": mgb,
                 "type": m.get("type", ""),
                 "speed": m.get("speed", ""),
-                "serial": "",
+                "cfg_speed": "",
+                "rank": "",
+                "total_width": "",
+                "data_width": "",
+                "voltage": "",
+                "form_factor": "",
+                "type_detail": "",
+                "ecc": "",
+                "manufacture_date": m.get("manufacture_date", ""),
+                "serial": _real_serial(m.get("spd_serial", "")),
                 "source": "spd",
             })
 
@@ -3731,6 +4047,7 @@ def get_memory_modules():
     for m in modules:
         if m["brand"]:
             brands[m["brand"]] = brands.get(m["brand"], 0) + 1
+    edac = get_memory_edac()
     return {
         "modules": modules,
         "total_gb": total_gb,
@@ -3738,6 +4055,10 @@ def get_memory_modules():
         "installed": installed_n,
         "empty": empty_n,
         "brand_summary": ", ".join(f"{k}×{v}" for k, v in brands.items()) or "未知",
+        "max_capacity": board_mem.get("max_capacity", ""),
+        "num_devices": board_mem.get("num_devices", ""),
+        "ecc_type": board_mem.get("ecc_type", ""),
+        "edac": edac,
     }
 
 
@@ -3870,7 +4191,8 @@ def get_network_nics():
     def _nic_hw_info(name):
         # 补充单张网卡的硬件信息：MTU / 双工 / 驱动 / 总线 / 厂商型号。
         # 全部失败也不影响其它采集（OVS 桥等虚拟口拿不到就留空）。
-        info = {"mtu": "", "duplex": "", "driver": "", "bus_info": "", "model": ""}
+        info = {"mtu": "", "duplex": "", "driver": "", "bus_info": "", "model": "",
+                "max_speed": "", "wol_support": "", "wol_current": "", "wol_supported": None, "wol_enabled": None}
         mtu = read_file(f"/sys/class/net/{name}/mtu").strip()
         if mtu.isdigit():
             info["mtu"] = mtu
@@ -3896,6 +4218,37 @@ def get_network_nics():
                     info["model"] = mh.group(1).strip()
             except Exception:
                 pass
+        # WOL（网络唤醒）只读检测（v2.3.0 3.2）：解析 `ethtool <iface>` 的两行——
+        #   Supports Wake-on: 网卡硬件支持哪些唤醒模式（d=仅禁用，即不支持）
+        #   Wake-on:          当前生效的唤醒模式（g=魔法包，最常用；d=已禁用）
+        # 纯只读，绝不做 ethtool -s 修改（改 WOL 属系统管理操作）。
+        try:
+            _wo = run_cmd(["ethtool", name], 3)
+            _sup = ""
+            _cur = ""
+            for _ln in _wo.splitlines():
+                _t = _ln.strip()
+                if _t.startswith("Supports Wake-on:"):
+                    _sup = _t.split(":", 1)[1].strip()
+                elif _t.startswith("Wake-on:"):
+                    _cur = _t.split(":", 1)[1].strip()
+            if _sup or _cur:
+                info["wol_support"] = _sup
+                info["wol_current"] = _cur
+                # 除 'd'（禁用）外还有 p/u/m/b/g/a 任一模式 = 硬件支持 WOL
+                info["wol_supported"] = any(ch in _sup for ch in "pumbga")
+                info["wol_enabled"] = bool(_cur) and any(ch in _cur for ch in "pumbga")
+            # 网卡支持的最大链路速率（Mbps）：从 ethtool 的 Supported link modes
+            # 解析形如 2500baseT 的数字（单位 Mbps）取最大。用于前端「未跑满」提示：
+            # I226-V 支持 2500 但当前只协商到 1000/100 时，提示瓶颈在对端/网线。
+            try:
+                _mm = re.findall(r"(\d+)base[TSRFML]", _wo)
+                if _mm:
+                    info["max_speed"] = str(max(int(x) for x in _mm))
+            except Exception:
+                pass
+        except Exception:
+            pass
         return info
 
     # 网卡（只显示物理网卡 / bond / 桥接端口，过滤 docker/虚拟网桥/容器/虚拟机等噪音接口）
@@ -3991,9 +4344,13 @@ def get_network_nics():
                 m["rx_rate"] = n.get("rx_rate", 0.0)
             if n.get("tx_rate") is not None:
                 m["tx_rate"] = n.get("tx_rate", 0.0)
-            for k in ("ipv6", "mtu", "duplex", "driver", "bus_info", "model"):
+            for k in ("ipv6", "mtu", "duplex", "driver", "bus_info", "model",
+                      "wol_support", "wol_current", "max_speed"):
                 if not m.get(k) and n.get(k):
                     m[k] = n[k]
+            for bk in ("wol_supported", "wol_enabled"):
+                if m.get(bk) is None and n.get(bk) is not None:
+                    m[bk] = n[bk]
         # 显示名优先用 OVS 桥（与 fnOS 一致：真实 IP 配在桥上），硬件字段仍取自物理口
         ovs = [n for n in grp if n["name"].endswith("-ovs")]
         if ovs:
@@ -4919,6 +5276,112 @@ def get_storage():
         d["topology"] = "\n".join(lines)
     return d
 
+def get_volume_map():
+    """卷映射树（v2.3.0 3.6）：fnOS 卷(根) → md/LVM(枝) → 物理盘(叶)，串成一条链。
+
+    数据源全走现成缓存/快照，不碰 smartctl 全量扫盘：
+      - lsblk -J 一次拿 层级 + 序列号 + 型号（~几十 ms，纯内核查询）
+      - 卷容量/使用率来自 get_storage()（60s 缓存）已解析的 df
+      - md 数组来自 get_storage()（/proc/mdstat）
+      - 阵列卡槽位/状态来自 get_raid_card()（60s 缓存），按序列号对上系统盘符（JBOD 直通也成立）
+      - 温度来自统一温度快照 _TEMP_SNAP（~2s 刷新），无额外采样
+    没进任何卷的盘归入 loose（未入卷），同样可点跳硬盘页。"""
+    # 1) lsblk -J：层级树（含 SERIAL/MODEL，免 smartctl）
+    tree = []
+    try:
+        out = run_cmd(["lsblk", "-J", "-o", "NAME,TYPE,FSTYPE,MOUNTPOINT,SIZE,SERIAL,MODEL"], 10)
+        tree = (json.loads(out).get("blockdevices") or []) if out else []
+    except Exception as e:
+        _debug("volume_map lsblk failed: " + str(e))
+    # 2) 从树里抽链：叶节点(有挂载点)一路记下 盘→分区→md→lvm。
+    #    注意：md 设备的 lsblk type 是 "raid0"/"raid1"… 不是 "md"；多条盘共享同一 md/LVM 时
+    #    lsblk JSON 会把共享子树在每条盘下重复输出，所以按挂载点聚合、盘并集去重。
+    chains = []   # {"mount","md","lvm","disks":[{dev,serial,model}]}
+    def _walk(node, disks, md, lvm):
+        name = (node.get("name") or "").split("/")[-1].strip()
+        ntype = node.get("type") or ""
+        kids = node.get("children") or []
+        if ntype == "disk":
+            disks = [{"dev": name, "serial": (node.get("serial") or "").strip(),
+                      "model": (node.get("model") or "").strip()}]
+        elif (ntype.startswith("raid") or ntype in ("linear", "multipath")
+              or re.match(r"^md\d+$", name)):
+            md = name
+        elif ntype == "lvm":
+            lvm = name
+        if not kids:
+            chains.append({"mount": node.get("mountpoint") or None, "md": md,
+                           "lvm": lvm, "disks": disks})
+            return
+        for ch in kids:
+            _walk(ch, disks, md, lvm)
+    for n in tree:
+        _walk(n, [], None, None)
+    # 3) 物理盘补充信息：温度快照 + 阵列卡槽位（按序列号）
+    temps = _temp_snapshot_read().get("disks") or {}
+    slot_by_sn = {}
+    try:
+        for drv in (get_raid_card().get("drives") or []):
+            sn = (drv.get("sn") or "").strip().upper()
+            if sn:
+                slot_by_sn[sn] = drv
+    except Exception:
+        pass
+    def _pd_node(dinfo):
+        dev = dinfo["dev"]
+        t = temps.get("/dev/" + dev) or temps.get(dev) or {}
+        drv = slot_by_sn.get((dinfo.get("serial") or "").strip().upper()) or {}
+        return {"dev": dev, "serial": dinfo.get("serial") or "",
+                "model": drv.get("model") or dinfo.get("model") or "",
+                "temp": t.get("temp"), "asleep": bool(t.get("asleep")),
+                "slot": drv.get("slot") or "", "pd_state": drv.get("state") or ""}
+    # 4) 按卷组装：mount → lvm → md → 物理盘
+    st = get_storage()
+    arrays = {a.get("name"): a for a in (st.get("raid_arrays") or [])}
+    used_devs = set()
+    vols = []
+    for v in (st.get("volumes") or []):
+        m = v.get("mount") or ""
+        if v.get("cloud") or not m.startswith("/vol"):
+            continue
+        chain_list = [c for c in chains if c.get("mount") == m]
+        pds = []
+        md_info = None
+        lvm_name = None
+        by_dev = {}
+        for chain in chain_list:
+            if not md_info and chain.get("md"):
+                a = arrays.get(chain["md"]) or {}
+                md_info = {"name": chain["md"], "level": a.get("level") or "",
+                           "state": a.get("state") or "", "size": a.get("size") or ""}
+            lvm_name = lvm_name or chain.get("lvm")
+            for x in chain["disks"]:
+                by_dev[x["dev"]] = x   # 共享 md 的多条链并集去重
+        pds = [_pd_node(x) for x in by_dev.values()]
+        if pds:
+            used_devs.update(by_dev.keys())
+        vols.append({"mount": m, "fs": v.get("fstype") or "", "size": v.get("size"),
+                     "used": v.get("used"), "pcent": v.get("pcent"),
+                     "lvm": lvm_name, "md": md_info, "disks": pds})
+    # 5) 未入卷的盘（如独立数据盘/休眠备盘）
+    seen = set()
+    loose = []
+    for c in chains:
+        for x in c["disks"]:
+            if x["dev"] in used_devs or x["dev"] in seen:
+                continue
+            seen.add(x["dev"])
+            loose.append(_pd_node(x))
+    # 兜底：lsblk 树里顶层的盘也要进 loose（没分区没挂载的裸盘不会出现在 chains 里）
+    for n in tree:
+        if (n.get("type") == "disk"):
+            name = (n.get("name") or "").split("/")[-1]
+            if name not in used_devs and name not in seen:
+                seen.add(name)
+                loose.append(_pd_node({"dev": name, "serial": (n.get("serial") or "").strip(),
+                                       "model": (n.get("model") or "").strip()}))
+    return {"volumes": vols, "loose": loose}
+
 def fmt_blocks(blocks):
     # blocks 是 1K 块
     kb = blocks
@@ -5212,51 +5675,622 @@ def get_docker():
     except Exception:
         return {"running": 0, "total": 0, "containers": [], "ok": False}
 
+# ===================== 采集：端口占用 =====================
+def _docker_port_map():
+    """返回 {宿主端口(str): 容器名}：仅用 docker ps 解析端口映射，轻量。"""
+    m = {}
+    try:
+        out = sudo_cmd(["docker", "ps", "-a", "--format", "{{.Names}}|{{.Ports}}"], 8)
+        for line in out.splitlines():
+            line = line.strip()
+            if "|" not in line:
+                continue
+            name, ports = line.split("|", 1)
+            name = name.strip()
+            ports = ports.strip()
+            if not name or not ports:
+                continue
+            for token in ports.split(","):
+                token = token.strip()
+                if not token:
+                    continue
+                mm = re.match(r'(?:\d+\.\d+\.\d+\.\d+:|:\[[^\]]+\]:|^)(\d+)(?:->\d+/(?:tcp|udp))?', token)
+                if mm:
+                    m[mm.group(1)] = name
+    except Exception:
+        pass
+    return m
+
+# 监听地址的「可达范围」三级（比原先「是不是 0.0.0.0」准得多）：
+#   lan    = 局域网里任何机器都能连：绑所有网卡(0.0.0.0/[::]/*)、绑物理网卡 IP、
+#            网段广播(192.168.50.255)、组播(239.255.255.250 SSDP / mDNS)
+#   docker = 只有宿主机与容器网络能连：docker 网桥地址及其网段、网桥广播
+#   lo     = 仅本机：127.0.0.1 / ::1，出了这台 NAS 谁都连不上
+# 判定**不写死任何 IP 段**——读一遍 `ip -o addr show` 把每张网卡归类：
+# 飞牛上 lo=回环、docker0/br-*=容器网桥、其余(含 OVS 桥 eno1-ovs)=物理口。
+# 这样 DHCP 换 IP、新加网桥/网段都能自动跟上。
+_DOCKER_IFACE_RE = re.compile(r'^(docker|br-|veth|virbr|podman|cni|flannel|cali|tunl)', re.I)
+
+def _local_net_zones():
+    """读 ip addr，返回 (addr2zone, nets)：
+
+    - addr2zone = {本机地址(str): "lo"|"docker"|"lan"}
+    - nets      = [(ip_network, zone)] 按前缀长度**降序**（先匹配更具体的网段），
+                  用于判定广播 / 组播 / 网段内其它不在本机地址表里的地址。
+    读不到（命令缺失/解析失败）就返回空表，调用方 _addr_zone 仍有 loopback 硬兜底。
+    """
+    addr2zone, nets = {}, []
+    binp = shutil.which("ip") or "/usr/sbin/ip"
+    out = run_cmd([binp, "-o", "addr", "show"], 8)
+    if not out.strip() and binp != "/sbin/ip":
+        out = run_cmd(["/sbin/ip", "-o", "addr", "show"], 8)
+    for line in out.splitlines():
+        # 形如：2: eno1-ovs    inet 192.168.50.158/24 brd 192.168.50.255 scope global ...
+        # 网卡名可能带对端后缀（veth123@if4），故 @ 后一律丢掉。
+        m = re.match(r'^\d+:\s+([^:\s@]+)(?:@\S+)?\s+(inet6?)\s+(\S+)', line)
+        if not m:
+            continue
+        iface, cidr = m.group(1), m.group(3).split("%", 1)[0]
+        if "/" not in cidr:
+            continue
+        if _DOCKER_IFACE_RE.match(iface):
+            zone = "docker"
+        elif iface == "lo":
+            zone = "lo"
+        else:
+            zone = "lan"
+        try:
+            ip_s, plen = cidr.split("/", 1)
+            ip = ipaddress.ip_address(ip_s)
+            net = ipaddress.ip_network(cidr, strict=False)
+            plen = int(plen)
+        except Exception:
+            continue
+        addr2zone[str(ip)] = zone
+        if zone != "lo":          # 回环段(127/8)太大，别让它参与网段匹配
+            nets.append((plen, net, zone))
+    nets.sort(key=lambda t: -t[0])
+    return addr2zone, [(n, z) for _, n, z in nets]
+
+def _addr_zone(addr, zones):
+    """给一个监听地址判可达范围，返回 "lan"/"docker"/"lo"；判不出返回 ""（前端不标徽章）。"""
+    a = (addr or "").strip()
+    if a.startswith("[") and a.endswith("]"):
+        a = a[1:-1]                       # ss 的 IPv6 写法 [::]:80 → ::
+    if a in ("0.0.0.0", "::", "*"):
+        return "lan"                      # 绑所有网卡 = 全通
+    a = a.split("%", 1)[0]                # 去 IPv6 的 %iface 后缀
+    try:
+        ip = ipaddress.ip_address(a)
+    except ValueError:
+        return ""
+    # loopback 硬编码在前：即便 ip addr 没读出来也能判准（这是最要紧的一类）。
+    if ip.is_loopback:
+        return "lo"
+    addr2zone, nets = zones
+    z = addr2zone.get(str(ip))
+    if z:
+        return z
+    for net, zone in nets:
+        try:
+            if ip in net:
+                return zone
+        except Exception:
+            continue
+    if ip.is_multicast:
+        return "lan"                      # 239.x / ff0x:: 组播：本网段内可收到
+    return ""
+
+# 「释放端口」禁止 kill 的系统关键进程（短进程名 /proc/<pid>/comm）
+_PORT_PROTECTED = ("systemd", "init", "dockerd", "containerd", "containerd-shim",
+                   "sshd", "dbus-daemon", "udevd", "trimenv", "trim-cli",
+                   "nginx", "cron", "rsyslogd", "login", "agetty")
+
+# 系统服务中文说明：process(comm 短名) -> 说明（让用户一眼看懂「这是飞牛的什么服务」，
+# 而不是只看一个看不懂的进程名）。应用中心的 app 默认走飞牛网关 unix socket，不占 TCP/UDP
+# 端口，故不在此列；此处列出的端口绝大多数是飞牛系统自带服务。
+_SERVICE_DESC = {
+    "smbftpd": "飞牛文件共享 (SMB)",
+    "smbd": "Samba 文件共享",
+    "nmbd": "NetBIOS 名称服务 (SMB 网络浏览)",
+    "wsdd": "SMB 网络发现 (WS-Discovery)",
+    "sshd": "SSH 远程登录",
+    "nginx": "飞牛 Web 管理后台",
+    "rpcbind": "RPC 端口映射服务",
+    "rpc.statd": "NFS 文件锁服务",
+    "mountd": "NFS 挂载服务",
+    "nfsd": "NFS 文件服务",
+    "avahi-daemon": "mDNS / Bonjour 服务发现",
+    "chronyd": "系统时间同步 (NTP)",
+    "ntpd": "系统时间同步 (NTP)",
+    "dnsmasq": "DNS / DHCP 服务",
+    "systemd-resolved": "系统 DNS 解析",
+    "dockerd": "Docker 引擎",
+    "containerd": "Docker 容器运行时",
+    "docker-proxy": "Docker 端口映射代理",
+    "redis-server": "Redis 缓存服务",
+    "mysqld": "MySQL 数据库",
+    "postgres": "PostgreSQL 数据库",
+    "mongod": "MongoDB 数据库",
+    "memcached": "Memcached 缓存",
+    "openvpn": "VPN (OpenVPN)",
+    "wireguard": "VPN (WireGuard)",
+    # 飞牛系统自带服务（进程名与上面不同的派生写法）
+    "rpc.mountd": "NFS 挂载服务",
+    "minidlnad": "DLNA 媒体服务",
+    "wsdd2": "SMB 网络发现 (WS-Discovery)",
+    "upnp_service": "UPnP 即插即用服务",
+    "trim-media": "飞牛媒体服务",
+    "fnpackup": "飞牛数据备份服务",
+    "webdav": "WebDAV 文件服务",
+    "go2rtc": "监控 / 媒体流服务",
+    "pxy": "飞牛网关反向代理",
+    "NetworkManager": "网络管理服务",
+    # 实测 158 上仍会出现、但 ss 报的进程名与真正服务名有出入的几条
+    "cloud_storage_dav": "飞牛云端存储 (WebDAV)",
+    "cloud_storage_d": "飞牛云端存储 (WebDAV)",
+    "minidlna": "DLNA 媒体服务",
+    "rpcbind": "RPC 端口映射服务",
+    "trim_connect": "飞牛内网穿透 / 远程访问",
+    "docker-proxy": "Docker 端口映射代理",
+}
+
+# 内核态 socket 的端口反查。`ss -p` 对**内核线程**持有的 socket 不给 users 段
+# （nfsd / lockd 是内核线程 [nfsd]，没有 cmdline/exe），于是拿不到 PID 与进程名，
+# 界面上只剩一个「?」。这类端口只能靠**端口号**反查身份——`rpcinfo -p` 能给出
+# 2049→nfs、41750→nlockmgr（158 实测全机只有这两个端口如此）。
+_RPC_PORT_CACHE = {"t": 0.0, "v": None}
+
+def _rpc_port_map():
+    """{端口(str): RPC 服务名}，带缓存；命令缺失/超时/解析失败一律返回 {}。"""
+    now = time.time()
+    c = _RPC_PORT_CACHE
+    if c["v"] is not None and now - c["t"] <= _APP_IDS_TTL:
+        return c["v"]
+    m = {}
+    try:
+        exe = shutil.which("rpcinfo") or "/usr/sbin/rpcinfo"
+        out = run_cmd([exe, "-p"], 8)
+        for line in out.splitlines():
+            # 形如：100003    4   tcp    2049  nfs
+            parts = line.split()
+            if len(parts) < 5 or not parts[0].isdigit() or not parts[3].isdigit():
+                continue
+            # 同端口多服务时保留首个（2049 会先报 nfs 再报 nfs_acl，nfs 才是主服务）
+            m.setdefault(parts[3], parts[4])
+    except Exception:
+        pass
+    if m or c["v"] is None:
+        c["t"] = now
+        c["v"] = m
+    return m
+
+# RPC 服务名 → 中文说明（飞牛上常见的就是 NFS 家族）
+_RPC_DESC = {
+    "nfs": "NFS 文件共享（内核服务）",
+    "nfs_acl": "NFS 访问控制（内核服务）",
+    "nlockmgr": "NFS 文件锁（内核服务）",
+    "mountd": "NFS 挂载服务",
+    "portmapper": "RPC 端口映射服务",
+    "status": "NFS 状态监控",
+    "rquotad": "NFS 磁盘配额",
+}
+
+_APP_IDS_CACHE = {"t": 0.0, "v": None}
+_APP_IDS_TTL = 300
+
+# appid → 应用中心显示名（flymail → 飞邮）。飞牛把这份清单存在**应用中心守护进程内部**，
+# 盘上没有任何可读的 json/db 文件（实测 158：@appcenter 各目录里没有 manifest、没有 app.json，
+# 显示名只出现在 `trim-cli app list` 的 JSON 里），所以只能从那个命令取。
+_APP_NAMES_CACHE = {"t": 0.0, "v": None}
+
+# 飞牛运行时依赖包（node / python / bun 等）：它们也装在 @appcenter 下、也自带 ui/images，
+# 但**不是用户安装的应用**。若算进 appid 集合，会把「用 node 跑的应用」误标成 nodejs_v24
+# （实测 158：deepseek.harness 的 node 子进程 exe 落在 @appcenter/nodejs_v24/bin/node）。
+# 一律从 appid 集合剔除，让归属继续沿父链找到真正的应用。
+_RUNTIME_APP_IDS = ("nodejs_v16", "nodejs_v18", "nodejs_v20", "nodejs_v22", "nodejs_v24",
+                    "python39", "python310", "python311", "python312", "python313",
+                    "bunjs", "golang", "java", "jdk", "ffmpeg")
+
+def _app_ids():
+    """返回飞牛应用中心已安装 app 的 id 集合（@appcenter / @appshare 目录名即 id，也是运行用户）。
+
+    带 300s 缓存：本函数被「端口归属反查」「app 图标接口」共调用，
+    无缓存时每个图标请求都要跑一次 sudo ls。
+    """
+    now = time.time()
+    c = _APP_IDS_CACHE
+    if c["v"] is not None and now - c["t"] <= _APP_IDS_TTL:
+        return c["v"]
+    ids = set()
+    try:
+        out = sudo_cmd(["bash", "-c",
+            "ls -1 /vol1/@appcenter/ /vol1/@appshare/ 2>/dev/null"], 8)
+        for line in out.splitlines():
+            line = line.strip()
+            if not line or line.endswith(":"):
+                continue
+            if line in _RUNTIME_APP_IDS:
+                continue
+            ids.add(line)
+    except Exception:
+        pass
+    if ids or c["v"] is None:
+        c["t"] = now
+        c["v"] = ids
+    return ids
+
+def _app_display_names():
+    """返回 {appid: 应用中心里显示的名字}，取自 `trim-cli app list`。
+
+    飞牛没有把应用名落盘（@appcenter/<appid>/ 下既无 manifest 也无 app.json），
+    只有这个命令能给出「用户实际看到的名字」——如 flymail→飞邮、
+    com.buddy.credit→WorkBuddy 积分助手。带 300s 缓存。
+
+    ⚠ 容错优先：命令不存在 / 超时 / 输出夹了日志导致 JSON 解析失败，都返回空 dict，
+    调用方（_app_friendly）自动退化成 appid 美化——端口页其它信息不受影响。
+    """
+    now = time.time()
+    c = _APP_NAMES_CACHE
+    if c["v"] is not None and now - c["t"] <= _APP_IDS_TTL:
+        return c["v"]
+    m = {}
+    try:
+        out = sudo_cmd(["trim-cli", "app", "list"], 10)
+        i = out.find("{")          # 前面可能有 warning 行，从第一个 { 开始解析
+        if i >= 0:
+            data = json.loads(out[i:])
+            for a in (data.get("list") or []):
+                aid = (a.get("appName") or "").strip()
+                nm = (a.get("name") or "").strip()
+                if aid and nm:
+                    m[aid] = nm
+    except Exception:
+        m = {}
+    if m or c["v"] is None:
+        c["t"] = now
+        c["v"] = m
+    return m
+
+def _docker_id_map():
+    """返回 {容器ID(全 64 位 + 前 12 位): 容器名}，供 cgroup 反查容器用。"""
+    m = {}
+    try:
+        out = sudo_cmd(["docker", "ps", "--no-trunc", "--format", "{{.ID}}|{{.Names}}"], 8)
+        for line in out.splitlines():
+            if "|" not in line:
+                continue
+            cid, name = line.split("|", 1)
+            cid, name = cid.strip(), name.strip()
+            if cid and name:
+                m[cid] = name
+                m[cid[:12]] = name
+    except Exception:
+        pass
+    return m
+
+# 容器内进程的 cgroup 形如：
+#   0::/system.slice/docker-<64hex>.scope
+#   0::/kubepods/.../cri-containerd-<64hex>.scope
+_CGROUP_CID_RE = re.compile(r'(?:docker|cri-containerd|crio|containerd)[-_]([0-9a-f]{12,64})')
+
+def _cgroup_container(cgroup_text):
+    """从 /proc/<pid>/cgroup 内容里解析容器 ID 前 12 位，非容器返回 ""。"""
+    m = _CGROUP_CID_RE.search(cgroup_text or "")
+    return m.group(1)[:12] if m else ""
+
+# 应用自带图标的文件名偏好顺序（**大小写不敏感**！飞牛包里并存三种流派，实测 158：
+#   miproxy=ICON.PNG / trim.openclaw=icon.PNG（全大写）· com.buddy.credit=icon-256.png（连字符）
+#   app-cleaner=icon_256.png（下划线））。早先按小写精确匹配会漏掉大写那批。
+# 顺序 = 先高分辨率，避免兜底扫目录时按字母序挑到 icon_0.png 这种小图。
+_APP_ICON_PREF = ("icon_256", "icon-256", "icon_128", "icon-128",
+                  "icon_64", "icon-64", "icon", "256", "64", "icon_0", "icon_1")
+_APP_ICON_EXTS = (".png", ".webp", ".jpg", ".jpeg")
+_ICON_MIME = {".png": "image/png", ".webp": "image/webp",
+              ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}
+
+
+def _app_icon_file(appid):
+    """按 appid 定位应用自带图标文件，找不到返回 ""（前端据此回退为文字）。
+
+    只认「已安装应用」（appid 由路由用 _app_ids() 白名单校验过）+ 只拼固定子路径，
+    杜绝目录穿越。大小写不敏感：飞牛包里 ICON.PNG / icon.PNG 与小写混用。
+    """
+    if not appid or appid in (".", "..") or not re.match(r'^[A-Za-z0-9._-]+$', appid):
+        return ""
+    for root in ("/vol1/@appcenter", "/vol1/@appshare"):
+        d = os.path.join(root, appid, "ui", "images")
+        try:
+            names = os.listdir(d)
+        except Exception:
+            continue
+        low = {}
+        for n in names:
+            low.setdefault(n.lower(), n)
+        for key in _APP_ICON_PREF:
+            for ext in _APP_ICON_EXTS:
+                real = low.get(key + ext)
+                if not real:
+                    continue
+                p = os.path.join(d, real)
+                if os.path.isfile(p):
+                    return p
+        # 兜底：目录里任意图片（含 icon 字样 / 以 appid 开头）——icon_0/icon_1 这类小图已在
+        # 上面的偏好表末位兜过，这里只收偏好表没覆盖到的名字
+        cands = [n for n in sorted(names)
+                 if n.lower().endswith(_APP_ICON_EXTS)
+                 and ("icon" in n.lower() or n.lower().startswith(appid.lower()))]
+        for n in cands:
+            p = os.path.join(d, n)
+            if os.path.isfile(p):
+                return p
+    return ""
+
+# 分隔符用 \x1f（Unit Separator）：进程名按惯例不会含它，避免 cmdline 里的 | 把字段切错
+_PID_FS = "\x1f"
+
+def _pid_info(pids):
+    """批量读 /proc/<pid> 的归属线索（一次 bash 读完，避免 N 次进程开销）。
+
+    owner 用户 = appid（飞牛应用的运行用户就是 appid）；exe/cwd/cmd 用来兜底
+    那些以 root 或通用解释器身份运行的 app 进程；cgroup 用来把「容器内的进程」
+    归属到对应容器（容器里的服务没走 -p 端口映射时，宿主机只能靠 cgroup 认出它）。
+    返回 {pid: {"user":str, "cmd":str, "exe":str, "cwd":str, "ppid":int, "cid":str}}
+    """
+    if not pids:
+        return {}
+    plist = " ".join(str(p) for p in pids)
+    script = (
+        "for p in " + plist + "; do "
+        "u=$(stat -c '%U' /proc/$p 2>/dev/null); "
+        "cm=$(tr '\\0' ' ' < /proc/$p/cmdline 2>/dev/null | cut -c1-300); "
+        "ex=$(readlink /proc/$p/exe 2>/dev/null); "
+        "cw=$(readlink /proc/$p/cwd 2>/dev/null); "
+        "pp=$(awk '{print $4}' /proc/$p/stat 2>/dev/null); "
+        "cg=$(cat /proc/$p/cgroup 2>/dev/null | head -1); "
+        "printf '%s\\x1f%s\\x1f%s\\x1f%s\\x1f%s\\x1f%s\\x1f%s\\n' "
+        "\"$p\" \"$u\" \"$cm\" \"$ex\" \"$cw\" \"$pp\" \"$cg\"; "
+        "done"
+    )
+    out = sudo_cmd(["bash", "-c", script], 10)
+    res = {}
+    for line in out.splitlines():
+        f = line.split(_PID_FS)
+        if len(f) < 7:
+            continue
+        try:
+            pid = int(f[0].strip())
+        except ValueError:
+            continue
+        ppid = int(f[5].strip()) if f[5].strip().isdigit() else 0
+        res[pid] = {"user": f[1].strip(), "cmd": f[2], "exe": f[3].strip(),
+                    "cwd": f[4].strip(), "ppid": ppid,
+                    "cid": _cgroup_container(f[6])}
+    return res
+
+def _app_of_pid(pid, pinfo, appids, max_hops=4):
+    """反查「这个监听进程属于哪个应用中心 app」，返回 appid 或 ""。
+
+    线索按强度排序逐层判定：
+      ① 运行用户 = appid（飞牛应用的运行用户就是 appid，最可靠）
+      ② cmdline → cwd → exe 里出现 @appcenter|@appshare|@appdata/<appid>
+         （exe 放最后：它常指向共用运行时，如 @appcenter/nodejs_v24/bin/node）
+    单层无线索就沿父进程链向上最多 max_hops 层——应用常用通用解释器
+    （python3 / node）拉起监听服务，子进程自身看不出归属，父进程才是应用主进程。
+    """
+    cur = pid
+    seen = set()
+    for _ in range(max_hops + 1):
+        if not cur or cur in seen:
+            break
+        seen.add(cur)
+        rec = pinfo.get(cur)
+        if not rec:
+            break
+        u = rec.get("user") or ""
+        if u in appids:
+            return u
+        for field in ("cmd", "cwd", "exe"):
+            blob = rec.get(field) or ""
+            if not blob:
+                continue
+            for aid in appids:
+                if ("@appcenter/" + aid) in blob or ("@appshare/" + aid) in blob \
+                        or ("@appdata/" + aid) in blob:
+                    return aid
+        cur = rec.get("ppid") or 0
+    return ""
+
+def _expand_pid_chain(pids, rounds=3):
+    """把监听 pid 集合沿父链补齐，最多补 rounds 层（供 _app_of_pid 逐层判归属）。"""
+    pinfo = _pid_info(pids)
+    for _ in range(rounds):
+        need = set()
+        for p, rec in pinfo.items():
+            pp = rec.get("ppid") or 0
+            if pp > 1 and pp not in pinfo:
+                need.add(pp)
+        if not need:
+            break
+        pinfo.update(_pid_info(need))
+    return pinfo
+
+def _app_friendly(appid):
+    """appid → 应用中心里展示的名字（flymail→飞邮、dsh.sync→DeepSeek Harness (Sync)）。
+
+    优先取 `trim-cli app list` 的显示名；取不到（命令缺失/超时）才退化成
+    「去掉包名前缀的 appid」——早期版本只有这条退化路径，界面上就会看到
+    deepseek.harness / com.buddy.credit 这种包名。
+    """
+    if not appid:
+        return ""
+    nm = _app_display_names().get(appid)
+    if nm:
+        return nm
+    for p in ("com.dashboard.", "com.", "trim."):
+        if appid.startswith(p):
+            return appid[len(p):]
+    return appid
+
+def _proc_comm(pid):
+    """读 /proc/<pid>/comm 取短进程名。"""
+    try:
+        with open("/proc/%d/comm" % int(pid)) as f:
+            return f.read().strip()
+    except Exception:
+        return ""
+
+def get_listening_ports():
+    """列出宿主机所有监听端口（TCP/UDP）+ 占用进程 + 来源 + 归属应用。
+
+    - 用 ss -tulnp（需 root 才能看其它进程 PID，故走 sudo_cmd）。
+    - 来源 scope：docker:容器名 / docker / app:<appid> / host
+    - app：若进程 owner 或 cmdline 落在 @appcenter/@appshare/<appid> 目录，标注应用 id
+    - desc：系统服务的中文说明（飞牛自带服务，非应用中心 app）
+    """
+    raw_ports = []
+    try:
+        raw_tcp = sudo_cmd(["ss", "-tlnpH"], 8)
+        raw_udp = sudo_cmd(["ss", "-ulnpH"], 8)
+    except Exception:
+        raw_tcp = raw_udp = ""
+    dmap = _docker_port_map()
+    zones = _local_net_zones()
+    pids = set()
+    for proto, raw in (("tcp", raw_tcp), ("udp", raw_udp)):
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split()
+            if len(parts) < 4:
+                continue
+            local = parts[3]
+            mo = re.match(r'(\[[^\]]+\]|[^:]+):(\d+)$', local)
+            if not mo:
+                continue
+            addr = mo.group(1)
+            try:
+                port = int(mo.group(2))
+            except ValueError:
+                continue
+            proc = ""
+            pid = None
+            pm = re.search(r'users?:\(\("([^"]+)"(?:,pid=(\d+))?', line)
+            if pm:
+                proc = pm.group(1)
+                pid = int(pm.group(2)) if pm.group(2) else None
+            scope = "host"
+            cname = dmap.get(str(port))
+            if cname:
+                scope = "docker:" + cname
+            elif proc in ("docker-proxy",):
+                scope = "docker"
+            # 可达范围三级（lan/docker/lo），public 保留＝「局域网可达」，
+            # 旧前端(只认 public)也能继续工作。
+            reach = _addr_zone(addr, zones)
+            raw_ports.append({
+                "proto": proto,
+                "local": addr,
+                "port": port,
+                "state": (parts[0] if proto == "tcp" else "UNCONN"),
+                "pid": pid,
+                # 拿不到进程名时留空（内核态 socket，见下方 kernel 判定），由端口反查补说明；
+                # 早先这里填 "?"，界面上就会出现一行看不懂的「?」（用户实测 2049 反馈）
+                "process": proc,
+                "scope": scope,
+                "reach": reach,
+                "public": reach == "lan",
+            })
+            if pid is not None:
+                pids.add(pid)
+    # 反查进程归属应用（应用中心 app 的运行用户即 appid，目录 owner 也是 appid；
+    # 部分 app 以 root / 通用解释器（python3、node）运行 ⟶ 用 exe/cwd/cmdline +
+    # 父进程链兜底，把「app 拉起的子进程」也归到该 app 名下）。
+    # 容器内进程则用 cgroup 反查容器名（容器服务没走 -p 端口映射时，宿主机只能这样认出来）。
+    appids = _app_ids()
+    pinfo = _expand_pid_chain(pids) if pids else {}
+    cid_map = _docker_id_map() if pids else {}
+    ports = []
+    for rp in raw_ports:
+        pid = rp.get("pid")
+        app = _app_of_pid(pid, pinfo, appids) if (pid is not None and appids) else ""
+        scope = rp["scope"]
+        # 容器名两条来源，**不能互相覆盖**：① 解析阶段 docker ps 端口映射已写成 docker:<name>
+        # （走这条时 pid 常是 docker-proxy 这种宿主进程，cgroup 查不到）② cgroup 反查（容器
+        # 没做 -p 映射时）。早先在第 ② 步用 `or ""` 无条件覆盖，把 ① 查到的好名字清成了空，
+        # 直接后果＝容器图标取不到（158 实测 homebox）。
+        cname = scope[7:] if scope.startswith("docker:") else ""
+        if app:
+            scope = "app:" + app
+            cname = ""
+        else:
+            if not cname and pid is not None and cid_map:
+                cname = cid_map.get((pinfo.get(pid) or {}).get("cid") or "") or ""
+            if cname:
+                scope = "docker:" + cname
+        # 内核态 socket：`ss` 没有 users 段（内核线程持有，如 NFS 的 nfsd/lockd），
+        # 既没有 PID 也没有进程名，只能按端口号反查 RPC 服务来给说明。
+        kernel = (pid is None and not app and not scope.startswith("docker:"))
+        if app or scope.startswith("docker:"):
+            desc = ""
+        else:
+            desc = _SERVICE_DESC.get(rp["process"], "")
+            if kernel and not desc:
+                svc = _rpc_port_map().get(str(rp["port"]), "")
+                desc = _RPC_DESC.get(svc) or ((svc + "（内核服务）") if svc else "")
+        rp["kernel"] = kernel
+        # 图标来源（实测 158 画像）：应用中心装的东西才有图标，纯 docker run 起的容器没有。
+        # ① 应用＝用它自己的图标；② 容器名若**同时也是应用中心的应用**（商店装的 docker 应用会
+        # 生成同名 @appcenter 目录，实测 homebox / cf-dns-select）→ 借用该应用的图标；
+        # ③ 其余（飞牛系统服务、纯 docker 容器）没有任何图标文件 → 留空，前端显示纯文字。
+        icon = app or (cname if cname in appids else "")
+        rp["app"] = app
+        rp["appname"] = _app_friendly(app) if app else ""
+        rp["icon"] = icon
+        # 容器行若借用了某个应用的图标（容器名＝appid，商店装的 docker 应用），
+        # 展示名也用那个应用的显示名（cf-dns-select → CF DNS 优选）；原始容器名留在 scope 里。
+        rp["iconname"] = _app_friendly(icon) if (icon and not app) else ""
+        rp["desc"] = desc
+        rp["scope"] = scope
+        ports.append(rp)
+    ports.sort(key=lambda x: (x["port"], x["proto"]))
+    return ports
+
 # ===================== 路由 =====================
 @app.route("/ui/images/<path:filename>")
 def ui_images(filename):
     """暴露 ui/images 下的静态图标，供页面内 <img> 引用。"""
     return send_from_directory(os.path.join(os.path.dirname(__file__), "ui", "images"), filename)
 
-def _render_legacy_panel():
-    """旧版单页面板（阶段 0/1 的产物）。
+def _vue_missing_page():
+    """兜底页：前端构建产物缺失时的可读提示（已无「回退旧页」这条退路）。
 
-    阶段 2 起不再是主入口，但**完整保留**为回滚通道（/legacy/）：
-    新版界面出任何问题，用户都能从这里拿到全功能面板；同时它也是新壳里
-    尚未迁移模块的内嵌数据源（?embed=1&tab=xxx）。
+    v2.3.0 第 11 步「旧页退休瘦身」起，旧版单页面板 templates/index.html 已删除。
+    产物随仓库提交、正常安装不会缺失，这里只保证极端情况下不是一片白屏。
     """
-    # no-store：防止浏览器/代理缓存 HTML，避免发版或重启后用户仍看到旧页面（曾导致 FCS 卡片永久“加载中”）
-    resp = make_response(render_template(
-        "index.html",
-        APP_VERSION=APP_VERSION,
-        ICON_DETECT_DATA=ICON_DETECT_DATA,
-        ICON_SYSTEM_DATA=ICON_SYSTEM_DATA,
-        ICON_HISTORY_DATA=ICON_HISTORY_DATA,
-        ICON_RAID_DATA=ICON_RAID_DATA,
-        ICON_HDD_DATA=ICON_HDD_DATA,
-        ICON_STORAGE_DATA=ICON_STORAGE_DATA,
-        ICON_FAN_DATA=ICON_FAN_DATA,
-        ICON_DOCKER_DATA=ICON_DOCKER_DATA,
-        ICON_AUTOMATION_DATA=ICON_AUTOMATION_DATA,
-        ICON_MANUAL_DATA=ICON_MANUAL_DATA,
-        ICON_ABOUT_DATA=ICON_ABOUT_DATA,
-    ))
+    resp = make_response(
+        "<!DOCTYPE html><html lang='zh-CN'><head><meta charset='utf-8'>"
+        "<title>nasdash - 资源缺失</title></head><body style=\"font:14px/1.8 -apple-system,'PingFang SC',sans-serif;"
+        "max-width:560px;margin:80px auto;padding:0 24px\">"
+        "<h2 style='font-size:18px'>界面资源缺失</h2>"
+        "<p style='color:#646a73'>应用的前端文件没找到。请刷新页面重试；若一直如此，请在应用中心重新安装 nasdash。</p>"
+        "</body></html>",
+        500,
+    )
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-    resp.headers["Pragma"] = "no-cache"
-    resp.headers["Expires"] = "0"
     return resp
 
 
 def _serve_vue_app():
-    """主界面（阶段 2 起）：frontend-vue/ 构建产物，单文件 HTML。
+    """主界面：frontend-vue/ 构建产物，单文件 HTML。
 
     产物 `templates/vue/index.html` 已提交进仓库（无 Node 环境也能打包）。
-    文件缺失时自动回退旧页面板，保证面板永远不会白屏。
     """
     vue_dir = os.path.join(os.path.dirname(__file__), "templates", "vue")
     vue_index = os.path.join(vue_dir, "index.html")
     if not os.path.isfile(vue_index):
-        return _render_legacy_panel()
+        return _vue_missing_page()
     resp = make_response(send_from_directory(vue_dir, "index.html"))
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     resp.headers["Pragma"] = "no-cache"
@@ -5266,22 +6300,17 @@ def _serve_vue_app():
 
 @app.route("/")
 def index():
-    """主入口：阶段 2 起由 Vue 应用接管（系统资源页 + 温度监控页为原生页，
-    其余模块在壳内 iframe 内嵌 /legacy/ 对应页签）。"""
+    """主入口：Vue 应用（11 个模块全部为原生页；第 11 步起已无旧页依赖）。"""
     return _serve_vue_app()
 
-# ===================== Vue 试点入口（阶段 1a 探针） =====================
+
+# ===================== /vue/（阶段 1a 旧链接兼容） =====================
 # 阶段 2 起 /vue/ 与 / 同物，保留该路径只为让阶段 1a 的旧链接继续可用。
 @app.route("/vue")
 @app.route("/vue/")
 def vue_pilot():
     return _serve_vue_app()
 
-# ===================== 旧版完整面板（回滚通道） =====================
-@app.route("/legacy")
-@app.route("/legacy/")
-def legacy_panel():
-    return _render_legacy_panel()
 
 # ===================== 操作手册（/manual 路由，离线可读） =====================
 _MANUAL_CSS = """
@@ -6225,6 +7254,92 @@ def _get_gpu_live():
     _GPU_LIVE_CACHE["data"] = data
     return data
 
+# ---------------- WOL（网络唤醒）开关 + 持久化（v2.3.0 3.2） ----------------
+# 只对「网卡硬件支持 WOL」的口开放。设置后写进配置，进程启动时回放一次——
+# 因为 `ethtool -s` 改的值在部分网卡/主板组合下重启不保留，不回放就会「关了又开」。
+
+def _wol_cfg_path():
+    return os.path.join(_config_dir(), "wol.json")
+
+
+def _wol_load_cfg():
+    d = _load_json_file(_wol_cfg_path(), {})
+    return d if isinstance(d, dict) else {}
+
+
+def _wol_save_cfg(d):
+    try:
+        _save_json_file(_wol_cfg_path(), d)
+    except Exception:
+        pass
+
+
+def _wol_phy_name(name):
+    """展示名 -> 物理口名。fnOS 的 OVS 桥（eno1-ovs）与物理口（eno1）共享 MAC，
+    页面展示桥名，但 WOL 必须写在物理口上。"""
+    n = str(name or "").strip()
+    return n[:-4] if n.endswith("-ovs") else n
+
+
+def _wol_read_modes(phy):
+    """读 `ethtool <phy>` 的 Supports/Wake-on 两行 -> (硬件能力串, 当前模式串)。"""
+    out = run_cmd(["ethtool", phy], 3, quiet=True)
+    sup = ""
+    cur = ""
+    for line in out.splitlines():
+        t = line.strip()
+        if t.startswith("Supports Wake-on:"):
+            sup = t.split(":", 1)[1].strip()
+        elif t.startswith("Wake-on:"):
+            cur = t.split(":", 1)[1].strip()
+    return sup, cur
+
+
+def _wol_hw_supported(phy):
+    """能力串里除 'd'（禁用）外含 p/u/m/b/g/a 任一 = 该网卡硬件支持 WOL。"""
+    sup, _ = _wol_read_modes(phy)
+    return any(ch in sup for ch in "pumbga")
+
+
+def _wol_apply(phy, enable):
+    """应用 WOL 开关，返回 (ok, err)。只动用户点的那张网卡，不做其它系统改动。"""
+    if not re.match(r"^[A-Za-z0-9_.:@-]{1,32}$", phy or ""):
+        return False, "网卡名不合法"
+    if not os.path.isdir("/sys/class/net/" + phy):
+        return False, "找不到网卡 " + phy
+    # 先读能力串：读不到（如系统缺 ethtool）与「真的不支持」要分开提示，
+    # 否则会把「工具缺失」误报成「你网卡不行」，误导用户。
+    _sup, _ = _wol_read_modes(phy)
+    if not _sup:
+        return False, "读不到这张网卡的唤醒能力（系统可能缺少 ethtool 工具）"
+    if not any(ch in _sup for ch in "pumbga"):
+        return False, "该网卡硬件不支持网络唤醒（WOL）"
+    run_cmd(["ethtool", "-s", phy, "wol", ("g" if enable else "d")], 5, quiet=True)
+    _, cur = _wol_read_modes(phy)
+    if any(ch in cur for ch in "pumbga") != bool(enable):
+        return False, "设置未生效（可能被系统策略或驱动覆盖）"
+    return True, ""
+
+
+def _wol_reapply_on_start():
+    """开机把用户设过的 WOL 开关重新应用一遍（ethtool 设置不保证跨重启保留）。"""
+    cfg = _wol_load_cfg()
+    if not cfg:
+        return
+    changed = False
+    for phy, want in list(cfg.items()):
+        try:
+            if not os.path.isdir("/sys/class/net/" + str(phy)):
+                cfg.pop(phy, None)      # 网卡已拆走，顺手清配置项
+                changed = True
+                continue
+            _wol_apply(str(phy), bool(want))
+        except Exception:
+            pass
+    if changed:
+        _wol_save_cfg(cfg)
+
+
 # 启动即后台预热重型采集缓存（storcli/smartctl/docker 等同步命令耗时长）。
 # 首个用户请求直接命中缓存，首屏 /api/all 从 4~5s 降至 <0.05s，不再阻塞转圈。
 def _warmup_caches():
@@ -6243,6 +7358,9 @@ def _warmup_caches():
 _warmup_thread = _threading.Thread(target=_warmup_caches, daemon=True, name="cache-warmup")
 _warmup_thread.start()
 
+# 开机回放用户设过的 WOL 开关（放在预热线程之后，避免抢占首屏）
+_threading.Thread(target=_wol_reapply_on_start, daemon=True, name="wol-reapply").start()
+
 def get_realtime_metrics():
     with _METRICS_LOCK:
         return {
@@ -6252,14 +7370,437 @@ def get_realtime_metrics():
             "cpu_power_valid": _metrics_cur["cpu_power_valid"],
         }
 
+# ============ 单盘健康分级 + 缺陷增长趋势（v2.3.0 3.4） ============
+# 只给「到手就能给用户解释」的三个档 + 一条大白话原因，不堆原始属性表。
+#   红（现在就该处理：备份数据、准备换盘）
+#     · SMART 自检判定 FAILED
+#     · 阵列卡 S.M.A.R.T 告警（S.M.A.R.T alert flagged by drive = Yes）
+#     · 阵列卡预测性失败计数 > 0
+#     · 阵列卡报盘不在线（Failed/UBad/Offline…）
+#     · 待处理扇区 > 0（有扇区读不稳，等着被替换）
+#     · 不可纠正扇区 > 0
+#   黄（已有损伤或接近上限：盯住，不用马上换）
+#     · 重映射扇区（含 SAS grown defect）> 0
+#     · 阵列卡介质错误 / 其它错误 / 坏块管理错误 > 0
+#     · 温度 ≥ 该盘高温线（硬盘自报值优先，默认 55℃）
+#     · SSD 寿命已用 > 80% / NVMe 剩余备用块 < 10% / NVMe 临界告警非 0
+#   绿：以上都没有。未知：盘休眠或一点可判断的数据都读不到。
+# 判据只读现有数据：系统侧 smartctl 已解析字段 + 阵列卡已解析字段，不新增任何命令。
+
+# 缺陷类计数（越涨越坏，用于「较上次 ↑N」趋势）
+_DEFECT_COUNTERS = ("media_err", "other_err", "bbm_err", "pred_fail",
+                    "reallocated", "pending", "uncorrectable",
+                    "udma_crc", "defects", "non_medium_errors", "read_errors", "write_errors")
+# 寿命类计数（也会涨，但含义是「消耗」不是「缺陷」，单独拼文案）
+_WEAR_COUNTERS = ("percentage_used", "endurance_used")
+_TREND_COUNTERS = _DEFECT_COUNTERS + _WEAR_COUNTERS
+# 阵列卡报这些状态 = 盘不在线（红）
+_PD_BAD_STATES = ("FAILED", "RBAD", "UBAD", "OFFLN", "OFFL", "MISSING", "MISSOFF")
+
+_HEALTH_META = {
+    "red": {"label": "异常", "order": 3},
+    "yellow": {"label": "注意", "order": 2},
+    "green": {"label": "正常", "order": 1},
+    "unknown": {"label": "未知", "order": 0},
+}
+
+
+def _grade_disk_health(disk, pd=None):
+    """给单块盘分级：返回 {level, label, reasons[], counters{}, source}。纯计算、无 I/O。"""
+    d = disk if isinstance(disk, dict) else {}
+    pd = pd if isinstance(pd, dict) else {}
+    # 阵列卡侧字段挂在物理盘的 pd_health 里（state 在盘对象上），统一取出来用
+    ph = pd.get("pd_health")
+    ph = ph if isinstance(ph, dict) else {}
+    red, yellow = [], []
+    counters = {}
+
+    def _int(v):
+        return v if isinstance(v, int) and not isinstance(v, bool) else None
+
+    if bool(d.get("asleep")):
+        return {"level": "unknown", "label": "未知", "reasons": ["硬盘休眠中，暂时读不到 SMART 数据"],
+                "counters": {}, "source": "休眠"}
+
+    # ---- 系统 SMART 侧 ----
+    verdict = (d.get("health") or "").strip().upper()
+    if verdict == "FAILED":
+        red.append("SMART 自检判定为故障（FAILED）")
+
+    # ---- 阵列卡侧 ----
+    if ph or pd:
+        if ph.get("smart_alert") is True:
+            red.append("阵列卡报 S.M.A.R.T 告警")
+        st = (pd.get("state") or "").strip().upper()
+        if st and any(b in st for b in _PD_BAD_STATES):
+            red.append(f"阵列卡报盘已不在线（{pd.get('state')}）")
+
+    for key, name in (("pred_fail", "预测性失败"), ("bbm_err", "坏块管理错误"),
+                      ("media_err", "介质错误"), ("other_err", "其它错误")):
+        v = _int(ph.get(key))
+        if v is None:
+            continue
+        counters[key] = v
+        if v <= 0:
+            continue
+        if key == "pred_fail":
+            red.append(f"阵列卡报预测性失败 {v} 次")
+        elif key == "bbm_err":
+            yellow.append(f"阵列卡记录坏块管理错误 {v} 次")
+        else:
+            yellow.append(f"阵列卡记录{name} {v} 次")
+
+    # ---- 扇区级缺陷（ATA/ SATA 与 SAS 同名同义，取到哪个用哪个）----
+    pn = _int(d.get("pending"))
+    if pn is not None:
+        counters["pending"] = pn
+        if pn > 0:
+            red.append(f"待处理扇区 {pn} 个（有扇区读不稳，随时可能变坏）")
+    un = _int(d.get("uncorrectable"))
+    if un is not None:
+        counters["uncorrectable"] = un
+        if un > 0:
+            red.append(f"不可纠正扇区 {un} 个")
+    ra = _int(d.get("reallocated"))
+    if ra is not None:
+        counters["reallocated"] = ra
+        if ra > 0:
+            yellow.append(f"重映射扇区 {ra} 个（已用备用块顶过坏扇区）")
+    df = _int(d.get("defects"))
+    if df is not None:
+        # SAS 缺陷表计数用原名进 counters（机械盘无此键，不会重复显示）
+        counters["defects"] = df
+        if df > 0 and ra is None:
+            yellow.append(f"已发现缺陷扇区 {df} 个（SAS 缺陷表）")
+    # 以下三项不参与判级（接口层/传输层问题，不等于盘体坏了），但 0 值也进 counters 供弹窗完整展示
+    uc = _int(d.get("udma_crc"))
+    if uc is not None:
+        counters["udma_crc"] = uc
+    nme = _int(d.get("non_medium_errors"))
+    if nme is not None:
+        counters["non_medium_errors"] = nme
+    re_ = _int(d.get("read_errors"))
+    if re_ is not None:
+        counters["read_errors"] = re_
+    we_ = _int(d.get("write_errors"))
+    if we_ is not None:
+        counters["write_errors"] = we_
+
+    # ---- 温度 ----
+    t = _int(ph.get("temp"))
+    if t is None:
+        t = _int(d.get("temp"))
+    if t is not None:
+        counters["temp"] = t
+        trip = _int(d.get("temp_trip")) or 55
+        if t >= trip:
+            yellow.append(f"温度 {t}℃ 已达到高温线 {trip}℃")
+
+    # ---- SSD / NVMe 寿命 ----
+    pu = _int(d.get("percentage_used"))
+    if pu is not None:
+        counters["percentage_used"] = pu
+        if pu > 80:
+            yellow.append(f"SSD 寿命已用 {pu}%")
+    eu = _int(ph.get("endurance_used"))
+    if eu is None:
+        eu = _int(d.get("endurance_used"))
+    if eu is not None:
+        counters["endurance_used"] = eu
+        if eu > 80:
+            yellow.append(f"SSD 寿命已用 {eu}%（阵列卡报）")
+    sp = _int(d.get("available_spare"))
+    if sp is not None:
+        counters["available_spare"] = sp
+        if sp < 10:
+            yellow.append(f"NVMe 剩余备用块仅 {sp}%")
+    cw = (d.get("critical_warning") or "").strip().lower()
+    if cw and cw not in ("0", "00", "0x0"):
+        yellow.append(f"NVMe 报了临界告警（0x{cw.lstrip('0x')}）")
+
+    src = []
+    if ph or pd:
+        src.append("阵列卡")
+    if verdict:
+        src.append("系统 SMART")
+
+    if red:
+        level = "red"
+    elif yellow:
+        level = "yellow"
+    elif counters or verdict:
+        level = "green"
+    else:
+        level = "unknown"
+
+    reasons = red + yellow
+    if not reasons and level == "green":
+        reasons = []
+    if level == "unknown" and not reasons:
+        reasons = ["读不到这块盘的健康数据（可能已休眠或无法访问）"]
+    return {"level": level, "label": _HEALTH_META[level]["label"], "reasons": reasons,
+            "counters": counters, "source": " + ".join(src) or "—"}
+
+
+# 缺陷快照历史：每 6h 一条、保留 180 天、最多 500 条，落盘 @appdata/disk_health_hist.json
+DISK_HEALTH_HIST_FILE = os.path.join(_config_dir(), "disk_health_hist.json")
+DISK_HEALTH_HIST_MAX = 500
+DISK_HEALTH_KEEP_DAYS = 180
+DISK_HEALTH_INTERVAL = 6 * 3600
+_DISK_HEALTH_LOCK = _threading.RLock()
+_DISK_HEALTH_CACHE = {"loaded": False, "rows": []}
+
+
+def _health_hist_rows():
+    """读全部快照（内存缓存 + 文件兜底）。"""
+    with _DISK_HEALTH_LOCK:
+        if not _DISK_HEALTH_CACHE["loaded"]:
+            rows = _load_json_file(DISK_HEALTH_HIST_FILE, [])
+            _DISK_HEALTH_CACHE["rows"] = rows if isinstance(rows, list) else []
+            _DISK_HEALTH_CACHE["loaded"] = True
+        return _DISK_HEALTH_CACHE["rows"]
+
+
+def _health_hist_last_ts():
+    rows = _health_hist_rows()
+    if rows and isinstance(rows[-1], dict):
+        t = rows[-1].get("t")
+        if isinstance(t, (int, float)):
+            return float(t)
+    return 0.0
+
+
+def _health_hist_prev(before_ts):
+    """取「上一次采样」那条（早于 before_ts 的最近一条）。"""
+    for r in reversed(_health_hist_rows()):
+        if isinstance(r, dict):
+            t = r.get("t")
+            if isinstance(t, (int, float)) and float(t) <= before_ts:
+                return r
+    return None
+
+
+def _health_hist_append(row):
+    """追加一条快照：按天裁剪 + 条数上限，然后落盘。"""
+    if not row or not row.get("disks"):
+        return False
+    with _DISK_HEALTH_LOCK:
+        _health_hist_rows()          # 保证缓存已加载
+        rows = list(_DISK_HEALTH_CACHE["rows"])
+        rows.append(row)
+        cut = time.time() - DISK_HEALTH_KEEP_DAYS * 86400
+        rows = [r for r in rows if isinstance(r, dict) and float(r.get("t") or 0) >= cut]
+        if len(rows) > DISK_HEALTH_HIST_MAX:
+            rows = rows[-DISK_HEALTH_HIST_MAX:]
+        _DISK_HEALTH_CACHE["rows"] = rows
+        _DISK_HEALTH_CACHE["loaded"] = True
+    try:
+        _save_json_file(DISK_HEALTH_HIST_FILE, rows)
+    except Exception:
+        pass
+    return True
+
+
+def _raid_pd_by_sn(raid):
+    """阵列卡物理盘按序列号索引（大小写不敏感）。"""
+    m = {}
+    if isinstance(raid, dict) and raid.get("mode") == "mega":
+        for dv in raid.get("drives", []):
+            sn = (dv.get("sn") or "").strip().upper()
+            if sn:
+                m[sn] = dv
+    return m
+
+
+def _health_key_for(disk, pd=None):
+    """趋势用的稳定 key：优先序列号（双路径/换盘符不重复），退化用 WWN，再退化用盘符。"""
+    sn = (disk.get("serial") or "").strip().upper()
+    if sn:
+        return sn
+    ph = (pd or {}).get("pd_health")
+    wwn = (ph.get("wwn") if isinstance(ph, dict) else "") or (pd or {}).get("wwn") or ""
+    wwn = str(wwn).strip().upper()
+    if wwn:
+        return wwn
+    return (disk.get("dev") or "").strip()
+
+
+# ---------------- 运维自定义盘名（v2.3.0 3.8） ----------------
+# storcli 的 E0:S3、系统盘符 sda 这类代号人难认；允许给每块盘起「数据盘1」这类好认的名字。
+# key 与缺陷趋势同源（_health_key_for：序列号优先 → WWN → 盘符），改名跟着盘走，换盘符/重启不丢。
+
+_DISK_NAME_MAX = 40
+
+
+def _disk_names_path():
+    return os.path.join(_config_dir(), "disk_names.json")
+
+
+def _disk_names_load():
+    d = _load_json_file(_disk_names_path(), {})
+    return d if isinstance(d, dict) else {}
+
+
+def _disk_name_clean(name):
+    """清洗自定义盘名：去掉控制字符与首尾空白、超长截断；返回空串表示「清除」。"""
+    if name is None:
+        return ""
+    name = re.sub(r"[\x00-\x1f\x7f]", "", str(name))
+    return name.strip()[:_DISK_NAME_MAX]
+
+
+def _disk_health_snapshot_now():
+    """采一次当前所有盘的关键计数（走缓存、不唤醒休眠盘、不额外跑命令）。"""
+    try:
+        disks = get_disks(False) or []
+    except Exception:
+        disks = []
+    try:
+        raid = get_raid_card()
+    except Exception:
+        raid = {}
+    pd_map = _raid_pd_by_sn(raid)
+    row = {}
+    for d in disks:
+        if d.get("asleep"):
+            continue
+        sn = (d.get("serial") or "").strip().upper()
+        pd = pd_map.get(sn) or {}
+        g = _grade_disk_health(d, pd)
+        c = {k: v for k, v in (g.get("counters") or {}).items() if k in _TREND_COUNTERS}
+        key = _health_key_for(d, pd)
+        if key and c:
+            row[key] = c
+    return {"t": time.time(), "disks": row}
+
+
+def _health_trend_for(key, counters):
+    """和上一次采样比：返回 {deltas:{}, delta_total, prev_ts}；没有上一条时返回 None。"""
+    if not key or not counters:
+        return None
+    prev = _health_hist_prev(time.time() - 300)   # 至少 5 分钟前的采样才算「上一次」
+    if not prev:
+        return None
+    base = (prev.get("disks") or {}).get(key)
+    if not isinstance(base, dict):
+        return None
+    deltas = {}
+    for k in _TREND_COUNTERS:
+        cur_v = counters.get(k)
+        old_v = base.get(k)
+        if isinstance(cur_v, int) and isinstance(old_v, int) and cur_v > old_v:
+            deltas[k] = cur_v - old_v
+    return {"deltas": deltas, "delta_total": sum(deltas.values()), "prev_ts": prev.get("t")}
+
+
+def disk_health_loop():
+    """daemon：每 6h 落一条缺陷快照。是否该采只看「上一条快照的时间」，
+    所以进程重启不会把间隔冲成「一起就采」，趋势才有意义。"""
+    time.sleep(20)          # 让预热线程先把 get_disks/get_raid_card 缓存填上
+    while True:
+        try:
+            if time.time() - _health_hist_last_ts() >= DISK_HEALTH_INTERVAL:
+                _health_hist_append(_disk_health_snapshot_now())
+        except Exception:
+            pass
+        time.sleep(300)
+
+
+_disk_health_thread = _threading.Thread(target=disk_health_loop, daemon=True, name="disk-health")
+_disk_health_thread.start()
+
+
+# 双磁臂盘合并时「取更差的一侧」的字段：缺陷类取大值，绝不因合并而漏报
+_MERGE_MAX_KEYS = ("reallocated", "pending", "uncorrectable", "defects",
+                   "non_medium_errors", "read_errors", "write_errors",
+                   "udma_crc", "percentage_used", "endurance_used")
+_GRADE_RANK = {"green": 0, "unknown": 1, "yellow": 2, "red": 3}
+
+
+def _double_size(s):
+    """"7.0T" → "14.0T"（双磁臂整盘标称）。解析不出来就返回空串，前端不显示。"""
+    m = re.match(r"^([\d.]+)\s*([A-Za-z]+)$", (s or "").strip())
+    if not m:
+        return ""
+    try:
+        v = float(m.group(1)) * 2
+    except Exception:
+        return ""
+    v = int(v) if abs(v - int(v)) < 0.05 else round(v, 1)
+    return f"{v}{m.group(2)}"
+
+
+def _merge_dual_actuator(disks):
+    """把同序列号的多个逻辑盘合并成一张卡（典型：双磁臂 SAS 盘每个执行器暴露一个 LUN）。
+
+    本质是一块物理盘，分两张卡显示会让人以为买了两块盘、还可能对着同一块盘
+    重复报警。合并规则：
+      - dev 保留主臂原名（自检 / 定位 / 挂载判断等操作仍走它，零改动）；
+        新增 devs（全部逻辑名）与 dev_label（"sda/sdb"）供界面显示。
+      - 缺陷 / 寿命消耗类字段取「更差的一侧」（取大值；剩余备用取小值）——
+        任一执行器有伤就算这块盘有伤，不夸大、也绝不漏。
+      - 温度取两臂较高值；容量另给 size_total（每臂 × 臂数）。
+      - 分级 / 趋势由调用方在合并后统一重算，避免两臂各报一份。
+    """
+    by_sn = {}
+    for d in disks:
+        sn = (d.get("serial") or "").strip().upper()
+        if sn:
+            by_sn.setdefault(sn, []).append(d)
+
+    out, done = [], set()
+    for d in disks:
+        sn = (d.get("serial") or "").strip().upper()
+        grp = by_sn.get(sn) or []
+        if not sn or len(grp) < 2:
+            out.append(d)
+            continue
+        if sn in done:
+            continue
+        done.add(sn)
+        out.append(_merge_disk_group(grp))
+    return out
+
+
+def _merge_disk_group(grp):
+    """合并同一物理盘的多条逻辑记录（见 _merge_dual_actuator 的规则）。"""
+    lead = dict(grp[0])
+    devs = [x.get("dev") for x in grp if x.get("dev")]
+    lead["devs"] = devs
+    lead["dev_label"] = "/".join(devs)
+    lead["dual_actuator"] = True
+    if lead.get("size"):
+        lead["size_total"] = _double_size(lead["size"])
+    for k in _MERGE_MAX_KEYS:
+        vals = [x.get(k) for x in grp if isinstance(x.get(k), (int, float))]
+        if vals:
+            lead[k] = max(vals)
+    temps = [x.get("temp") for x in grp if isinstance(x.get("temp"), (int, float))]
+    if temps:
+        lead["temp"] = max(temps)
+    spares = [x.get("available_spare") for x in grp if isinstance(x.get("available_spare"), (int, float))]
+    if spares:
+        lead["available_spare"] = min(spares)
+    bad = [x for x in grp if x.get("health_ok") is False]
+    if bad:
+        lead["health_ok"] = False
+        lead["health"] = bad[0].get("health") or "FAILED"
+    # 分级 / 趋势在合并后重算，先清掉可能已存在的旧值
+    lead.pop("health_grade", None)
+    lead.pop("health_trend", None)
+    return lead
+
+
 def _enrich_disk_channels(disks, raid):
-    """给每块盘标注通道来源：序列号命中阵列卡 storcli 盘 → 阵列卡通道；否则按接口标主板通道。"""
+    """给每块盘标注通道来源（阵列卡 / 主板）+ 健康分级与缺陷趋势（v2.3.0 3.4）。"""
     raid_sn = {}
+    raid_pd = {}
     if raid and isinstance(raid, dict) and raid.get("mode") == "mega":
         for dv in raid.get("drives", []):
             sn = (dv.get("sn") or "").strip().upper()
             if sn:
                 raid_sn[sn] = dv.get("slot", "")
+                raid_pd[sn] = dv
     locate_ok = bool(raid.get("locate_supported")) if raid else False
     for d in disks:
         sn = (d.get("serial") or "").strip().upper()
@@ -6280,6 +7821,63 @@ def _enrich_disk_channels(disks, raid):
             else:
                 d["channel"] = "主板 SATA 直连"
                 d["channel_type"] = "mobo_sata"
+    # 双磁臂盘（同一物理盘拆成多个逻辑盘）先合并成一张卡，再统一算分级 / 趋势
+    disks = _merge_dual_actuator(disks)
+    # 阵列卡「藏起来」的物理盘：RAID 卡把组阵的盘攥在手里，OS 里没有对应的 /dev/sdX
+    # 节点（只暴露合并后的虚拟盘，如 MRS9362-8i），而 get_disks() 走 /sys/block 枚举
+    # → 天然看不到它们。表现＝硬盘页只有系统盘 + 阵列虚拟盘（用户 2026-09-18 报
+    # 「7 块盘只看到 2 块」）。这里把仅阵列卡可见的物理盘补进列表（按 SN 去重，
+    # 系统层已能看到的盘不重复添加），标 channel_type=raid。
+    # dev 故意留空：没有块设备节点 → 前端据此禁用依赖 /dev 的操作（自检等）。
+    if raid and isinstance(raid, dict) and raid.get("mode") == "mega":
+        _known_sn = {(d.get("serial") or "").strip().upper() for d in disks}
+        for dv in raid.get("drives", []):
+            _sn = (dv.get("sn") or "").strip().upper()
+            if _sn and _sn in _known_sn:
+                continue
+            _intf = (dv.get("intf") or "").upper()
+            disks.append({
+                "dev": "",                       # 无块设备节点（阵列卡持有）
+                "size": dv.get("size") or "",
+                "rota": "1",                     # 阵列卡下多为机械盘；前端主要看 size/model
+                "model": dv.get("model") or "",
+                "serial": dv.get("sn") or "",
+                "tran": _intf or "SAS",
+                "vendor": dv.get("brand") or "",
+                "type": "sas" if _intf == "SAS" else "ata",
+                "health": "N/A",                 # 阵列卡侧 SMART 判定在 pd_health 里
+                "health_ok": False,
+                "asleep": False,
+                "temp": dv.get("temp"),          # v2.3.0：阵列卡给的单盘温度
+                "power_on_hours": None,
+                "rpm": dv.get("rpm") or "",
+                "brand": dv.get("brand") or "",
+                "feature": dv.get("feature") or "",
+                "size_note": dv.get("size_note") or "",
+                "channel": "阵列卡通道 c0:" + str(dv.get("slot", "")),
+                "channel_type": "raid",
+                "slot": dv.get("slot", ""),
+                "locate_supported": locate_ok,
+                "raid_only": True,               # 前端标记：仅阵列卡可见（无 /dev 节点）
+                "dg": dv.get("dg", ""),
+                "pd_health": dv.get("pd_health") or {},
+            })
+            if _sn:
+                _known_sn.add(_sn)
+    names = _disk_names_load()
+    for d in disks:
+        pd = raid_pd.get((d.get("serial") or "").strip().upper()) or {}
+        key = _health_key_for(d, pd)
+        # 自定义盘名（v2.3.0 3.8）：name_key 给前端回传改名请求用；custom_name 空串=未命名
+        d["name_key"] = key
+        d["custom_name"] = names.get(key) or ""
+        # 健康分级（阵列卡侧字段来自 storcli，系统侧来自 smartctl 已解析字段）+ 缺陷趋势
+        try:
+            grade = _grade_disk_health(d, pd)
+            d["health_grade"] = grade
+            d["health_trend"] = _health_trend_for(key, grade.get("counters") or {})
+        except Exception as e:
+            _debug("grade disk health failed: " + str(e))
     return disks
 
 
@@ -6725,6 +8323,30 @@ def api_disks():
     except Exception as e:
         return jsonify({"error": str(e), "time": _panel_time()})
 
+
+@app.route("/api/disks/rename", methods=["POST"])
+def api_disks_rename():
+    """设置/清除运维自定义盘名（v2.3.0 3.8）。body: {key, name}；name 空串 = 清除。
+
+    key 用 /api/disks 返回的 name_key（序列号优先，与缺陷趋势同源），
+    前端不自己拼 key，避免口径漂移。"""
+    try:
+        data = request.get_json(force=True) or {}
+    except Exception:
+        return jsonify({"ok": False, "error": "请求格式错误"}), 400
+    key = str(data.get("key") or "").strip()
+    if not key or len(key) > 128:
+        return jsonify({"ok": False, "error": "缺少盘标识"}), 400
+    name = _disk_name_clean(data.get("name"))
+    cfg = _disk_names_load()
+    if name:
+        cfg[key] = name
+    else:
+        cfg.pop(key, None)
+    if not _save_json_file(_disk_names_path(), cfg):
+        return jsonify({"ok": False, "error": "保存失败"}), 500
+    return jsonify({"ok": True, "key": key, "name": name})
+
 @app.route("/api/disks/selftest", methods=["GET"])
 def api_disks_selftest_get():
     """返回当前硬盘自检任务状态（只读）。"""
@@ -6817,10 +8439,16 @@ def api_disks_selftest_abort():
 
 @app.route("/api/storage")
 def api_storage():
-    """存储卷板块（mdadm/lsblk/df，均为本地快速命令）。"""
+    """存储卷板块（mdadm/lsblk/df，均为本地快速命令）。volume_map = 卷映射树（v2.3.0 3.6）。"""
     t0 = time.time()
     try:
-        return jsonify({"storage": get_storage(), "time": _panel_time(), "elapsed": round(time.time() - t0, 2)})
+        storage = get_storage()
+        try:
+            storage["volume_map"] = get_volume_map()
+        except Exception as e:
+            storage["volume_map"] = {"volumes": [], "loose": [], "error": str(e)}
+            _debug("volume_map failed: " + str(e))
+        return jsonify({"storage": storage, "time": _panel_time(), "elapsed": round(time.time() - t0, 2)})
     except Exception as e:
         return jsonify({"error": str(e), "time": _panel_time()})
 
@@ -6850,6 +8478,40 @@ def get_live_mem():
     except Exception:
         return None
 
+@app.route("/api/network/wol", methods=["POST"])
+def api_network_wol():
+    """设置网卡 WOL（网络唤醒）开关（v2.3.0 3.2）。
+    仅对硬件支持该能力的物理口开放；成功后写进配置，进程启动时回放一次以跨重启保留。
+    作用面严格限于用户点的那张网卡，不做其它系统改动。"""
+    try:
+        data = request.get_json(force=True) or {}
+    except Exception:
+        return jsonify({"ok": False, "error": "请求格式错误"}), 400
+    phy = _wol_phy_name(data.get("name"))
+    enable = bool(data.get("enable"))
+    if not phy:
+        return jsonify({"ok": False, "error": "缺少网卡名"}), 400
+    ok, err = _wol_apply(phy, enable)
+    if not ok:
+        return jsonify({"ok": False, "error": err or "设置失败"}), 400
+    cfg = _wol_load_cfg()
+    cfg[phy] = enable
+    _wol_save_cfg(cfg)
+    # 写成功后必须让「读」的缓存失效：get_network_nics 有 60s TTL 缓存、
+    # get_system 有 30s TTL 缓存（检测页走 /api/all → system.nics），
+    # 否则用户刷新页面会看到 60 秒内的旧状态（"刚关了又显示开着"）。
+    try:
+        get_network_nics.cache_clear()
+    except Exception:
+        pass
+    try:
+        _SYSTEM_CACHE["v"] = None
+        _SYSTEM_CACHE["t"] = 0.0
+    except Exception:
+        pass
+    return jsonify({"ok": True, "name": phy, "enabled": enable})
+
+
 @app.route("/api/network")
 def api_network():
     """独立网卡接口：返回 get_network_nics() 结果（IP/MAC/速率/驱动/状态等）。
@@ -6862,6 +8524,69 @@ def api_network():
         return resp
     except Exception as e:
         return jsonify({"nics": [], "error": str(e)}), 500
+
+
+@app.route("/api/ports")
+def api_ports():
+    """宿主机端口占用：列出所有监听端口 + 占用进程 + 是否 Docker 容器端口（v2.3.0 端口扫描）。"""
+    try:
+        return jsonify({"ports": get_listening_ports(), "time": _panel_time()})
+    except Exception as e:
+        return jsonify({"ports": [], "error": str(e)}), 500
+
+@app.route("/api/ports/appicon")
+def api_ports_appicon():
+    """返回应用中心某个已安装 app 的图标，供「端口占用」页标出是哪个应用在用端口。
+
+    只接受已安装的 appid（_app_ids 白名单）+ 固定子路径，杜绝目录穿越；
+    Docker 容器行也用这个接口——商店装的 docker 应用（homebox / cf-dns-select）会生成同名
+    @appcenter 目录，容器名即 appid，同样命中白名单；纯 docker run 的容器没有图标源。
+    找不到图标就 404，前端自动回退成纯文字。图片强缓存一天（图标基本不变）。
+    """
+    appid = (request.args.get("app") or "").strip()
+    if not appid or appid not in _app_ids():
+        return ("", 404)
+    path = _app_icon_file(appid)
+    if not path:
+        return ("", 404)
+    try:
+        mt = _ICON_MIME.get(os.path.splitext(path)[1].lower(), "image/png")
+        resp = make_response(send_file(path, mimetype=mt))
+    except Exception:
+        return ("", 404)
+    resp.headers["Cache-Control"] = "public, max-age=86400"
+    return resp
+
+
+@app.route("/api/ports/release", methods=["POST"])
+def api_ports_release():
+    """释放端口占用：终止占用该端口的进程（SIGTERM 优雅终止）。
+    安全边界：禁止 kill 系统关键进程（nasdash 自身 / PID1 / systemd / dockerd / sshd 等）与 fnOS 核心服务；
+    其余进程由用户在前端二次确认后承担后果。"""
+    try:
+        data = request.get_json(force=True) or {}
+    except Exception:
+        return jsonify({"ok": False, "error": "请求格式错误"}), 400
+    pid = data.get("pid")
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "PID 非法"}), 400
+    if pid <= 1:
+        return jsonify({"ok": False, "error": "PID 非法"}), 400
+    self_pid = os.getpid()
+    if pid == self_pid:
+        return jsonify({"ok": False, "blocked": True, "error": "不能释放 nasdash 自身进程"}), 400
+    if pid == 1:
+        return jsonify({"ok": False, "blocked": True, "error": "该进程为系统关键进程，禁止释放"}), 400
+    comm = _proc_comm(pid)
+    if comm in _PORT_PROTECTED:
+        return jsonify({"ok": False, "blocked": True, "error": "该进程为系统关键进程，禁止释放"}), 400
+    try:
+        out = sudo_cmd(["kill", "-TERM", str(pid)], 5)
+    except Exception as e:
+        return jsonify({"ok": False, "error": "释放失败：" + str(e)}), 500
+    return jsonify({"ok": True, "pid": pid, "process": comm, "output": (out or "")[:200]})
 
 
 # 磁盘静态元数据缓存：/api/metrics 被前端每 1s 轮询，而 get_disks() 对每块盘跑 smartctl
@@ -7197,6 +8922,43 @@ def _dedup_fan_names(fans):
     return fans
 
 
+def _read_fan_drivers():
+    """只读展示风扇「谁在管风扇」：枚举本机 hwmon 风扇芯片 -> 芯片名 + 内核驱动模块 + 加载状态 + PWM 通道映射。
+    纯只读，不引入任何 modprobe/主动控制逻辑（v2.3.0 计划 3.1）。"""
+    import os as _os
+    chips = {}
+    for (hwmon, idx) in _enumerate_fans():
+        if hwmon not in chips:
+            info = {"hwmon": hwmon, "chip": None, "driver": None,
+                    "driver_loaded": None, "pwm_map": []}
+            _name = read_file(f"{hwmon}/name").strip()
+            info["chip"] = _name or None
+            _drv = None
+            _dlink = _os.path.join(hwmon, "device", "driver")
+            try:
+                if _os.path.islink(_dlink):
+                    _drv = _os.path.basename(_os.readlink(_dlink))
+            except Exception:
+                pass
+            if not _drv:
+                _mod = read_file(f"{hwmon}/device/modalias").strip()
+                if _mod:
+                    _drv = _mod.split(":", 1)[1] if ":" in _mod else _mod
+            info["driver"] = _drv or None
+            if _drv:
+                _st = read_file(f"/sys/module/{_drv}/initstate").strip()
+                info["driver_loaded"] = (_st == "live")
+            chips[hwmon] = info
+        _pv = read_file(f"{hwmon}/pwm{idx}").strip()
+        try:
+            _raw = int(_pv)
+        except Exception:
+            _raw = None
+        _pct = round(_raw / 255 * 100) if _raw is not None else None
+        chips[hwmon]["pwm_map"].append({"fan": idx, "pwm": idx, "raw": _raw, "pct": _pct})
+    return list(chips.values())
+
+
 def get_fan_status():
     """风扇实时状态列表（供前端轮询与硬件健康报告复用）。"""
     fans = []
@@ -7208,6 +8970,7 @@ def get_fan_status():
     _need_combo = any((r.get("source") or "").startswith("combo") for r in _rules.values())
     _need_cpu = any((r.get("source") == "cpu") for r in _rules.values()) or _need_combo
     _need_mb = any((r.get("source") == "mb") for r in _rules.values()) or _need_combo
+    _need_raid = any((r.get("source") == "raid") for r in _rules.values()) or _need_combo
     _disk_idle_s, _disk_T, _disk_has = (False, None, False)
     if _need_disk:
         _dt_eff = _dt
@@ -7219,6 +8982,7 @@ def get_fan_status():
         _disk_idle_s, _disk_T, _disk_has = _disk_source_state(_dt_eff)
     _cpu_T = _fan_read_sys_temp("cpu") if _need_cpu else None
     _mb_T = _fan_read_sys_temp("mb") if _need_mb else None
+    _raid_T = _fan_read_sys_temp("raid") if _need_raid else None
     fc_raw = read_file("/vol2/@appconf/FanControlServer/config.json")
     names = {}
     if fc_raw:
@@ -7257,7 +9021,7 @@ def get_fan_status():
         if _rule:
             _src = _rule.get("source", "disk")
             rule_source = _src
-            _rt, _ridle = _resolve_rule_temp(_src, _cpu_T, _mb_T, _disk_T, _disk_idle_s, _disk_has)
+            _rt, _ridle = _resolve_rule_temp(_src, _cpu_T, _mb_T, _disk_T, _disk_idle_s, _disk_has, _raid_T)
             if _rt is not None or _ridle:
                 _raw = 0 if _ridle else _fan_rule_pwm(_rt, _rule)
                 if _raw is not None:
@@ -7322,7 +9086,20 @@ def get_fan_status():
 @app.route("/api/fan/status")
 def api_fan_status():
     """轻量风扇状态：供前端高频轮询，实时显示转速/当前占空比/目标（常驻线程 2s tick）"""
-    return jsonify({"fans": get_fan_status(), "control_enabled": _FAN_CTRL_ENABLED})
+    # fcs 只读 15s TTL 缓存（_fcs_status_cached 绝不在此跑 systemctl），供前端在「接管关闭」时
+    # 说清现在由谁在管风扇（v2.3.0 3.1）。
+    _fs = _fcs_status_cached()
+    return jsonify({
+        "fans": get_fan_status(),
+        "control_enabled": _FAN_CTRL_ENABLED,
+        "fan_drivers": _read_fan_drivers(),
+        "fcs": {
+            "running": bool(_fs.get("running")),
+            "installed": bool(_fs.get("installed") or _fs.get("enabled")),
+            "configured": _fcs_board_cfg_cached(),
+            "disabled_by_user": bool(_fs.get("disabled_by_user")),
+        },
+    })
 
 
 @app.route("/api/fan/control")
@@ -7527,7 +9304,7 @@ def _validate_fan_rule(r):
         return (None, "规则需为对象")
     src = r.get("source", "disk")
     if src not in _FAN_RULE_SOURCES and not (src.startswith("combo_max:") or src.startswith("combo_avg:")):
-        return (None, "source 需为 disk / cpu / mb 或 combo_max:/combo_avg: 组合（如 combo_max:cpu,mb）")
+        return (None, "source 需为 disk / cpu / mb / raid 或 combo_max:/combo_avg: 组合（如 combo_max:cpu,mb）")
     clean = {"enabled": bool(r.get("enabled", True)), "source": src}
     # active_mode：3按钮显式控速方案（'linear' 或 'curve'）。
     # 未提供时根据「是否有曲线」推断：有曲线→'curve'，否则→'linear'（兼容老配置）。
@@ -7984,7 +9761,11 @@ def _parse_log_entries(log_tail):
         ts = m.group(1) if m else ""
         text = (m.group(2) if m else s)
         low = text.lower()
-        if any(k in low for k in ("traceback", "error", "exception", "failed", "失败", "错误")):
+        # Werkzeug 访问日志（"127.0.0.1 - - [时间] "GET /api/xxx HTTP/1.1" 200"）一律算常规信息。
+        # 否则 URL 里含 error 的接口（如 /api/errors/test）会被关键词误判成 ERROR，报告出现假错误。
+        if re.match(r'^\S+ - - \[', s):
+            lvl = "INFO"
+        elif any(k in low for k in ("traceback", "error", "exception", "failed", "失败", "错误")):
             lvl = "ERROR"
         elif any(k in low for k in ("warn", "warning", "警告")):
             lvl = "WARN"
@@ -7992,6 +9773,96 @@ def _parse_log_entries(log_tail):
             lvl = "INFO"
         entries.append((ts, lvl, text))
     return entries
+
+
+# ===================== 报告脱敏（贴论坛用） =====================
+# 报告里带着内网 IP、MAC、硬盘/内存序列号、主机名、云盘账号名——留档自用没问题，
+# 贴到论坛/群里就等于把这些公开了。脱敏只做「够用即可」的打码：保留厂商可辨的部分
+# （MAC 前 3 段是 OUI、序列号首尾几位），既能让自己认出是哪块盘，又不足以被人冒用报修。
+def _mask_serial(s):
+    s = str(s or "")
+    if not s:
+        return s
+    if len(s) <= 8:
+        return s[:2] + "****"
+    return s[:4] + "*" * max(4, len(s) - 6) + s[-2:]
+
+
+def _mask_ip(s):
+    s = str(s or "")
+    if not s:
+        return s
+    if ":" in s:                       # IPv6：只留第一组，其余打码（仍可看出运营商前缀段）
+        return s.split(":", 1)[0] + ":****:****:****:****"
+    parts = s.split(".")
+    if len(parts) == 4:
+        return "%s.%s.*.*" % (parts[0], parts[1])
+    return "***"
+
+
+def _mask_mac(s):
+    s = str(s or "")
+    if not s:
+        return s
+    parts = s.split(":")
+    if len(parts) == 6:
+        return ":".join(parts[:3]) + ":**:**:**"
+    return "**:**:**:**:**:**"
+
+
+def _redact_report(rep):
+    """返回脱敏后的报告副本（不改动原 rep）。作用于 /api/report 的 html 与 json 两种格式。"""
+    rep = json.loads(json.dumps(rep, ensure_ascii=False, default=str))
+    # 「自由文本」里也要抹掉的字面量：存储拓扑是一整段原样输出的文本树，云盘账号名、主机名
+    # 会直接躺在里面（结构化字段打了码也没用）。先收集原文，字段级打码后再全文兜底替换。
+    literals = []
+    _h = str(rep.get("host") or "").strip()
+
+    def _blank(v):
+        return bool(str(v or "").strip())
+
+    if _h:
+        rep["host"] = "已脱敏"
+        if len(_h) >= 4:            # 太短的主机名不做全文替换，避免误伤其它文本
+            literals.append(_h)
+    sys_ = rep.get("system") or {}
+    if _blank(sys_.get("hostname")):
+        sys_["hostname"] = "已脱敏"
+    for n in (sys_.get("nics") or []):
+        for k, fn in (("ip", _mask_ip), ("ipv6", _mask_ip), ("mac", _mask_mac)):
+            if _blank(n.get(k)):
+                n[k] = fn(n.get(k))
+    for m in ((sys_.get("memory_modules") or {}).get("modules") or []):
+        if _blank(m.get("serial")):
+            m["serial"] = _mask_serial(m.get("serial"))
+    for d in (rep.get("disks") or []):
+        for k in ("serial", "wwn"):
+            if _blank(d.get(k)):
+                d[k] = _mask_serial(d.get(k))
+    raid = rep.get("raid") or {}
+    for k in ("serial", "sas_address"):
+        if _blank(raid.get(k)):
+            raid[k] = _mask_serial(raid.get(k))
+    for dv in (raid.get("drives") or []):
+        if _blank(dv.get("sn")):
+            dv["sn"] = _mask_serial(dv.get("sn"))
+    for v in ((rep.get("storage") or {}).get("volumes") or []):
+        if v.get("cloud"):
+            _cn = str(v.get("cloud_name") or "").strip()
+            if _cn:
+                literals.append(_cn)
+                v["cloud_name"] = "已脱敏"
+            mount = str(v.get("mount") or "")
+            # 云盘挂载点常带用户目录（/vol02/1000-1-xxxx），只留前面几段
+            if mount.count("/") >= 2:
+                v["mount"] = "/".join(mount.split("/")[:4]) + "/…"
+    rep["redacted"] = True
+    if literals:
+        blob = json.dumps(rep, ensure_ascii=False, default=str)
+        for lit in sorted(set(literals), key=len, reverse=True):
+            blob = blob.replace(lit, "已脱敏")
+        rep = json.loads(blob)
+    return rep
 
 
 def build_health_report():
@@ -8005,8 +9876,40 @@ def build_health_report():
     except Exception:
         memory_modules = {"modules": [], "total_gb": 0, "slots": 0, "brand_summary": ""}
     raid = get_raid_card()
-    disks = get_disks()
+    # 必须走 _enrich_disk_channels（与「物理硬盘信息」页同一套）：否则双磁臂盘会被当成两块盘
+    # 重复列出、且拿不到通道来源 / 健康分级 / 缺陷趋势。这里同时让上面的告警不再对同一块盘重复报。
+    try:
+        disks = _enrich_disk_channels(get_disks(), raid)
+    except Exception:
+        disks = get_disks()
+    # 应用刚启动时后台预热正在做全量扫盘（本机实测约 8–10s）：get_disks() 拿不到锁会直接
+    # 返回空（且不写缓存），报告就成了「0 块硬盘」。这里隔一拍重试若干次（只在为空时，
+    # 不拖慢正常路径；导出本身是手动操作，接口超时 60s，多等几秒无妨）。
+    for _ in range(8):
+        if disks:
+            break
+        time.sleep(1.2)
+        try:
+            disks = _enrich_disk_channels(get_disks(), raid)
+        except Exception:
+            pass
     system = get_system()
+    # 应用刚重启时温度快照还没拍第一张，get_system 会把「空传感器表」缓存 30s，
+    # 报告里温度段就成了「（无）」。这里只在空的情况下强制重采一次，不每次都重采。
+    if not ((system.get("sensors") or {}).get("temps") or []):
+        try:
+            _fresh = get_system(force=True)
+            if (_fresh.get("sensors") or {}).get("temps"):
+                system = _fresh
+        except Exception:
+            pass
+    # get_system 本身不带 cpu_usage（那是 /api/all 等接口层补的），报告要单独取一次，
+    # 否则报告里的「CPU 使用率」恒为空。⚠ 必须放在上面「可能整体替换 system」之后，
+    # 否则刚重启那次会被 _fresh 覆盖掉（踩过）。
+    try:
+        system["cpu_usage"] = get_cpu_usage()
+    except Exception:
+        system["cpu_usage"] = None
     system_full = {**system, "board": board, "memory_modules": memory_modules}
     storage = get_storage()
     docker = get_docker()
@@ -8020,6 +9923,7 @@ def build_health_report():
         "version": APP_VERSION,
         "host": system.get("hostname"),
         "uptime": system.get("uptime"),
+        "fnos_version": _fnos_version(),
         "raid": raid, "disks": disks, "system": system_full,
         "storage": storage, "docker": docker, "fans": fans, "alerts": alerts,
         "log_tail": _read_app_log(),
@@ -8137,6 +10041,12 @@ def _render_report_html(rep):
         if v is None or v == "":
             return "—"
         return esc(v) + suffix
+    def fmtna(v, na="不适用", suffix=""):
+        # 空值显示「不适用（原因）」，对齐「只显示可解释数据」原则；灰显以与真实值一眼区分。
+        # 返回 ("html", …) 元组——props()/data() 对元组不二次转义，故此处文案已 esc。
+        if v is None or v == "":
+            return ("html", "<span class='na'>不适用（" + esc(na) + "）</span>")
+        return esc(v) + suffix
 
     # AIDA64 风样式（全部内嵌，下载后本地打开亦正常显示、可打印）
     CSS = """
@@ -8149,10 +10059,18 @@ def _render_report_html(rep):
     .cat{background:#1f4e79;color:#fff;font-weight:700;font-size:14px;
          padding:7px 12px;margin:20px 0 0;border-radius:3px 3px 0 0;letter-spacing:.5px}
     .cat:first-of-type{margin-top:0}
+    .sub{background:#e8eff7;border:1px solid #d4dce6;border-bottom:none;border-radius:3px 3px 0 0;
+         padding:5px 12px;font-weight:600;font-size:12.5px;color:#1f4e79;margin:6px 0 0}
+    .sub .sub-tag{font-weight:400;color:#5a6b7b;margin-left:6px}
     table.props{width:100%;border-collapse:collapse;border:1px solid #d4dce6;border-top:none;margin-bottom:4px}
     table.props td.k{width:33%;background:#eef3f8;font-weight:600;
          padding:6px 12px;border-bottom:1px solid #d4dce6;vertical-align:top;color:#243b53}
     table.props td.v{padding:6px 12px;border-bottom:1px solid #d4dce6;vertical-align:top}
+    /* 同类分块左右并排（内存条、网卡 …）：2 项及以上两列，1 项仍整幅 */
+    .grid2{display:grid;grid-template-columns:1fr 1fr;gap:4px 20px;align-items:start}
+    .grid2>div{min-width:0}
+    .grid2 .sub{margin-top:6px}
+    @media print{.grid2{grid-template-columns:1fr 1fr}}
     table.data{width:100%;border-collapse:collapse;border:1px solid #d4dce6;margin-bottom:4px}
     table.data th{background:#336699;color:#fff;font-weight:600;text-align:left;
          padding:6px 10px;font-size:12px;border:1px solid #336699;white-space:nowrap}
@@ -8165,6 +10083,9 @@ def _render_report_html(rep):
     .alert-box ul{margin:0;padding-left:20px}
     .alert-box li{margin:3px 0}
     .ok{color:#1a7f37} .warn{color:#b45309} .danger{color:#c0392b}
+    .na{color:#8a97a5}
+    .redact{background:#fdf0ef;color:#a93226;border:1px solid #f0c9c4;border-radius:3px;
+         padding:1px 7px;font-size:11.5px;font-weight:600}
     .logstat{padding:9px 12px;border:1px solid #d4dce6;border-top:none;background:#f4f8fb;
          font-size:12.5px;margin-bottom:4px}
     .logstat b{font-size:13px}
@@ -8182,23 +10103,45 @@ def _render_report_html(rep):
     """
     def cat(title):
         return f"<div class='cat'>{esc(title)}</div>"
+    def sub(title, tag=""):
+        # 小节标题（比 cat 低一级）：用于「每根内存条 / 每张网卡」这类同段内的分块
+        t = f"<span class='sub-tag'>{esc(tag)}</span>" if tag else ""
+        return f"<div class='sub'>{esc(title)}{t}</div>"
     def props(rows):
         if not rows:
             return "<div class='empty'>（无）</div>"
+        def _pv(v):
+            # ("html", "...") 元组 = 已是安全 HTML（如状态着色），其余按普通值走 fmt（空 → —）
+            if isinstance(v, tuple) and len(v) == 2 and v[0] == "html":
+                return v[1]
+            return fmt(v)
         body = "".join(
-            f"<tr><td class='k'>{esc(k)}</td><td class='v'>{fmt(v)}</td></tr>"
+            f"<tr><td class='k'>{esc(k)}</td><td class='v'>{_pv(v)}</td></tr>"
             for k, v in rows)
         return f"<table class='props'>{body}</table>"
+    def _cell(c):
+        # ("html", "...") 元组表示该单元格已是安全 HTML（如健康分级着色 span），不再转义
+        if isinstance(c, tuple) and len(c) == 2 and c[0] == "html":
+            return c[1]
+        return esc(c)
     def data(headers, rows):
         if not rows:
             return "<div class='empty'>（无）</div>"
         th = "".join(f"<th>{esc(h)}</th>" for h in headers)
         body = "".join(
-            "<tr>" + "".join(f"<td>{esc(c)}</td>" for c in r) + "</tr>"
+            "<tr>" + "".join(f"<td>{_cell(c)}</td>" for c in r) + "</tr>"
             for r in rows)
         return f"<table class='data'><tr>{th}</tr>{body}</table>"
     def note(s):
         return f"<div class='note'>{esc(s)}</div>"
+    def na_html(text):
+        """灰色说明（与 fmtna 同一视觉口径），用于 props 值列的「无此项 / 均正常」类文案。"""
+        return ("html", "<span class='na'>" + esc(text) + "</span>")
+    def grid2(items):
+        """同类分块（内存条 / 显卡 / 硬盘…）：2 项及以上左右两列并排，1 项整幅。"""
+        if len(items) >= 2:
+            return "<div class='grid2'>" + "".join(f"<div>{b}</div>" for b in items) + "</div>"
+        return "".join(items)
 
     alerts = rep.get("alerts", []) or []
     sys_ = rep.get("system", {}) or {}
@@ -8225,38 +10168,98 @@ def _render_report_html(rep):
     else:
         alert_box = "<div class='alert-box'><span class='ok'>无活动告警 ✓</span></div>"
 
-    # 运行日志（诊断）：解析分级，错误/警告优先展示，与上方告警呼应，便于看 bug
-    log_entries = _parse_log_entries(rep.get("log_tail"))
+    # 运行日志（诊断）：只保留错误 / 警告行。常规行基本都是 Werkzeug 访问日志
+    # （每 2 秒一条 "GET /api/metrics 200"），对排查零价值，还会把内部接口路径全暴露给报告读者。
+    _log_all = _parse_log_entries(rep.get("log_tail"))
+    log_entries = [e for e in _log_all if e[1] in ("ERROR", "WARN")]
     n_err = sum(1 for _, lvl, _ in log_entries if lvl == "ERROR")
     n_warn = sum(1 for _, lvl, _ in log_entries if lvl == "WARN")
     if log_entries:
+        stat = (f"运行日志共 {len(_log_all)} 行：<b class='danger'>错误 {n_err}</b> · "
+                f"<b class='warn'>警告 {n_warn}</b>（常规访问日志已省略）")
         log_rows_html = "".join(
             f"<div class='log-line lv-{lvl.lower()}'><span class='lt'>{esc(ts)}</span>{esc(text)}</div>"
             for ts, lvl, text in log_entries)
-        if n_err or n_warn:
-            stat = (f"运行日志共 {len(log_entries)} 行：<b class='danger'>错误 {n_err}</b> · "
-                    f"<b class='warn'>警告 {n_warn}</b> · 常规 {len(log_entries) - n_err - n_warn}"
-                    f"（下方按级别着色，错误/警告优先置顶展示）")
-            # 错误/警告行优先，常规行放最后
-            log_entries_sorted = sorted(log_entries, key=lambda e: 0 if e[1] == "ERROR" else (1 if e[1] == "WARN" else 2))
-            log_rows_html = "".join(
-                f"<div class='log-line lv-{lvl.lower()}'><span class='lt'>{esc(ts)}</span>{esc(text)}</div>"
-                for ts, lvl, text in log_entries_sorted)
-        else:
-            stat = f"运行日志共 {len(log_entries)} 行，最近日志无错误 ✓（常规信息）"
         log_html = f"<div class='logstat'>{stat}</div><div class='log-wrap'>{log_rows_html}</div>"
+    elif _log_all:
+        log_html = (f"<div class='logstat'>运行日志共 {len(_log_all)} 行，"
+                    f"<span class='ok'>无错误 / 警告 ✓</span>（常规访问日志已省略）</div>")
     else:
         log_html = "<div class='empty'>（暂无运行日志）</div>"
 
+    # 系统：原先只有 CPU 型号/核心数/最大频率，操作系统那行还是空的（摘要里
+    # 「操作系统 / 运行时长」只填了运行时长）。补上 OS / 内核 / fnOS 版本、CPU 架构与缓存、
+    # 实时功耗；显卡移出本段，单独成段（见下），避免和显卡详情重复。
+    ci = sys_.get("cpu_info") or {}
+    powr = sys_.get("power") or {}
+    # RAPL 的 package 是整颗 CPU 封装，core/uncore/dram 是它的下级域——相加会重复计一遍，
+    # 所以只报封装值，下级域放括号里，不给「合计」。
+    pw_txt = ""
+    if powr.get("ok") and powr.get("package") is not None:
+        _sub = []
+        for _k, _lab in (("core", "核心"), ("uncore", "核显/非核心"), ("dram", "内存控制器")):
+            if powr.get(_k) is not None:
+                _sub.append("%s %s W" % (_lab, powr.get(_k)))
+        pw_txt = "%s W" % powr.get("package")
+        if _sub:
+            pw_txt += "（其中 " + " · ".join(_sub) + "）"
+
+    def _mhz(v):
+        try:
+            return "%d MHz" % float(v)
+        except (TypeError, ValueError):
+            return fmt(v)
+
+    def _cache_s(v):
+        """lscpu 的「128 KiB (4 instances)」→「128 KiB ×4」，报告里更短更好读。"""
+        s = str(v or "")
+        m = re.match(r"^(.*?)\s*\((\d+)\s+instances?\)$", s)
+        return (m.group(1) + " ×" + m.group(2)) if m else s
+
     sys_rows = [
+        ["操作系统", fmt(sys_.get("os"))],
+        ["内核版本", fmt(sys_.get("kernel"))],
+        ["fnOS 系统版本", fmt(rep.get("fnos_version"))],
         ["CPU 型号", fmt(sys_.get("cpu_model"))],
-        ["CPU 核心/线程", f"{fmt(sys_.get('cpu_cores'))} / {fmt(sys_.get('cpu_threads'))}"],
-        ["CPU 最大频率", fmt(sys_.get("cpu_freq"), " MHz")],
+        ["CPU 架构", fmt(ci.get("arch"))],
+        ["CPU 核心 / 线程",
+         f"{fmt(sys_.get('cpu_cores'))} / {fmt(sys_.get('cpu_threads'))}"
+         + (f"（每插槽 {fmt(ci.get('cores_per_socket'))} 核）" if ci.get("cores_per_socket") else "")],
+        ["CPU 频率（最大 / 当前）",
+         f"{_mhz(sys_.get('cpu_freq') or ci.get('max_freq_mhz'))} / {_mhz(ci.get('current_freq_mhz'))}"],
+        ["CPU 缓存（L1d / L1i / L2 / L3）",
+         " / ".join(_cache_s(ci.get(_k)) or "—" for _k in ("l1d", "l1i", "l2", "l3"))],
+        ["CPU 功耗（RAPL 实时）", pw_txt or fmtna("", "本机未启用 RAPL（消费级/AMD 常见）")],
+        ["CPU 使用率", fmt(sys_.get("cpu_usage"), " %")],
         ["负载 (1/5/15)", " / ".join(fmt(x) for x in (sys_.get("load") or []))],
         ["内存", f"{fmt(mem.get('used'))} / {fmt(mem.get('total'))}（{fmt(mem.get('percent'))}%）"],
         ["交换分区", f"{fmt(swap.get('used'))} / {fmt(swap.get('total'))}"],
-        ["显卡", fmt("、".join((g.get("name") or g.get("type") or "") for g in gpus) if gpus else "—")],
     ]
+    # 显卡：每张卡一块（型号全名 + 架构 + 驱动 + 显存 + 频率 + 温度 + 功耗）
+    gpu_items = []
+    for g in gpus:
+        _gd = [x for x in [
+            (g.get("driver") or ""),
+            (str(g.get("driver_ver")) if g.get("driver_ver") else ""),
+        ] if x]
+        _clk = [x for x in [
+            (("%s MHz 核心" % g.get("core_clock")) if g.get("core_clock") else ""),
+            (("%s MHz 显存" % g.get("mem_clock")) if g.get("mem_clock") else ""),
+        ] if x]
+        gpu_items.append(sub(fmt(g.get("name_full") or g.get("name")) or "显卡",
+                             fmt(g.get("type"))) + props([
+            ["类型", fmt(g.get("type"))],
+            ["架构代号", fmtna(g.get("name_arch"), "未能识别（PCI ID 库未收录）")],
+            ["驱动", " ".join(_gd) or fmtna("", "未加载内核驱动")],
+            ["PCI 地址", fmt(g.get("pci"))],
+            ["显存", fmt(g.get("vram") or g.get("memory_total"))],
+            ["显存类型", fmtna(g.get("mem_type"), "核显/集显无独立显存")],
+            ["频率", " · ".join(_clk) or fmtna("", "该显卡未暴露频率")],
+            ["温度", fmt(g.get("temp"), " ℃") if g.get("temp") is not None else fmtna("", "该显卡未暴露温度")],
+            ["功耗", (f"{fmt(g.get('power_draw'))} / {fmt(g.get('power_cap'))} W"
+                     if g.get("power_draw") is not None else fmtna("", "该显卡未暴露功耗"))],
+        ]))
+    gpu_blocks = grid2(gpu_items)
     board_rows = [
         ["制造商", fmt(board.get("manufacturer"))],
         ["型号", fmt(board.get("product"))],
@@ -8277,40 +10280,346 @@ def _render_report_html(rep):
         ])
     mem_summary = "共 {s} 槽 ｜ 已装 {t} GB ｜ 品牌汇总：{b}".format(
         s=fmt(mm.get("slots")), t=fmt(mm.get("total_gb")), b=fmt(mm.get("brand_summary")))
-    temp_rows = [[fmt(t.get("name")), fmt(t.get("value"), " ℃"), fmt(t.get("max"), " ℃"), fmt(t.get("crit"), " ℃")]
-                 for t in (sens.get("temps") or [])]
-    fan_sens_rows = [[fmt(f.get("name")), fmt(f.get("rpm"), " RPM"), fmt(f.get("mode")), fmt(f.get("pwm"), " %")]
-                     for f in (sens.get("fans") or [])]
-    volt_rows = [[fmt(v.get("name")), fmt(v.get("value"), " V")] for v in (sens.get("voltages") or [])]
-    fanctl_rows = []
+    # 已装内存条详细参数：每根条一块「字段 → 值」纵表。
+    # 原先用 9 列横表，中文说明（如「不适用（该内存条未写入 SPD）」）被挤成多行、短值列（Rank/电压）又空得浪费，
+    # 排版很乱；改为纵向 props（与「主板」「阵列卡（硬件）」同款），长说明自然换行、多根条各占一块。
+    mem_detail_items = []
+    for m in (mm.get("modules") or []):
+        if not m.get("installed"):
+            continue
+        tw, dw = m.get("total_width"), m.get("data_width")
+        bw = ("%s / %s" % (tw, dw)) if (tw and dw) else ""
+        src = "SPD 直读（decode-dimms + 原始 SPD 字节）" if m.get("source") == "spd" else "dmidecode -t 17"
+        _ch = ""
+        _ma = re.search(r"Channel([A-Za-z])", str(m.get("locator") or ""))
+        if _ma:
+            _ch = "通道 " + _ma.group(1).upper()
+        mem_detail_items.append(sub(fmt(m.get("locator")) or "内存条", _ch) + props([
+            ["容量", fmt(m.get("size"))],
+            ["类型", fmt(m.get("type"))],
+            ["额定频率", fmt(m.get("speed"))],
+            ["实际运行频率", fmtna(m.get("cfg_speed"), "dmidecode 未返回")],
+            ["模组厂商", fmt(m.get("manufacturer") or m.get("brand"))],
+            ["颗粒厂商", fmtna(m.get("dram_manufacturer"), "SPD 未返回")],
+            ["型号（料号）", fmtna(m.get("part"), "该内存条未写入 SPD")],
+            ["Rank（颗粒阵列）", fmtna(m.get("rank"), "dmidecode 未返回")],
+            ["位宽（总 / 数据）", fmtna(bw, "dmidecode 未返回")],
+            ["电压", fmtna(m.get("voltage"), "dmidecode 未返回")],
+            ["生产日期", fmtna(m.get("manufacture_date"), "该内存条未写入 SPD")],
+            ["序列号", fmtna(m.get("serial"), "该内存条未写入 / 占位")],
+            ["数据来源", fmt(src)],
+        ]))
+    # 版式：单条整幅；2 条及以上左右两列并排（列宽各半，各行顶部对齐）
+    mem_detail_blocks = grid2(mem_detail_items)
+    # 板级内存信息
+    mem_board = []
+    if mm.get("ecc_type"):
+        mem_board.append("板级 ECC 类型：" + fmt(mm.get("ecc_type")))
+    if mm.get("max_capacity"):
+        mem_board.append("最大支持容量：" + fmt(mm.get("max_capacity")) + "；插槽总数：" + fmt(mm.get("num_devices")))
+    edac = mm.get("edac") or {}
+    if edac.get("available"):
+        mem_board.append("EDAC 内存错误：ce(可纠正)=%s ue(不可纠正)=%s" % (edac.get("ce"), edac.get("ue")))
+    else:
+        mem_board.append("EDAC 内存错误：本机未启用（消费级主板常见）")
+    # 温度测点：与「温度」页同口径——丢掉无效读数与非直观测点。
+    # 未接传感器的 hwmon 条目（PCH_CHIP_TEMP / PCH_CPU_TEMP / PCH_MCH_TEMP / Agent0 Dimm0 等）
+    # 会恒读 0 ℃，若照原样列出，会与同段真实存在的「PCH 芯片组 50 ℃」并列，明显误导。
+    _EXCLUDE_TEMPS = {"CPU PSS", "CPU VRM", "PECI Agent 0 Calibration",
+                      "内存温度 1", "内存温度 2", "复合温度"}
+    temp_rows = []
+    for t in (sens.get("temps") or []):
+        try:
+            _tv = float(t.get("value"))
+        except (TypeError, ValueError):
+            continue
+        if not (0 < _tv < 150):          # 无效读数（0 / 负温 / 超量程）不展示
+            continue
+        if (t.get("name") or "") in _EXCLUDE_TEMPS:
+            continue
+        temp_rows.append([fmt(t.get("name")), fmt(t.get("value"), " ℃"),
+                          fmt(t.get("max"), " ℃"), fmt(t.get("crit"), " ℃")])
+    # 风扇：原先是两张表——「传感器—风扇」用 sensors 的名字（CPU_FAN1…），
+    # 「风扇控制状态」用 fan/status 的名字（风扇1…），同一批风扇两套叫法、读者对不上号。
+    # 现按 hwmon::idx 合并成一张：名称取 sensors 的描述名（认得出插在哪个针脚），
+    # 控制信息取 fan/status（模式 / 占空比 / 目标 / 是否手动接管），状态文案与风扇页同一口径。
+    _sens_fan = {}
+    for _f in (sens.get("fans") or []):
+        try:
+            _sens_fan[(str(_f.get("hwmon") or ""), int(_f.get("idx") or 0))] = _f
+        except (TypeError, ValueError):
+            continue
+
+    def _fan_src_label(v):
+        v = str(v or "")
+        if v.startswith("combo_max:"):
+            return "两者取大"
+        if v.startswith("combo_avg:"):
+            return "两者平均"
+        if v.startswith("disk"):
+            return "硬盘温度"
+        if v == "cpu":
+            return "CPU 温度"
+        if v == "mb":
+            return "主板温度"
+        return v
+
+    fan_rows = []
     for f in fans:
-        fanctl_rows.append([
-            fmt(f.get("name")), fmt(f.get("rpm"), " RPM"), fmt(f.get("pwm"), " %"),
-            fmt(f.get("mode")), (fmt(f.get("target_pct"), " %") if f.get("target_pct") is not None else "—"),
-            fmt(f.get("voltage")),
+        try:
+            _key = (str(f.get("hwmon") or ""), int(f.get("idx") or 0))
+        except (TypeError, ValueError):
+            _key = ("", 0)
+        sm = _sens_fan.get(_key) or {}
+        _nm = sm.get("label") or sm.get("name") or f.get("label") or f.get("name")
+        rpm = f.get("rpm") or 0
+        # 状态与风扇页徽章同源：手动固定 / 未设温控 / 线性温控·源 / 曲线温控·源
+        if f.get("mode") == "manual" or f.get("manual_active"):
+            mode_s = ("html", "<span class='warn'>手动固定</span>")
+        elif not f.get("rule"):
+            mode_s = ("html", "<span class='na'>未设温控（交还主板自动）</span>")
+        else:
+            _am = f.get("active_mode") or ("curve" if f.get("mode") == "curve" else "linear")
+            if _am == "curve" and not f.get("has_curve"):
+                mode_s = ("html", "<span class='na'>曲线温控（待设曲线）</span>")
+            else:
+                _sl = _fan_src_label(f.get("rule_source"))
+                mode_s = ("html", "<span class='ok'>%s</span>" % esc(
+                    ("曲线温控" if _am == "curve" else "线性温控") + ("·" + _sl if _sl else "")))
+        # 转速：区分「空口」「无测速线」「已停转」，别一律显示 0 RPM
+        if rpm:
+            rpm_s = fmt(rpm, " RPM")
+        elif sm.get("hidden"):
+            rpm_s = na_html("空口（未接风扇）")
+        elif not (f.get("has_tach") or sm.get("has_tach")):
+            rpm_s = na_html("无测速线，读不到转速")
+        else:
+            rpm_s = na_html("已停转（0 RPM）")
+        _tgt = f.get("target_pct")
+        if _tgt is not None:
+            tgt_s = fmt(_tgt, " %")
+        elif not f.get("rule") and f.get("mode") != "manual":
+            tgt_s = na_html("交还主板自动")
+        else:
+            tgt_s = "—"
+        fan_rows.append([
+            fmt(_nm) or ("风扇 %s" % fmt(f.get("idx"))), rpm_s,
+            (fmt(f.get("pwm"), " %") if f.get("pwm") is not None else "—"),
+            mode_s, tgt_s,
         ])
-    nic_rows = [[fmt(n.get("name")), fmt(n.get("state")), fmt(n.get("mac")), fmt(n.get("speed"), " Mbps"),
-                 fmt(n.get("ip")),
-                 (f"↓{fmt(n.get('rx_rate'))} ↑{fmt(n.get('tx_rate'))}" if n.get("rx_rate") is not None else "—")]
-                for n in nics]
-    disk_rows = []
-    for d in disks:
+    _fan_on = sum(1 for f in fans if (f.get("rpm") or 0) > 0)
+    # 电压：只保留能识别用途的（+3.3V / 3VSB / CMOS 电池 等）。芯片原始编号 in0…inN 无厂商标签、
+    # 各主板含义不同（本机 in5 读 0.15 V 即明显未接），属于「无法解释的数据」，不放进给用户/论坛看的报告。
+    volt_rows = []
+    for v in (sens.get("voltages") or []):
+        _vn = str(v.get("name") or "")
+        if not _vn or re.match(r"^in\d+$", _vn):
+            continue
+        volt_rows.append([fmt(_vn), fmt(v.get("value"), " V")])
+    # 网卡：概览横表 + 每张网卡一块纵向详情。
+    # 原先只有「名称/状态/MAC/速率/IP/实时速率」六列，型号、驱动、总线、双工、MTU、IPv6、WOL
+    # 这些已采集的字段一个都没进报告。口径与「硬件配置检测」页的网卡卡片保持一致。
+    def _rate(v):
+        """字节速率 → 可读串，与页面 fmtSpeed 同口径（B/s / KB/s / MB/s）。
+        原先直接印裸数字（如「↓0.0 ↑0.0」），既没单位、大流量时又是难读的长数字。"""
+        try:
+            b = float(v)
+        except (TypeError, ValueError):
+            return "—"
+        if b < 1024:
+            return "%.0f B/s" % b
+        if b < 1048576:
+            return "%.1f KB/s" % (b / 1024.0)
+        return "%.2f MB/s" % (b / 1048576.0)
+
+    def _bytes(v):
+        """字节总量 → 可读串，与页面同口径（B / KB / MB / GB / TB）。"""
+        try:
+            b = float(v)
+        except (TypeError, ValueError):
+            return "—"
+        for _u, _d in (("TB", 1024.0 ** 4), ("GB", 1024.0 ** 3), ("MB", 1024.0 ** 2), ("KB", 1024.0)):
+            if b >= _d:
+                return "%.1f %s" % (b / _d, _u)
+        return "%.0f B" % b
+
+    nic_rows = []
+    nic_detail_blocks = ""
+    for n in nics:
+        nic_rows.append([
+            fmt(n.get("name")), fmt(n.get("state")), fmt(n.get("mac")), fmt(n.get("speed"), " Mbps"),
+            fmt(n.get("ip")),
+            (f"↓{_rate(n.get('rx_rate'))} ↑{_rate(n.get('tx_rate'))}" if n.get("rx_rate") is not None else "—"),
+        ])
+        _cfg = [x for x in [
+            (fmt(n.get("speed")) + " Mbps" if n.get("speed") else ""),
+            ((n.get("duplex") or "") + "双工" if n.get("duplex") else ""),
+            ("MTU " + str(n.get("mtu")) if n.get("mtu") else ""),
+        ] if x]
+        _hw = [x for x in [
+            (n.get("model") or ""),
+            ("驱动 " + str(n.get("driver"))) if n.get("driver") else "",
+            ("总线 " + str(n.get("bus_info"))) if n.get("bus_info") else "",
+        ] if x]
+        # WOL 只读状态（与页面同文案）：硬件是否支持 + 当前是否已启用
+        _wol_known = (n.get("wol_supported") is not None) or bool(n.get("wol_support"))
+        if not _wol_known:
+            _wol = "未知（系统缺少 ethtool，或该口不支持查询）"
+        elif not n.get("wol_supported"):
+            _wol = "不支持（网卡硬件无网络唤醒能力）"
+        else:
+            _wol = "支持（当前已启用）" if n.get("wol_enabled") else "支持（当前未启用）"
+        # OVS 场景下展示名是桥（eno1-ovs），真实物理口另标出来，便于对照交换机/主板丝印
+        _phy = str(n.get("phy_name") or "")
+        _tag = ("物理口 " + _phy) if (_phy and _phy != str(n.get("name") or "")) else ""
+        nic_detail_blocks += sub(fmt(n.get("name")) or "网卡", _tag) + props([
+            ["IPv4 地址", fmt(n.get("ip"))],
+            ["IPv6 地址", fmtna(n.get("ipv6"), "该口无全局 IPv6 地址")],
+            ["MAC 地址", fmt(n.get("mac"))],
+            ["网络配置", " · ".join(_cfg) or "—"],
+            ["硬件型号", " · ".join(_hw) or "—"],
+            ["WOL 网络唤醒", _wol],
+        ])
+    def _short_size(v):
+        """'59,042 GB [59.0 TB]' → '59.0 TB'（SMART 总读写量的原始串太长，取方括号内的整数值）"""
+        if not v:
+            return ""
+        m = re.search(r"\[([^\]]+)\]", str(v))
+        return m.group(1) if m else str(v)
+
+    def _grade_cell(d):
+        """健康分级单元格：用颜色区分红/黄/绿，与界面徽章同口径。"""
+        g = d.get("health_grade") or {}
+        lab = g.get("label") or d.get("health") or ""
+        if not lab:
+            return "—"
+        cls = {"red": "danger", "warn": "warn", "ok": "ok"}.get((g.get("level") or "").lower(), "")
+        txt = esc(lab)
+        return ("html", f"<span class='{cls}'>{txt}</span>") if cls else ("html", txt)
+
+    def _na_reason(d, field=""):
+        _ty = str(d.get("type") or "").lower()
+        if d.get("asleep"):
+            return "休眠中未唤醒"
+        if field in ("reallocated", "pending") and _ty == "nvme":
+            return "NVMe 无此 SMART 项"
+        if field in ("read_errors", "write_errors") and _ty != "sas":
+            return "SAS 盘专有项"
+        return "该盘未返回此字段"
+
+    def _disk_iface(d):
+        """接口 / 介质 / 转速 合并成一句，如「SAS · 机械盘 · 7200 rpm」。"""
         rota = str(d.get("rota"))
-        rota_s = "机械盘" if rota == "1" else ("固态" if rota == "0" else fmt(d.get("rota")))
+        rota_s = "机械盘" if rota == "1" else ("固态" if rota == "0" else "")
+        iface = str(d.get("tran") or d.get("type") or "").lower()
+        iface = {"nvme": "NVMe", "sas": "SAS", "sata": "SATA", "usb": "USB"}.get(iface, iface.upper())
+        rpm = str(d.get("rpm") or "")
+        return " · ".join([x for x in [iface, rota_s, (rpm if "rpm" in rpm else "")] if x])
+
+    disk_rows = []
+    disk_detail_items = []
+    for d in disks:
+        na = _na_reason(d)
+        # 双执行器（双磁臂）盘：系统认成两块，dev_label 是合并后的显示名（sda/sdb），
+        # 概览只给整盘容量，细节（每执行器容量、同一块物理盘）留在下面的详情块里说。
+        _dual = bool(d.get("dual_actuator"))
+        dev_s = fmt(d.get("dev_label") or d.get("dev"))
+        if _dual:
+            dev_s += "（双执行器）"
+        size_s = fmt(d.get("size_total")) if (_dual and d.get("size_total")) else fmt(d.get("size"))
+        # 重映射扇区：SAS 盘没有 ATA 的「重映射扇区」项，等价指标是 grown defect list（defects），
+        # 健康分级本身也按它计数，这里兜底展示，行名相应写成「重映射 / 缺陷」。
+        _realloc = d.get("reallocated")
+        if _realloc is None and d.get("defects") is not None:
+            _realloc = d.get("defects")
+        _temp_s = (fmt(d.get("temp"), " ℃") if d.get("temp") is not None else fmtna("", na))
         disk_rows.append([
-            fmt(d.get("dev")), fmt(d.get("brand")), fmt(d.get("model")), fmt(d.get("size")),
-            fmt(d.get("tran") or d.get("type")), rota_s,
-            (fmt(d.get("temp"), " ℃") if d.get("temp") is not None else "—"),
-            fmt(d.get("health")),
-            (fmt(d.get("power_on_hours"), " h") if d.get("power_on_hours") is not None else "—"),
-            (fmt(d.get("reallocated")) if d.get("reallocated") is not None else "—"),
-            (fmt(d.get("pending")) if d.get("pending") is not None else "—"),
+            dev_s, fmt(d.get("brand")), fmtna(d.get("model"), na), size_s,
+            fmt(_disk_iface(d)), _temp_s, _grade_cell(d),
         ])
+        g = d.get("health_grade") or {}
+        _size_detail = size_s
+        if _dual and d.get("size_total"):
+            _size_detail = "%s（两块执行器各 %s，系统识别为 %s，按序列号合并为一盘）" % (
+                fmt(d.get("size_total")), fmt(d.get("size")),
+                fmt(d.get("dev_label") or d.get("dev")))
+        def _cnt(v, field):
+            """SMART 错误计数：有值给数字，没值给原因（灰显）。"""
+            if v is not None:
+                return esc(v)
+            return "<span class='na'>不适用（%s）</span>" % esc(_na_reason(d, field))
+        # 两个计数都没有时合成一句原因，避免「不适用（x） / 不适用（x）」重复占半行
+        if d.get("read_errors") is None and d.get("write_errors") is None:
+            _err_s = na_html("不适用（%s）" % _na_reason(d, "read_errors"))
+        else:
+            _err_s = ("html", _cnt(d.get("read_errors"), "read_errors") + " / "
+                      + _cnt(d.get("write_errors"), "write_errors"))
+        _rw_s = " / ".join([x for x in [
+            _short_size(d.get("data_units_read")), _short_size(d.get("data_units_written")),
+        ] if x]) or fmtna("", "该盘 SMART 未记录读写量")
+        disk_detail_items.append(sub(dev_s, fmt(_disk_iface(d))) + props([
+            ["型号", fmtna(d.get("model"), na)],
+            ["序列号", fmtna(d.get("serial"), na)],
+            ["容量", _size_detail],
+            ["接口 / 转速", fmt(_disk_iface(d))],
+            ["接法", fmtna(d.get("channel"), na)],
+            ["温度", _temp_s],
+            ["健康分级", _grade_cell(d)],
+            ["判定原因", ("html", "<span class='na'>%s</span>" % esc("；".join(g.get("reasons") or [])))
+             if g.get("reasons") else na_html("无异常项（各项 SMART / 阵列卡指标均正常）")],
+            ["通电时间", fmtna(d.get("power_on_hours"), na, " h")],
+            ["读取 / 写入错误", _err_s],
+            ["重映射 / 缺陷", fmt(_realloc) if _realloc is not None else fmtna("", _na_reason(d, "reallocated"))],
+            ["待映射扇区", fmt(d.get("pending")) if d.get("pending") is not None else fmtna("", _na_reason(d, "pending"))],
+            ["累计读取 / 累计写入", _rw_s],
+        ]))
+    disk_detail_blocks = grid2(disk_detail_items)
+    disk_asleep = sum(1 for d in disks if d.get("asleep"))
+    # 硬件阵列卡（LSI/Broadcom，storcli 读取）。与下面的系统软阵列严格分开——本机磁盘是 JBOD
+    # 直通后由 mdadm 组软阵列，若混在一段里，读者会误以为 raid0/raid1 是阵列卡建的。
+    raid_ok = bool(raid.get("model"))
+    raid_card_rows = []
+    raid_pd_rows = []
+    if raid_ok:
+        _cv = raid.get("cachevault") or ""
+        _cvs = (raid.get("cachevault_status") or "").lower()
+        if not _cv:
+            _cv_txt = "不适用（本机未检测到掉电保护模块）"
+        elif _cvs and "optimal" not in _cvs and _cvs not in ("ok", "present"):
+            _cv_txt = ("html", f"<span class='warn'>{esc(_cv)}（⚠ 状态异常）</span>")
+        else:
+            _cv_txt = _cv
+        _vds = raid.get("virtual_drives") or []
+        _hss = raid.get("hotspares") or []
+        raid_card_rows = [
+            ["型号", fmt(raid.get("model"))],
+            ["固件版本", fmtna(raid.get("fw_version"), "阵列卡未返回")],
+            ["固件包", fmtna(raid.get("fw_package"), "阵列卡未返回")],
+            ["BIOS 版本", fmtna(raid.get("bios_version"), "阵列卡未返回")],
+            ["驱动", fmtna(raid.get("driver"), "阵列卡未返回")],
+            ["掉电保护（CacheVault）", _cv_txt],
+            ["控制器温度", fmtna(raid.get("controller_temp"), "阵列卡未返回", " ℃")],
+            ["序列号", fmtna(raid.get("serial"), "阵列卡未返回")],
+            ["SAS 地址", fmtna(raid.get("sas_address"), "阵列卡未返回")],
+            ["PCI 地址", fmtna(raid.get("pci"), "阵列卡未返回")],
+            ["逻辑盘（硬件 RAID）",
+             "、".join(str(v.get("name") or v.get("dgvd") or "?") for v in _vds) if _vds
+             else "无（本机磁盘为 JBOD 直通，交由系统软阵列管理）"],
+            ["热备盘", "、".join(str(h.get("slot") or h.get("sn") or "?") for h in _hss) if _hss else "无"],
+        ]
+        for dv in (raid.get("drives") or []):
+            ph = dv.get("pd_health") or {}
+            _bad = bool(dv.get("failed")) or bool(ph.get("smart_alert")) or (ph.get("pred_fail") or 0) > 0
+            raid_pd_rows.append([
+                fmt(dv.get("slot")), fmt(dv.get("model")), fmt(dv.get("sn")),
+                fmt(dv.get("intf")), fmt(dv.get("media")), fmt(dv.get("size")),
+                fmt(dv.get("rpm")), fmt(dv.get("state")),
+                (fmt(ph.get("temp"), " ℃") if ph.get("temp") is not None else "—"),
+                fmt(ph.get("wwn") or ""),
+                ("html", "<span class='danger'>⚠ 异常</span>") if _bad else ("html", "<span class='ok'>正常</span>"),
+            ])
     raid_rows = [[fmt(a.get("name")), fmt(a.get("level")), fmt(a.get("state")), fmt(a.get("size")),
                   fmt("、".join(a.get("disks") or []))] for a in (storage.get("raid_arrays") or [])]
-    raid_info = "阵列卡：{m}（{mode}）".format(m=fmt(raid.get("model")), mode=fmt(raid.get("mode")))
-    if raid.get("note"):
-        raid_info += " ｜ " + fmt(raid.get("note"))
     def _vol_fs(v):
         # 云挂载：文件系统名（fuse.rclone）对用户无意义，改显示是哪个云盘 + 账号
         if v.get("cloud"):
@@ -8319,14 +10628,29 @@ def _render_report_html(rep):
         return v.get("fstype")
     vol_rows = [[fmt(v.get("mount")), fmt(_vol_fs(v)), fmt(v.get("size")), fmt(v.get("used")),
                  fmt(v.get("avail")), fmt(v.get("pcent"))] for v in (storage.get("volumes") or [])]
+    # Docker：原先「状态」列直接印 docker 的英文原话（"Up 6 days (healthy)"），
+    # 「内存」印容器自己的上限（所有人共用宿主上限、没信息量），网络还给裸字节。
+    # 现改为：中文运行时长 + 健康标记 / 实际占用 + 百分比 / 流向箭头 + 换算单位。
     c_rows = []
     for c in (docker.get("containers") or []):
+        _st = str(c.get("status") or "").lower()
+        _run = str(c.get("runtime") or "")
+        if "unhealthy" in _st:
+            _state = ("html", "<span class='danger'>%s · 异常</span>" % esc(_run or "运行异常"))
+        elif "healthy" in _st:
+            _state = ("html", "<span class='ok'>%s · 健康</span>" % esc(_run or "运行中"))
+        elif c.get("running") is False:
+            _state = ("html", "<span class='warn'>%s</span>" % esc(_run or "未运行"))
+        else:
+            _state = ("html", esc(_run or "运行中"))
+        _mem_s = ("%s（%s%%）" % (_bytes(c.get("mem_bytes")), fmt(c.get("mem_pct")))
+                  if c.get("mem_bytes") is not None else "—")
+        _net_s = ("↓%s ↑%s" % (_bytes(c.get("net_rx")), _bytes(c.get("net_tx")))
+                  if c.get("net_rx") is not None else "—")
         c_rows.append([
-            fmt(c.get("name")), fmt(c.get("image")), fmt(c.get("status")), fmt(c.get("ports")),
+            fmt(c.get("name")), fmt(c.get("image")), _state, fmt(c.get("ports")),
             (fmt(c.get("cpu"), " %") if c.get("cpu") is not None else "—"),
-            (fmt(c.get("mem_pct"), " %") if c.get("mem_pct") is not None else "—"),
-            (fmt(c.get("mem")) if c.get("mem") else "—"),
-            (f"{fmt(c.get('net_rx'))} / {fmt(c.get('net_tx'))}" if c.get("net_rx") is not None else "—"),
+            _mem_s, _net_s,
         ])
     topology = storage.get("topology", "") or ""
 
@@ -8337,19 +10661,24 @@ def _render_report_html(rep):
         f"<h1 class='rep-title'>nasdash 硬件健康报告</h1>"
         f"<p class='rep-sub'>报告类型：HTML ｜ 生成时间 <b>{esc(rep.get('generated_at'))}</b> ｜ "
         f"版本 <b>{esc(rep.get('version'))}</b> ｜ 主机 <b>{esc(rep.get('host'))}</b> ｜ "
-        f"运行时长 <b>{esc(rep.get('uptime'))}</b></p>"
+        f"运行时长 <b>{esc(rep.get('uptime'))}</b> ｜ 系统 <b>{esc(sys_.get('os'))}"
+        + (f" · 内核 {esc(sys_.get('kernel'))}" if sys_.get("kernel") else "") + "</b>"
+        + ("　<span class='redact'>已脱敏</span>" if rep.get("redacted") else "")
+        + "</p>"
         # 计算机摘要（AIDA64 风：顶部概览）
         + cat("计算机摘要")
         + props([
             ["计算机名称", sys_.get("hostname")],
-            ["操作系统 / 运行时长", fmt(sys_.get("uptime"))],
+            ["操作系统", sys_.get("os")],
+            ["运行时长", fmt(sys_.get("uptime"))],
             ["nasdash 版本", rep.get("version")],
             ["CPU 温度", fmt(sys_.get("cpu_temp"), " ℃")],
             ["内存使用率", fmt(mem.get("percent"), " %")],
-            ["硬盘数量", f"{len(disks)} 块"],
+            ["硬盘数量", "{n} 块{extra}".format(
+                n=len(disks), extra=("（含 %d 块休眠）" % disk_asleep) if disk_asleep else "")],
             ["阵列卡", ("已识别：" + fmt(raid.get("model"))) if raid.get("model") else "无"],
             ["Docker 容器", f"{docker.get('running',0)} / {docker.get('total',0)} 运行中"],
-            ["风扇数量", f"{len(fans)} 个"],
+            ["风扇", f"{len(fans)} 个接口（{_fan_on} 个在转）"],
             ["活动告警", f"{len(alerts)} 项"],
         ])
         + cat("活动告警")
@@ -8358,31 +10687,44 @@ def _render_report_html(rep):
         + log_html
         + cat("系统")
         + props(sys_rows)
+        + (cat("显卡") + gpu_blocks if gpu_items else "")
         + cat("主板 / BIOS")
         + props(board_rows)
         + cat("内存")
         + note(mem_summary)
-        + data(["插槽", "状态", "品牌", "制造商", "部件号", "容量", "类型", "频率"], mm_rows)
+        + data(["插槽", "状态", "品牌", "制造商", "型号", "容量", "类型", "频率"], mm_rows)
+        + (note(" ｜ ".join(mem_board)) if mem_board else "")
+        + (note("已装内存条详细参数（每根条一块；括号内为字段为空的原因）") + mem_detail_blocks if mem_detail_blocks else "")
         + cat("传感器 — 温度")
         + data(["传感器", "当前", "上限", "临界"], temp_rows)
-        + cat("传感器 — 风扇")
-        + data(["风扇", "转速", "模式", "占空比"], fan_sens_rows)
-        + cat("传感器 — 电压")
-        + data(["电压", "值"], volt_rows)
-        + cat("风扇控制状态")
-        + data(["风扇", "转速", "当前占空比", "模式", "目标占空比", "电压"], fanctl_rows)
+        + cat("风扇")
+        + note("共 {n} 个接口、{m} 个在转。运行状态与「风扇」页徽章同源（手动固定 / 线性温控 / 曲线温控·温度源）。".format(
+            n=len(fans), m=_fan_on))
+        + data(["风扇", "转速", "当前占空比", "运行状态", "目标占空比"], fan_rows)
+        + ((cat("传感器 — 电压") + data(["电压", "值"], volt_rows)) if volt_rows else "")
         + cat("网卡")
-        + data(["名称", "状态", "MAC", "速率", "IP", "实时速率"], nic_rows)
+        + data(["名称", "状态", "MAC", "速率", "IP 地址", "实时速率"], nic_rows)
+        + nic_detail_blocks
         + cat("硬盘 SMART")
-        + data(["设备", "品牌", "型号", "容量", "接口", "类型", "温度", "健康", "通电", "重映射", "待映射"], disk_rows)
-        + cat("阵列卡 / RAID")
-        + note(raid_info)
+        + note("健康分级由 SMART 自检 + 阵列卡侧信息综合判定；累计读写为 SMART 记录的整盘吞吐量。")
+        + data(["设备", "品牌", "型号", "容量", "接口 / 转速", "温度", "健康"], disk_rows)
+        + ((note("每块硬盘明细（括号内为字段为空的原因）") + disk_detail_blocks)
+           if disk_detail_blocks else "")
+        + ((cat("阵列卡（硬件）")
+            + props(raid_card_rows)
+            + (note("阵列卡上的物理盘（storcli 读取）") if raid_pd_rows else "")
+            + (data(["槽位", "型号", "序列号", "接口", "介质", "容量", "转速", "状态", "温度", "WWN", "健康"], raid_pd_rows)
+               if raid_pd_rows else ""))
+           if raid_ok else "")
+        + cat("系统软阵列（mdadm）")
+        + (note("以上为 Linux 内核软阵列（mdadm）。硬件阵列卡未组逻辑盘时，磁盘以 JBOD 直通给系统，由 mdadm 组软阵列——"
+                "即上表阵列与本机阵列卡无关。") if raid_ok else "")
         + data(["阵列", "级别", "状态", "容量", "成员盘"], raid_rows)
         + cat("存储卷")
         + data(["挂载点", "文件系统", "总容量", "已用", "可用", "使用率"], vol_rows)
         + cat("Docker 容器")
-        + note(f"运行中 {docker.get('running',0)} / 共 {docker.get('total',0)}")
-        + data(["名称", "镜像", "状态", "端口", "CPU", "内存%", "内存", "网络 RX/TX"], c_rows)
+        + note(f"运行中 {docker.get('running',0)} / 共 {docker.get('total',0)}；内存为实际占用（括号内为占宿主内存比例），网络为容器累计流量。")
+        + data(["容器", "镜像", "运行状态", "端口", "CPU", "内存", "网络 ↓/↑"], c_rows)
         + (cat("存储拓扑")
            + f"<div class='note'><pre style='margin:0;white-space:pre-wrap;font-family:Consolas,Menlo,monospace;font-size:12px'>{esc(topology)}</pre></div>"
            if topology.strip() else "")
@@ -8464,6 +10806,9 @@ def api_alerts_test():
 def api_report():
     fmt = request.args.get("format", "json")
     rep = build_health_report()
+    # redact=1：贴论坛前把内网 IP / MAC / 序列号 / 主机名 / 云盘账号打码（html 与 json 都生效）
+    if str(request.args.get("redact", "")).lower() in ("1", "true", "yes", "on"):
+        rep = _redact_report(rep)
     if fmt == "html":
         return _render_report_html(rep)
     return jsonify(rep)

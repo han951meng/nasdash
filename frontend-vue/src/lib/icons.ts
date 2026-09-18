@@ -11,6 +11,7 @@ import iconHdd from '../../../ui/images/icon-hdd.png?inline'
 import iconStorage from '../../../ui/images/icon-storage.png?inline'
 import iconFan from '../../../ui/images/icon-fan.png?inline'
 import iconDocker from '../../../ui/images/icon-docker.png?inline'
+import iconPorts from '../../../ui/images/icon-ports.png?inline'
 import iconAutomation from '../../../ui/images/icon-automation.png?inline'
 import iconManual from '../../../ui/images/icon-manual.png?inline'
 import iconAbout from '../../../ui/images/icon-about.png?inline'
@@ -25,6 +26,7 @@ export const ICON_PNG: Record<string, string> = {
   storage: iconStorage,
   fan: iconFan,
   docker: iconDocker,
+  ports: iconPorts,
   automation: iconAutomation,
   manual: iconManual,
   about: iconAbout,

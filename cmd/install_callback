@@ -24,6 +24,9 @@ command -v smartctl >/dev/null 2>&1 || need_install+=("smartctl")
 command -v sensors >/dev/null 2>&1 || need_install+=("sensors")
 command -v mdadm >/dev/null 2>&1 || need_install+=("mdadm")
 command -v dmidecode >/dev/null 2>&1 || need_install+=("dmidecode")
+# ethtool：网卡信息 + WOL（网络唤醒）开关依赖它。fnOS 基础系统不一定自带
+# （官方网络唤醒教程的第一步就是 apt-get install ethtool），故纳入自动安装。
+command -v ethtool >/dev/null 2>&1 || need_install+=("ethtool")
 command -v decode-dimms >/dev/null 2>&1 || need_install+=("i2c-tools")
 $PYTHON -c "import flask" 2>/dev/null || need_install+=("flask")
 
@@ -99,6 +102,13 @@ if [ ${#need_install[@]} -gt 0 ]; then
                     apk) apk add i2c-tools >>"$LOG" 2>&1 ;;
                 esac
                 ;;
+            ethtool)
+                case "$PM" in
+                    apt) $APT_INSTALL ethtool >>"$LOG" 2>&1 ;;
+                    yum|dnf) $PM install -y ethtool >>"$LOG" 2>&1 ;;
+                    apk) apk add ethtool >>"$LOG" 2>&1 ;;
+                esac
+                ;;
             storcli)
                 # 正常情况不会走到这里：install_callback 第 0 步已从内置包安装 storcli。
                 # 仅当 fpk 未携带 vendor/storcli 时作为兜底提示。
@@ -147,7 +157,7 @@ chmod +x "${TRIM_APPDEST}"/*.py 2>/dev/null
 : "${TRIM_PKGVAR:=/usr/local/apps/@appdata/com.dashboard.nasdash}"
 _BACKUP_DIR="$TRIM_PKGVAR/config_backup"
 if [ -d "$_BACKUP_DIR" ]; then
-    for f in fan_disk_temp.json fan_sys_temp.json fan_labels.json board_override.txt; do
+    for f in fan_disk_temp.json fan_sys_temp.json fan_labels.json board_override.txt wol.json disk_names.json; do
         if [ -f "$_BACKUP_DIR/$f" ]; then
             cp -f "$_BACKUP_DIR/$f" "$TRIM_PKGVAR/$f"
             echo "[nasdash] 已还原用户配置 $f" >> "$LOG"

@@ -43,6 +43,11 @@ start)
     # fnOS 默认不加载，须由 app 自启恢复风扇可见性。
     modprobe nct6775 2>/dev/null || true
     modprobe it87 2>/dev/null || true
+    # 兜底：WOL（网络唤醒）开关依赖 ethtool。安装阶段若 NAS 无外网会装不上，
+    # 这里每次启动幂等补一次（已存在则 command -v 直接命中，不产生开销）。
+    if ! command -v ethtool >/dev/null 2>&1; then
+        (apt-get install -y -qq ethtool || apk add ethtool || yum install -y ethtool) >> "$LOG_FILE" 2>&1 || true
+    fi
     cd "$APP_DIR"
     # cgi 反代模式：app 监听 127.0.0.1:9800 + unix socket（双重监听，
     # 9800 供 index.cgi 反代；socket 供本地 self_test/直连健康检）。

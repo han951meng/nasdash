@@ -107,6 +107,32 @@ let lastHist: { points?: HistPoint[] } | null = null
 let themeObserver: MutationObserver | null = null
 let resizeTimer = 0
 
+// ===== 温度红线（用户可设，纯前端 localStorage，不写服务端）=====
+const TEMP_THRESHOLD_KEY = 'nasdash_temp_threshold'
+function loadTempThreshold(): number {
+  try {
+    const raw = localStorage.getItem(TEMP_THRESHOLD_KEY)
+    if (raw != null) {
+      const v = Number(raw)
+      if (!isNaN(v)) return Math.max(30, Math.min(120, Math.round(v)))
+    }
+  } catch {
+    /* 忽略 */
+  }
+  return 75
+}
+const tempThreshold = ref<number>(loadTempThreshold())
+function setTempThreshold(v: number): void {
+  const n = Math.max(30, Math.min(120, Math.round(Number(v) || 75)))
+  tempThreshold.value = n
+  try {
+    localStorage.setItem(TEMP_THRESHOLD_KEY, String(n))
+  } catch {
+    /* 忽略 */
+  }
+  drawHist(lastHist)
+}
+
 const heroStats = computed(() => [
   { v: RANGE_ZH[histRange.value], k: '当前区间' },
   { v: '30 天', k: '数据保留' },
@@ -152,6 +178,8 @@ function drawHist(d: { points?: HistPoint[] } | null): void {
   const CFG = CHART_CFG[histMetric.value] || { keys: [], unit: 'speed' }
   let maxV = 1
   CFG.keys.forEach(k => pts.forEach(p => { const v = p[k[0]] || 0; if (v > maxV) maxV = v }))
+  // 温度图：用户红线可能高于当前读数，若不加会被自动缩放顶出画面 → 抬升上限保它在图内
+  if (CFG.unit === 'c') maxV = Math.max(maxV, tempThreshold.value || 0)
   const padL = 46, padR = 10, padT = 10, padB = 20
   const X = (i: number) => padL + (cssW - padL - padR) * (i / ((pts.length - 1) || 1))
   const Y = (v: number) => cssH - padB - (cssH - padB - padT) * (v / maxV)
@@ -191,6 +219,27 @@ function drawHist(d: { points?: HistPoint[] } | null): void {
   }
   CFG.keys.forEach(k => line(k[0], k[1]))
 
+  // 用户自定义温度红线（仅在温度量纲显示）：线上方淡红危险区 + 红色虚线 + 标签
+  if (CFG.unit === 'c' && tempThreshold.value > 0 && tempThreshold.value <= maxV) {
+    const ty = Y(tempThreshold.value)
+    ctx.fillStyle = 'rgba(229,72,77,0.08)'
+    ctx.fillRect(padL, padT, cssW - padL - padR, ty - padT)
+    ctx.save()
+    ctx.strokeStyle = 'rgba(229,72,77,0.9)'
+    ctx.lineWidth = 1.2
+    ctx.setLineDash([5, 4])
+    ctx.beginPath()
+    ctx.moveTo(padL, ty)
+    ctx.lineTo(cssW - padR, ty)
+    ctx.stroke()
+    ctx.restore()
+    ctx.fillStyle = 'rgba(229,72,77,0.95)'
+    ctx.font = '10px sans-serif'
+    ctx.textAlign = 'right'
+    ctx.textBaseline = 'bottom'
+    ctx.fillText('红线 ' + Math.round(tempThreshold.value) + '°C', cssW - padR - 2, ty - 2)
+  }
+
   ctx.fillStyle = muted
   ctx.textBaseline = 'alphabetic'
   ctx.textAlign = 'left'
@@ -202,6 +251,9 @@ function drawHist(d: { points?: HistPoint[] } | null): void {
     CFG.keys.map(k => `${k[2]} <span style="color:${k[1]}">■</span>`).join(' &nbsp; ') +
     ' &nbsp; ' + (UNIT_TEXT[CFG.unit] || UNIT_TEXT.speed) +
     '（数据自部署起累积，自动保留 30 天）'
+  if (CFG.unit === 'c') {
+    legendHtml.value += ' &nbsp; <span style="color:#e5484d">┄ 红线 ' + Math.round(tempThreshold.value) + '°C</span>'
+  }
 }
 
 async function loadHistory(): Promise<void> {
@@ -653,16 +705,31 @@ onUnmounted(() => {
   <div class="section-title">{{ sectionTitle }}</div>
 
   <div class="card">
-    <div class="seg">
-      <button
-        v-for="r in RANGE_TABS"
-        :key="r.id"
-        class="seg-btn"
-        :class="{ active: histRange === r.id }"
-        @click="pickRange(r.id)"
-      >
-        {{ r.label }}
-      </button>
+    <div class="chart-head">
+      <div class="seg">
+        <button
+          v-for="r in RANGE_TABS"
+          :key="r.id"
+          class="seg-btn"
+          :class="{ active: histRange === r.id }"
+          @click="pickRange(r.id)"
+        >
+          {{ r.label }}
+        </button>
+      </div>
+      <div v-if="histMetric === 'temp'" class="thr-ctl">
+        <span class="thr-label">红线</span>
+        <input
+          class="thr-input"
+          type="number"
+          min="30"
+          max="120"
+          step="1"
+          v-model.number="tempThreshold"
+          @change="setTempThreshold(tempThreshold)"
+        />
+        <span class="thr-unit">°C</span>
+      </div>
     </div>
     <canvas ref="canvasEl" style="width: 100%; height: 170px; margin-top: 10px; display: block" />
     <div v-if="legendHtml" style="font-size: 12px; color: var(--muted); margin-top: 6px" v-html="legendHtml" />

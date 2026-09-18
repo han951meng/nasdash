@@ -39,6 +39,32 @@ interface StorageResp {
   volumes?: Volume[]
   topology?: string
   cloud_mounts?: Volume[]
+  volume_map?: VolumeMap
+}
+
+/** 卷映射树（v2.3.0 3.6）：fnOS 卷 → md/LVM → 物理盘 */
+interface MapDisk {
+  dev: string
+  serial?: string
+  model?: string
+  temp?: number | null
+  asleep?: boolean
+  slot?: string
+  pd_state?: string
+}
+interface MapVolume {
+  mount: string
+  fs?: string
+  size?: string | null
+  used?: string | null
+  pcent?: string | null
+  lvm?: string | null
+  md?: { name: string; level?: string; state?: string; size?: string } | null
+  disks: MapDisk[]
+}
+interface VolumeMap {
+  volumes: MapVolume[]
+  loose: MapDisk[]
 }
 
 const st = ref<StorageResp | null>(null)
@@ -49,6 +75,21 @@ const error = ref('')
 const raidArrays = computed<RaidArray[]>(() => st.value?.raid_arrays || [])
 const volumes = computed<Volume[]>(() => st.value?.volumes || [])
 const topology = computed(() => st.value?.topology || '')
+const vmap = computed<VolumeMap | null>(() => st.value?.volume_map || null)
+
+/** 型号太长时截断（弹 hover 由 title 补全），卡内保持一行 */
+function shortModel(m?: string): string {
+  const s = (m || '').trim()
+  if (!s) return ''
+  return s.length > 26 ? s.slice(0, 26) + '…' : s
+}
+/** 点物理盘 → 跳「硬盘 SMART」页并高亮该盘的健康卡（App.vue 监听 nasdash-nav 换页签） */
+function focusDisk(dev: string): void {
+  try {
+    sessionStorage.setItem('nasdash_focus_disk', dev)
+  } catch { /* 某些环境禁 sessionStorage，忽略（跳转仍在，只是不高亮） */ }
+  window.dispatchEvent(new CustomEvent('nasdash-nav', { detail: { tab: 'disks' } }))
+}
 
 /** 平均使用率只算本地卷：云挂载无使用率（后端置空），计入会把均值拉低成假象 */
 const avgPct = computed(() => {
@@ -152,6 +193,57 @@ onMounted(() => {
 
     <div v-if="error" class="card" style="border-color: var(--danger)">
       <div class="note" style="color: var(--danger)">{{ error }}</div>
+    </div>
+
+    <!-- 卷映射（v2.3.0 3.6）：结构对齐飞牛原生「存储空间管理」，盘块可点跳健康卡 -->
+    <div class="section-title">卷映射</div>
+    <div class="card">
+      <div v-for="v in vmap?.volumes || []" :key="v.mount" class="vmap-vol">
+        <div class="vmap-head">
+          <b class="vmap-name">{{ v.mount }}</b>
+          <span class="vmap-cap">容量 {{ v.used || '—' }} / {{ v.size || '—' }}</span>
+        </div>
+        <div class="vmap-bar"><i :style="{ width: v.pcent || '0%' }" /></div>
+        <div class="vmap-meta">
+          <span v-if="v.md"><i>RAID</i>{{ v.md.name }} · {{ v.md.level }} · {{ v.md.state }}</span>
+          <span v-else><i>RAID</i>无（直连）</span>
+          <span v-if="v.lvm" :title="'LVM 卷名：' + v.lvm"><i>逻辑卷</i>LVM</span>
+          <span><i>文件系统</i>{{ v.fs }}</span>
+        </div>
+        <div class="vmap-cap2">使用硬盘 {{ v.disks.length }}</div>
+        <div class="vmap-pds">
+          <button
+            v-for="d in v.disks"
+            :key="d.dev"
+            class="vmap-pd"
+            :title="(d.model || '') + '（点击跳到硬盘 SMART 看健康详情）'"
+            @click="focusDisk(d.dev)"
+          >
+            <b>{{ d.dev }}</b>
+            <span class="vmap-sub">{{ shortModel(d.model) }}</span>
+            <span v-if="d.slot" class="vmap-sub">槽位 {{ d.slot }}</span>
+            <span class="vmap-temp" :class="{ asleep: d.asleep }">{{ d.asleep ? '休眠' : d.temp != null ? d.temp + '℃' : '—' }}</span>
+            <span class="vmap-go">›</span>
+          </button>
+        </div>
+      </div>
+      <div v-if="vmap?.loose?.length" class="vmap-vol" style="border-bottom:0;padding-bottom:2px">
+        <div class="vmap-cap2">未入卷的盘 · {{ vmap.loose.length }} 块（独立盘，不属于任何存储卷）</div>
+        <div class="vmap-pds">
+          <button
+            v-for="d in vmap.loose"
+            :key="d.dev"
+            class="vmap-pd"
+            :title="(d.model || '') + '（点击跳到硬盘 SMART 看健康详情）'"
+            @click="focusDisk(d.dev)"
+          >
+            <b>{{ d.dev }}</b>
+            <span class="vmap-sub">{{ shortModel(d.model) }}</span>
+            <span class="vmap-temp" :class="{ asleep: d.asleep }">{{ d.asleep ? '休眠' : d.temp != null ? d.temp + '℃' : '—' }}</span>
+            <span class="vmap-go">›</span>
+          </button>
+        </div>
+      </div>
     </div>
 
     <div class="section-title">RAID 阵列</div>

@@ -515,12 +515,41 @@ def test_fcs_status_shape(monkeypatch):
     monkeypatch.setattr(app, "run_cmd", lambda cmd, *a, **k: "")
     assert app._fcs_status()["installed"] is False
 
-def test_index_has_fan_ctrl_toggle():
-    """前端风扇页应含「接管风扇控制」总开关（FCS 状态框 v2.0.5 已移除，此开关保留）。"""
-    with open("templates/index.html", encoding="utf-8") as f:
-        html = f.read()
-    assert "fanCtrlToggle" in html
-    assert "接管风扇控制" in html
+def test_fan_page_has_ctrl_toggle():
+    """前端风扇页应含「接管风扇控制」总开关（FCS 状态框 v2.0.5 已移除，此开关保留）。
+
+    v2.3.0 第 11 步「旧页退休瘦身」起旧页 templates/index.html 已删除，
+    断言对象改为 Vue 页源码 frontend-vue/src/pages/Fan.vue。
+    """
+    with open("frontend-vue/src/pages/Fan.vue", encoding="utf-8") as f:
+        src = f.read()
+    assert "fanCtrlToggle" in src
+    assert "接管风扇控制" in src
+
+
+def test_legacy_page_retired():
+    """v2.3.0 第 11 步「旧页退休瘦身」回归守卫。
+
+    旧页文件夹、/legacy/ 回滚路由、旧页渲染函数都必须消失，
+    且 Vue 构建产物必须随仓库存在（否则面板会落到「资源缺失」提示页）。
+    """
+    import os
+    assert not os.path.exists("templates/index.html"), "旧页 templates/index.html 应已删除"
+    assert os.path.exists("templates/vue/index.html"), "Vue 构建产物 templates/vue/index.html 必须存在"
+    assert not hasattr(app, "_render_legacy_panel"), "旧页渲染函数应已删除"
+    rules = {str(r.rule) for r in app.app.url_map.iter_rules()}
+    for bad in ("/legacy", "/legacy/"):
+        assert bad not in rules, f"{bad} 回滚路由应已移除"
+    assert "/" in rules and "/vue/" in rules, "主入口 / 与 /vue/ 必须保留"
+
+
+def test_vue_missing_page_is_readable_fallback():
+    """构建产物缺失时的兜底页应返回 500 且带可读中文提示（不再是白屏）。"""
+    with app.app.test_request_context("/"):
+        resp = app._vue_missing_page()
+    assert resp.status_code == 500
+    body = resp.get_data(as_text=True)
+    assert "界面资源缺失" in body
 
 
 def test_build_health_report_contains_all_sections():
@@ -534,8 +563,10 @@ def test_build_health_report_contains_all_sections():
     # HTML 渲染包含所有章节标题（make_response 需请求上下文）
     with app.app.test_request_context('/'):
         html = app._render_report_html(rep).get_data(as_text=True)
-    for sec in ["计算机摘要", "活动告警", "系统", "主板 / BIOS", "内存", "传感器",
-                "风扇控制状态", "网卡", "硬盘 SMART", "阵列卡 / RAID",
+    # 只断言「与硬件无关、必然出现」的章节；阵列卡（硬件）/ 显卡 / 传感器—电压 / 存储拓扑
+    # 等按机器实际情况条件输出，不在此列。
+    for sec in ["计算机摘要", "活动告警", "运行日志（诊断）", "系统", "主板 / BIOS", "内存",
+                "传感器 — 温度", "风扇", "网卡", "硬盘 SMART", "系统软阵列（mdadm）",
                 "存储卷", "Docker 容器"]:
         assert sec in html, f"报告缺章节 {sec}"
     # AIDA64 风排版标记：分类栏 / 属性双列 / 数据表

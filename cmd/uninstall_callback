@@ -26,7 +26,7 @@ if [ "$wizard_delete_data" = "yes" ]; then
 else
     # 用户选择保留：镜像用户配置到 config_backup 双保险（飞牛默认保留 var，此处再备一份）
     mkdir -p "$TRIM_PKGVAR/config_backup"
-    for f in fan_disk_temp.json fan_sys_temp.json fan_labels.json board_override.txt; do
+    for f in fan_disk_temp.json fan_sys_temp.json fan_labels.json board_override.txt wol.json disk_names.json; do
         if [ -f "$TRIM_PKGVAR/$f" ]; then
             cp -f "$TRIM_PKGVAR/$f" "$TRIM_PKGVAR/config_backup/$f"
             echo "[nasdash] 已镜像用户配置 $f" >> "${TRIM_TEMP_LOGFILE}"
