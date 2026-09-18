@@ -52,6 +52,10 @@ function fanUid(hwmon: string, idx: number | string): string {
  */
 
 let DATA: any = null
+let FAN_DRIVERS: any = null
+let FAN_STATUS_FANS: any[] = []
+let FAN_FCS: any = null
+let FAN_NT_EXPANDED: Record<string, boolean> = {}
 let FAN_LIST: any[] = []
 let SHOW_HIDDEN_FANS = false
 
@@ -178,6 +182,7 @@ function renderFanBody(): string {
     ${lock}
     ${renderSleepLinkPanel()}
     ${renderTempOverview()}
+    <div class="fan-status-card" id="fan-status-card">${renderFanStatusInner()}</div>
     <div class="fan-presets">
       <span class="label">一键调速：</span>${presetHtml}
       ${hideToggle}
@@ -218,6 +223,7 @@ function fanCardHtml(f: any): string {
         <button class="fan-hw-toggle" id="${id}-hwtoggle" type="button" onclick="toggleFanHwNote('${id}')">说明 ▾</button>
         <div class="fan-hw-detail" id="${id}-hwdetail" style="display:none"></div>
       </div>
+      ${renderNoTachNote(id, f)}
       ${f.pwm_mode === 'dc' ? `<div class="fan-dc-note">${iconSvg('plug')} 此接口当前是 <b>DC（电压）调速</b>：调速靠改供电电压，低档位比 PWM 更容易转不动或直接停转。若风扇低速时抖动、启动不了，把最低转速调高一些，或切回 PWM 调速。</div>` : ''}
       <div class="fan-speed-bar"><div class="fan-speed-fill" id="${id}-bar" style="width:${pct}%"></div></div>
       <div class="fan-pct-line">
@@ -252,12 +258,77 @@ function fanCardHtml(f: any): string {
     </div>`
 }
 
+function fanChipFriendly(raw: string): string {
+  const k = (raw || '').toLowerCase()
+  const M: any = {
+    nct6775: 'Nuvoton NCT6775D', nct6779: 'Nuvoton NCT6779D',
+    nct6791: 'Nuvoton NCT6791D', nct6792: 'Nuvoton NCT6792D', nct6793: 'Nuvoton NCT6793D',
+    nct6795: 'Nuvoton NCT6795D', nct6796: 'Nuvoton NCT6796D', nct6797: 'Nuvoton NCT6797D',
+    nct6798: 'Nuvoton NCT6798D', nct6683: 'Nuvoton NCT6683D', nct6686: 'Nuvoton NCT6686D',
+    nct6687: 'Nuvoton NCT6687D', it87: 'ITE IT87xx', it8620: 'ITE IT8620E',
+    it8628: 'ITE IT8628E', it8686: 'ITE IT8686E', it8688: 'ITE IT8688E', it8728: 'ITE IT8728F'
+  }
+  return M[k] || (raw || '未知芯片')
+}
+
+function renderFanStatusInner(): string {
+  const drivers = FAN_DRIVERS || []
+  const fans = FAN_STATUS_FANS || []
+  const items: string[] = []
+  // 1) 驱动被明确读到「没加载」才提示（读不到状态 = 未知，不误报）
+  if (drivers.some((d: any) => d.driver_loaded === false)) {
+    items.push('风扇调速功能没启动（驱动没加载），转速可能看不到、也调不动。')
+  }
+  // 2) 有风扇却读不到控制信息
+  if (fans.length && !drivers.length) {
+    items.push('读不到风扇的控制信息，调速可能不正常。')
+  }
+  // 3) 存在用软件调不了速的风扇
+  const unctrl = fans.filter((f: any) => f.controllable === false && !f.hidden)
+  if (unctrl.length) {
+    items.push(`有 ${unctrl.length} 台风扇不能用软件调速（插在了不能调速的口上），只会一直保持一个速度。`)
+  }
+
+  // 异常：给提醒（不展示 pwm 通道映射）
+  if (items.length) {
+    const rows = items.map((t: string) => `<div class="fan-warn-row">${esc(t)}</div>`).join('')
+    return `<div class="fan-warn-title">风扇状态提醒</div>${rows}`
+  }
+
+  // 接管关闭（v2.3.0 3.1 补充）：这行的本职就是「谁在管风扇」，此时必须改口说清现在归谁
+  if (!FAN_CTRL_ENABLED) {
+    const fcs = FAN_FCS || {}
+    const known = (typeof fcs.running === 'boolean')
+    const active = !!(fcs.running && fcs.configured)
+    const who = !known ? '系统自身'
+      : active ? '飞牛自带的风扇服务'
+        : '主板自己的策略（BIOS 自动）'
+    return `<div class="fan-off-row"><span class="fan-off-dot"></span><span>nasdash 没有接管风扇 · 现在由<b>${esc(who)}</b>调速</span></div>`
+  }
+
+  // 正常：一行大白话「谁在管风扇」（只到芯片/驱动/加载状态为止，不再往下罗列 pwm 通道）
+  if (!drivers.length) return ''
+  const chips = drivers.map((d: any) => fanChipFriendly(d.chip)).join('、')
+  const drvName = (drivers.find((d: any) => d.driver) || {}).driver
+  const loaded = drivers.some((d: any) => d.driver_loaded === true)
+  const note = drvName ? `（驱动 ${drvName}${loaded ? ' 已加载' : ''}）` : ''
+  return `<div class="fan-ok-row"><span class="fan-ok-dot"></span><span>风扇调速正常 · 由主板温控芯片 <b>${esc(chips)}</b> 管理${esc(note)}</span></div>`
+}
+
+function updateFanStatusCard(): void {
+  const el = document.getElementById('fan-status-card')
+  if (el) el.innerHTML = renderFanStatusInner()
+}
+
 /* —— 每台风扇的温控规则编辑体（线性 / 曲线）—— */
 
 const _RULE_DEFAULT: Record<string, any> = {
   disk: { start: 40, full: 60, min: 30, max: 100, rec: 35 },
   cpu: { start: 45, full: 70, min: 30, max: 100, rec: 40 },
   mb: { start: 45, full: 70, min: 30, max: 100, rec: 40 },
+  // 阵列卡（RAID 芯片）工作温度天生比 CPU/主板高（待机 50~60℃ 属正常、满载可到 80+），
+  // 所以启停门槛整体上移，否则刚上电风扇就满转。
+  raid: { start: 60, full: 80, min: 30, max: 100, rec: 55 },
   'combo_max:cpu,mb': { start: 45, full: 70, min: 30, max: 100, rec: 40 },
   'combo_avg:cpu,mb': { start: 45, full: 70, min: 30, max: 100, rec: 40 },
 }
@@ -269,6 +340,7 @@ function fanRuleSourceRow(f: any, id: string, body: string): string {
     ['disk', '硬盘温度'],
     ['cpu', 'CPU 温度'],
     ['mb', '主板温度'],
+    ['raid', '阵列卡温度'],
     ['combo_max:cpu,mb', '主板+CPU（取大）'],
     ['combo_avg:cpu,mb', '主板+CPU（平均）'],
   ]
@@ -366,11 +438,20 @@ function _renderTempChip(name: string, val: any, opts: any): string {
 function _buildTempRow(): string {
   if (!LAST_TEMPS) return ''
   const cpu = LAST_TEMPS.cpu_temp, mb = LAST_TEMPS.mb_temp
+  const raid = LAST_TEMPS.raid_temp
   const disks = (LAST_TEMPS.disks || [])
   let html = '<div class="temp-cat">'
     + '<span class="temp-cat-label">核心</span>'
     + _renderTempChip('CPU', cpu, { trip: 100 })
     + _renderTempChip('主板', mb, { trip: 90 })
+    // 阵列卡（RAID 卡芯片）只在真有卡时出现——没卡的机器读不到值，不显示空洞
+    + (raid != null
+        ? _renderTempChip('阵列卡', raid, {
+            trip: 100,
+            title: 'RAID 卡芯片（ROC）温度。这张卡本身是机箱里的发热大户、又常占着风道中段，'
+                 + '所以它比主板更值得当成风扇的控温依据。超过约 105°C 卡会降频保护。'
+          })
+        : '')
     + '</div>'
   const cats = [{ k: 'NVMe', label: 'NVMe' }, { k: 'SSD', label: 'SSD' }, { k: 'HDD', label: '机械' }]
   let anyDisk = false
@@ -550,6 +631,7 @@ function fanSrcLabel(v: any): string {
   if (String(v).indexOf('disk') === 0) return '硬盘'
   if (v === 'cpu') return 'CPU'
   if (v === 'mb') return '主板'
+  if (v === 'raid') return '阵列卡'
   return v
 }
 
@@ -602,6 +684,35 @@ function updateFanFloorNote(id: string, f: any): void {
     FAN_HIDE_SINCE[id] = 0
     el.style.display = 'none'
   }
+}
+
+/** 无转速信号说明（v2.3.0 3.1）：读不到转速时给一行可展开的解释，避免被误当成「停转/风扇坏了」 */
+function renderNoTachNote(id: string, f: any): string {
+  if (f.has_tach) return ''
+  const open = !!FAN_NT_EXPANDED[id]
+  const sum = f.no_tach
+    ? '此口已标注「无转速反馈线（2/3 针）」，读不到转速属正常'
+    : '这路读不到转速（不代表它没转）'
+  const detail = '<b>为什么读不到：</b>转速要靠风扇第 3 根「测速线」传回来。常见原因：<br>'
+    + '① 风扇是 2 针（只有 +12V 和地，根本没有测速线）<br>'
+    + '② 用了分线器，副扇的测速线没接<br>'
+    + '③ 主板这路接口没有布线到该风扇插座<br>'
+    + '④ 这个口其实是空的（可点「隐藏」把它收起来）<br>'
+    + '<b>注意：读不到 ≠ 没转。</b>2 针风扇照样在转，只是软件拿不到它的转速。'
+  return `<div class="fan-nt-note">
+        <span class="fan-nt-sum">${iconSvg('bulb')} ${esc(sum)}</span>
+        <button class="fan-hw-toggle" type="button" onclick="toggleFanNtNote('${id}')">${open ? '收起 ▴' : '为什么 ▾'}</button>
+        <div class="fan-hw-detail" id="${id}-ntdetail" style="display:${open ? 'block' : 'none'}">${detail}</div>
+      </div>`
+}
+
+function toggleFanNtNote(id: string): void {
+  FAN_NT_EXPANDED[id] = !FAN_NT_EXPANDED[id]
+  const d = document.getElementById(id + '-ntdetail')
+  if (d) d.style.display = FAN_NT_EXPANDED[id] ? 'block' : 'none'
+  const box = document.getElementById(id + '-box')
+  const t = box ? (box.querySelector('.fan-nt-note .fan-hw-toggle') as HTMLElement | null) : null
+  if (t) t.textContent = FAN_NT_EXPANDED[id] ? '收起 ▴' : '为什么 ▾'
 }
 
 /** 状态标签的唯一真源：整页渲染与 5s 轮询必须共用这一份 */
@@ -1004,6 +1115,10 @@ async function fetchFanStatus(): Promise<void> {
     if (!r || !r.ok) return
     const j = await r.json()
     if (!j || !j.fans) return
+    FAN_DRIVERS = (j.fan_drivers || null)
+    FAN_STATUS_FANS = (j.fans || [])
+    FAN_FCS = (j.fcs || null)
+    updateFanStatusCard()
     ;(j.fans || []).forEach((f: any) => {
       const id = fanUid(f.hwmon, f.idx)
       const cur = document.getElementById(id + '-cur')
@@ -1245,6 +1360,7 @@ const GLOBALS: Record<string, any> = {
   setFanControl, refreshFanControlState, setFanMode, saveFanRule, onRuleSrcChange,
   applyFanPreset, applyFanCustom, applyFan, setFanAuto, saveFanLabel, toggleFanHidden,
   toggleShowHiddenFans, toggleFanHwNote, toggleSleepPanel, stepIdle, saveSleepLink,
+  toggleFanNtNote,
   applyCurvePreset, addCurvePoint, removeCurvePoint, refreshFanPanel,
 }
 

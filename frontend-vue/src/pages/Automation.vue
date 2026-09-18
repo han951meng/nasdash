@@ -269,7 +269,8 @@ async function exportReport(fmt: 'json' | 'html'): Promise<void> {
   exportState.value = '导出中…'
   try {
     const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')
-    const r = await apiFetch('/api/report?format=' + fmt + '&_=' + Date.now(), 60000)
+    const url = '/api/report?format=' + fmt + (redactExport.value ? '&redact=1' : '') + '&_=' + Date.now()
+    const r = await apiFetch(url, 60000)
     if (fmt === 'json') {
       const j = await r.json()
       downloadBlob('nasdash-report-' + ts + '.json', JSON.stringify(j, null, 2), 'application/json')
@@ -283,6 +284,9 @@ async function exportReport(fmt: 'json' | 'html'): Promise<void> {
     alert('导出失败：' + e)
   }
 }
+
+/** 导出报告时是否脱敏（内网 IP / MAC / 序列号 / 主机名 / 云盘账号） */
+const redactExport = ref(false)
 
 const logOpen = ref(false)
 const logLoading = ref(false)
@@ -669,6 +673,10 @@ onUnmounted(() => {
       <div style="font-size: 13px; color: var(--muted); margin-bottom: 12px">
         汇总全部硬件状态与活动告警，导出供排查留档。JSON 可直接查看，HTML 为排版报告（内含融合分级的运行日志）。<b>遇到 bug 或异常</b>时，点「查看运行日志」在弹窗中查看错误/警告（置顶着色），确认后再决定要不要复制贴给开发者。
       </div>
+      <label class="dt-toggle" style="display: flex; align-items: flex-start; gap: 8px; margin-bottom: 10px">
+        <input v-model="redactExport" type="checkbox" style="margin-top: 2px">
+        <span>脱敏导出（把内网 IP、MAC、设备序列号、主机名、云盘账号打码，报告顶部会标「已脱敏」）——贴论坛 / 群里前建议勾上</span>
+      </label>
       <div class="auto-actions">
         <button class="btn-mini" @click="exportReport('json')">导出 JSON</button>
         <button class="btn-mini" @click="exportReport('html')">导出 HTML 报告</button>

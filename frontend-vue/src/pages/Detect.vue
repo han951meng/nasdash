@@ -101,9 +101,63 @@ const CHECK_SVG =
   '<svg class="ico" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>'
 
 // ============ 交互（沿用老页全局函数名，供 v-html 内 inline onclick 调用）============
+// WOL 开启时的 BIOS 提醒文案（模板与拨动时都要用，抽成常量避免两处不一致）
+const WOL_BIOS_HINT = '关机唤不醒？检查主板 BIOS 里的 Wake on LAN（并把 ErP 省电关掉）'
 let _nicIdx = 0
 const _locateOn: Record<string, boolean> = {}
 const _ccTimers: Record<string, number> = {}
+
+// 网卡 WOL 开关（v2.3.0 3.2）：调后端写 ethtool，成功后由后端持久化、开机回放
+async function toggleWol(name: string, enable: boolean, el: HTMLInputElement): Promise<void> {
+  const box = el.closest('.kv')
+  const st = box ? (box.querySelector('.wol-sw-state') as HTMLElement | null) : null
+  el.disabled = true
+  if (st) {
+    st.textContent = '设置中…'
+    st.style.color = 'var(--muted)'
+  }
+  try {
+    const r = await apiFetch('/api/network/wol', 20000, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, enable }),
+    })
+    const j = await r.json()
+    if (j && j.ok) {
+      if (st) {
+        st.textContent = enable ? '已开启' : '已关闭'
+        st.style.color = enable ? 'var(--green)' : 'var(--muted)'
+      }
+      // BIOS 提示跟着开关走：开了就补上、关了就去掉（与整页渲染口径一致）
+      if (box) {
+        const cur = box.querySelector('.wol-hint') as HTMLElement | null
+        const ctl = box.querySelector('.wol-ctl')
+        if (enable && !cur && ctl && ctl.parentNode) {
+          const sp = document.createElement('span')
+          sp.className = 'wol-hint'
+          sp.textContent = WOL_BIOS_HINT
+          ctl.parentNode.insertBefore(sp, ctl)
+        } else if (!enable && cur) {
+          cur.remove()
+        }
+      }
+    } else {
+      el.checked = !enable
+      if (st) {
+        st.textContent = j && j.error ? String(j.error) : '设置失败'
+        st.style.color = 'var(--red)'
+      }
+    }
+  } catch (e) {
+    el.checked = !enable
+    if (st) {
+      st.textContent = '请求失败'
+      st.style.color = 'var(--red)'
+    }
+  } finally {
+    el.disabled = false
+  }
+}
 
 function switchSysNic(idx: number): void {
   _nicIdx = idx
@@ -298,7 +352,7 @@ function renderSysNetCard(nics: any[] | undefined): string {
   if (_nicIdx >= sysNics.length) _nicIdx = 0
   const tabs = sysNics
     .map(
-      (n: any, i: number) =>
+      (_n: any, i: number) =>
         `<button class="sys-nic-tab nic-tab ${i === _nicIdx ? 'active' : ''}" data-sys-nic-idx="${i}" onclick="switchSysNic(${i})">网口${i + 1}</button>`,
     )
     .join('')
@@ -310,7 +364,35 @@ function renderSysNetCard(nics: any[] | undefined): string {
       const duplex = n.duplex ? n.duplex + '双工' : ''
       const cfg = [sp, duplex, n.mtu ? 'MTU ' + n.mtu : ''].filter(Boolean).join(' · ')
       const hw = [n.model, n.driver ? '驱动 ' + n.driver : '', n.bus_info ? '总线 ' + n.bus_info : ''].filter(Boolean).join(' · ')
+      // 「未跑满」提示：网卡支持速率 > 当前协商速率（且在线）时给出，提示瓶颈在对端/网线
+      const _curSp = parseInt(n.speed || '', 10)
+      const _maxSp = parseInt(n.max_speed || '', 10)
+      const capHint = st === 'UP' && _maxSp && _curSp && _maxSp > _curSp
+        ? `<div class="nic-cap-hint">此网卡最高支持 ${_maxSp} Mbps，当前仅协商到 ${_curSp} Mbps，未跑满。瓶颈通常在对端网口（交换机 / 路由器）或网线——两端都需支持 ${_maxSp} 才能跑满。</div>`
+        : ''
       const ipv6 = n.ipv6 || '无'
+      // WOL（网络唤醒）只读状态（v2.3.0 3.2）：后端解析 ethtool 的 Supports/Wake-on
+      const wolKnown =
+        (n.wol_supported !== null && n.wol_supported !== undefined) || !!n.wol_support
+      const wolTxt = !wolKnown
+        ? '未知'
+        : !n.wol_supported
+          ? '不支持'
+          : n.wol_enabled
+            ? '支持（已开启）'
+            : '支持（未开启）'
+      const wolColor = wolKnown && n.wol_supported
+        ? n.wol_enabled
+          ? 'var(--green)'
+          : 'var(--orange)'
+        : 'var(--muted)'
+      const wolTitle =
+        '网络唤醒：关机或休眠后，可从局域网发一条指令远程开机。需网卡支持 + 主板 BIOS 里也开启才有效'
+      // 硬件支持 WOL 的口才给开关；不支持/未知只显示文字
+      const wolRow =
+        wolKnown && n.wol_supported
+          ? `<div class="kv"><span class="k" title="${wolTitle}">WOL 网络唤醒</span><span class="v wol-v">${n.wol_enabled ? `<span class="wol-hint">${WOL_BIOS_HINT}</span>` : ''}<span class="wol-ctl"><span class="wol-sw-state">${n.wol_enabled ? '已开启' : '已关闭'}</span><label class="wol-sw"><input type="checkbox" ${n.wol_enabled ? 'checked' : ''} onchange="toggleWol('${esc(n.name)}', this.checked, this)"><i class="wol-sw-ui"></i></label></span></span></div>`
+          : `<div class="kv"><span class="k" title="${wolTitle}">WOL 网络唤醒</span><span class="v" style="color:${wolColor}">${esc(wolTxt)}</span></div>`
       return `<div class="sys-nic-detail nic-detail" id="sys-nic-detail-${i}" style="${i === _nicIdx ? '' : 'display:none'}">
       <div class="nic-ifname">${esc(n.name)}</div>
       <div class="kv"><span class="k" title="设备在当前局域网里的网络门牌号">IPv4 地址</span><span class="v">${esc(n.ip || '无 IP')}</span></div>
@@ -318,12 +400,88 @@ function renderSysNetCard(nics: any[] | undefined): string {
       <div class="kv"><span class="k" title="网卡出厂自带的唯一物理编号，相当于网卡的身份证">MAC 地址</span><span class="v">${esc(n.mac || '-')}</span></div>
       <div class="kv"><span class="k">网络配置</span><span class="v">${esc(cfg)}</span></div>
       ${hw ? `<div class="kv"><span class="k">硬件信息</span><span class="v">${esc(hw)}</span></div>` : ''}
+      ${wolRow}
+      ${capHint}
       <div class="kv"><span class="k">状态</span><span class="v" style="color:${sc}">${esc(st)}</span></div>
     </div>`
     })
     .join('')
   return `<h3>网络</h3><div class="nic-tabs">${tabs}</div>${details}`
 }
+
+// ============ 内存条详情弹窗（v2.3.0 第10步 ① SPD 完整解码：点击内存卡看完整 SPD）============
+let _memMods: any[] = []
+let _memBoard: any = {}
+function showMemDetail(i: number): void {
+  const m = _memMods[i]
+  if (!m || !m.installed) return
+  const ov = document.getElementById('memDetailModal')
+  const title = document.getElementById('memDetailTitle')
+  const body = document.getElementById('memDetailBody')
+  if (!ov || !title || !body) return
+  title.textContent = '内存详情 · ' + (m.locator || 'DIMM')
+  const SPD_NA = '不适用（该内存条未写入）'
+  const DMI_NA = '不适用（dmidecode 未返回）'
+  const srcTxt = m.source === 'spd' ? 'SPD 直读（decode-dimms + 原始字节）' : 'dmidecode -t 17'
+  const kv = (k: string, v: string, mode: 'spd' | 'dmi' | 'none' = 'none', span2 = false, na = '') => {
+    let naTxt: string
+    if (na) naTxt = '不适用（' + na + '）'
+    else if (mode === 'spd') naTxt = SPD_NA
+    else if (mode === 'dmi') naTxt = DMI_NA
+    else naTxt = '—'
+    const val = v
+      ? `<span class="v">${esc(v)}</span>`
+      : `<span class="v"><span style="color:var(--muted);font-size:12px">${esc(naTxt)}</span></span>`
+    return `<div class="kv${span2 ? ' span2' : ''}"><span class="k">${esc(k)}</span>${val}</div>`
+  }
+  // 组内两列排（长值行用 span2 通栏），避免单列过长导致默认窗口下显示不全
+  const grp = (h: string, rows: string) =>
+    `<div class="mem-grp"><div class="mem-grp-h">${esc(h)}</div><div class="mem-grp-body">${rows}</div></div>`
+  let html = ''
+  html += grp('基本',
+    kv('容量', m.size || '') +
+    kv('类型', m.type || '') +
+    kv('额定频率', m.speed || '') +
+    kv('实际运行频率', m.cfg_speed || '', 'dmi') +
+    kv('ECC', m.ecc || '', 'dmi') +
+    kv('插槽 / 通道', m.locator || '')
+  )
+  html += grp('SPD 详情（decode-dimms 直读）',
+    kv('模组厂商', m.manufacturer || m.brand || '') +
+    kv('颗粒厂商', m.dram_manufacturer || '') +
+    kv('型号（料号）', m.part || '', 'spd') +
+    kv('生产日期', m.manufacture_date || '', 'spd') +
+    kv('序列号', m.serial || '', 'spd')
+  )
+  html += grp('DMI 详情（dmidecode -t 17）',
+    kv('Rank（颗粒）', m.rank || '', 'dmi') +
+    kv('总位宽', m.total_width || '', 'dmi') +
+    kv('数据位宽', m.data_width || '', 'dmi') +
+    kv('电压', m.voltage || '', 'dmi') +
+    kv('外形规格', m.form_factor || '', 'dmi')
+  )
+  const b = _memBoard || {}
+  let edacRow: string
+  if (b.edac && b.edac.available) {
+    edacRow = kv('EDAC 内存错误', `ce(可纠正)=${b.edac.ce} · ue(不可纠正)=${b.edac.ue}`, 'none', true)
+  } else {
+    edacRow = `<div class="kv span2"><span class="k">EDAC 内存错误</span><span class="v"><span style="color:var(--muted);font-size:12px">本机未启用 EDAC（消费级主板常见）</span></span></div>`
+  }
+  html += grp('板级 / ECC',
+    kv('最大支持容量', b.max_capacity || '', 'dmi') +
+    kv('插槽总数', b.num_devices || '', 'dmi') +
+    kv('板级 ECC 类型', b.ecc_type || '', 'dmi') +
+    edacRow +
+    kv('数据来源', srcTxt, 'none', true)
+  )
+  body.innerHTML = html
+  ov.classList.add('show')
+}
+function closeMemDetail(): void {
+  const ov = document.getElementById('memDetailModal')
+  if (ov) ov.classList.remove('show')
+}
+
 
 // ============ 主体渲染（复刻 renderDetect，去掉老页 hero —— 由 PanelHero 承担）============
 function buildBody(D: any): string {
@@ -342,22 +500,6 @@ function buildBody(D: any): string {
         : 0
   const ci = s.cpu_info || {}
   const memMods = (s.memory_modules && s.memory_modules.modules) || []
-  const memModRows = memMods.length
-    ? memMods
-        .map((m: any) => {
-          const stBadge = m.installed ? '<span class="badge b-ok">已用</span>' : '<span class="badge b-warn">空</span>'
-          return `<tr style="${m.installed ? '' : 'opacity:.45'}">
-      <td>${m.locator || '-'}</td>
-      <td>${stBadge}</td>
-      <td>${m.brand || m.manufacturer || '-'}</td>
-      <td>${m.dram_manufacturer ? '颗粒: ' + m.dram_manufacturer : '-'}</td>
-      <td>${m.part || '-'}</td>
-      <td>${m.size || '-'}</td>
-      <td>${m.speed || '-'}</td>
-    </tr>`
-        })
-        .join('')
-    : '<tr><td colspan=7>无 / 未安装 i2c-tools 或 dmidecode</td></tr>'
   const mm = s.memory_modules
   const memSummary = mm
     ? `插槽 ${mm.installed}/${mm.slots}` +
@@ -368,14 +510,15 @@ function buildBody(D: any): string {
   const chB = memMods.some((m: any) => /ChannelB/i.test(m.locator) && m.installed)
   const chanTxt = chA && chB ? '双通道' : chA || chB ? '单通道' : '—'
   const memSlotHtml = memMods
-    .map((m: any) => {
+    .map((m: any, i: number) => {
       const ch = /ChannelA/i.test(m.locator) ? 'A' : /ChannelB/i.test(m.locator) ? 'B' : ''
       if (m.installed) {
-        return `<div class="mem-slot filled">
+        return `<div class="mem-slot filled" onclick="showMemDetail(${i})" title="点击查看完整 SPD 信息">
         <div class="ms-ch">通道 ${ch}</div>
         <div class="ms-size">${m.size || '-'}</div>
         <div class="ms-info">${m.brand || m.manufacturer || '内存'}${m.speed ? ' · ' + m.speed : ''}</div>
         ${m.dram_manufacturer ? `<div class="ms-info" style="opacity:.7">颗粒 ${m.dram_manufacturer}</div>` : ''}
+        <div class="ms-more">详情 ›</div>
       </div>`
       }
       return `<div class="mem-slot empty"><div class="ms-ch">通道 ${ch}</div><div class="ms-size" style="color:var(--muted)">空槽</div></div>`
@@ -526,7 +669,6 @@ function buildBody(D: any): string {
         det += gpuRow('插槽数', ci.sockets != null ? ci.sockets + ' 个' : null)
         det += gpuRow('每插槽核心', ci.cores_per_socket != null ? ci.cores_per_socket + ' 核' : null)
         det += gpuRow('每核心线程', ci.threads_per_core != null ? ci.threads_per_core + ' 线程' : null)
-        det += gpuRow('当前频率（各核平均）', ci.current_freq_mhz != null ? `<span class="js-cpu-freq-live" style="color:var(--blue)" title="每秒刷新">${Math.round(ci.current_freq_mhz)} MHz</span>` : null)
         let freqRange = ''
         if (ci.min_freq_mhz != null && ci.max_freq_mhz != null) freqRange = Math.round(ci.min_freq_mhz) + ' - ' + Math.round(ci.max_freq_mhz) + ' MHz'
         else if (ci.max_freq_mhz != null) freqRange = Math.round(ci.max_freq_mhz) + ' MHz'
@@ -843,6 +985,8 @@ watch(bodyHtml, () => {
   void nextTick(() => {
     syncDiskScroll()
     applyLive()
+    _memMods = (data.value && data.value.system && data.value.system.memory_modules && data.value.system.memory_modules.modules) || []
+    _memBoard = (data.value && data.value.system && data.value.system.memory_modules) || {}
   })
 })
 
@@ -974,6 +1118,9 @@ onMounted(() => {
   ;(window as any).raidCopyBack = raidCopyBack
   ;(window as any).saveCCSchedule = saveCCSchedule
   ;(window as any).saveCopyBack = saveCopyBack
+  ;(window as any).toggleWol = toggleWol
+  ;(window as any).showMemDetail = showMemDetail
+  ;(window as any).closeMemDetail = closeMemDetail
 
   void fetchAll(true)
   void fetchTemps()
@@ -992,7 +1139,7 @@ onUnmounted(() => {
     _diskRO.disconnect()
     _diskRO = null
   }
-  ;['switchSysNic', 'raidLocate', 'raidCC', 'raidHotspare', 'raidCopyBack', 'saveCCSchedule', 'saveCopyBack'].forEach(k => {
+  ;['switchSysNic', 'raidLocate', 'raidCC', 'raidHotspare', 'raidCopyBack', 'saveCCSchedule', 'saveCopyBack', 'toggleWol', 'showMemDetail', 'closeMemDetail'].forEach(k => {
     try {
       delete (window as any)[k]
     } catch {
@@ -1016,5 +1163,12 @@ onUnmounted(() => {
     />
     <div v-if="err" class="loading" style="color: var(--red)">{{ err }}</div>
     <div v-show="!err" ref="bodyEl" v-html="bodyHtml" />
+    <div class="modal-overlay" id="memDetailModal" onclick="if(event.target===this)closeMemDetail()">
+      <div class="modal-box mem-modal">
+        <div class="modal-title" id="memDetailTitle">内存详情</div>
+        <div class="modal-detail" id="memDetailBody"></div>
+        <div class="modal-actions"><button class="btn" onclick="closeMemDetail()">关闭</button></div>
+      </div>
+    </div>
   </div>
 </template>

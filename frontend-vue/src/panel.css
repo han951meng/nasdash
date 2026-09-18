@@ -153,10 +153,26 @@
   @keyframes modalIn{from{opacity:0;transform:translateY(-8px) scale(.98)}to{opacity:1;transform:translateY(0) scale(1)}}
   .modal-title{font-size:16px;font-weight:600;color:var(--text-1)}
   .modal-body{font-size:14px;color:var(--text-1);line-height:1.7;white-space:pre-line}
+  .modal-detail{display:flex;flex-direction:column;gap:2px}
+  .modal-detail .kv{margin:0}
   .modal-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:6px;flex-wrap:wrap}
   .modal-overlay .btn{min-width:72px}
   .modal-box.modal-wide{max-width:min(1000px, calc(100vw - 32px));width:100%}
 .modal-overlay.modal-wide .modal-box{max-width:min(1000px, calc(100vw - 32px));width:100%}
+  /* 内存条详情弹窗：字段多（约 22 项 / 4 组），原先单列 520px 在默认窗口下超出视口被截断。
+     改为「加宽 + 组内两列 + 标题/按钮固定、内容区独立滚动」，小窗口也不会丢内容。 */
+  .modal-box.mem-modal{max-width:min(780px,calc(100vw - 32px));max-height:calc(100vh - 32px)}
+  .mem-modal .modal-detail{overflow-y:auto;min-height:0;flex:1 1 auto;padding-right:6px;overscroll-behavior:contain}
+  .mem-modal .modal-title,.mem-modal .modal-actions{flex:0 0 auto}
+  .mem-grp{margin-top:12px}
+  .mem-grp:first-child{margin-top:0}
+  .mem-grp-h{font-size:12px;font-weight:600;color:var(--muted);letter-spacing:.04em;margin-bottom:4px;padding-bottom:4px;border-bottom:1px dashed var(--divider)}
+  .mem-grp-body{display:grid;grid-template-columns:1fr 1fr;gap:0 26px}
+  .mem-grp-body .kv.span2{grid-column:1 / -1}
+  /* 两列时按「标签固定宽 + 值左对齐」排，跨行成两栏表，比右对齐更好读 */
+  .mem-grp-body .kv .k{flex:0 0 110px;max-width:110px}
+  .mem-grp-body .kv .v{text-align:left;word-break:break-word}
+  @media (max-width:700px){.mem-grp-body{grid-template-columns:1fr}}
 /* 自检历史表格：grid 固定列宽，中文 nowrap + 溢出省略；只有说明列允许换行 */
 .hist-head,.hist-row{display:grid;grid-template-columns:48px 120px 60px 80px 90px 1fr 140px;column-gap:12px;align-items:center;font-size:13px;padding:8px 4px}
 .hist-head{font-size:12px;color:var(--text-3);font-weight:600;border-bottom:1px solid var(--border)}
@@ -197,10 +213,58 @@
   .disk-card{position:relative}
   .disk-card.bad{border-color:var(--red);background:#fef2f2}
   .disk-card.warn{border-color:var(--orange)}
-  .disk-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
-  .disk-head .name{font-size:16px;font-weight:600}
-  .temp-bar{height:6px;border-radius:3px;background:var(--fill);margin:8px 0;overflow:hidden}
-  .temp-fill{height:100%;border-radius:3px;transition:width .3s}
+  .disk-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px}
+  .disk-head .name{font-size:16px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;flex:0 1 auto}
+  /* 自定义盘名的副标（v2.3.0 3.8）：起了名后原代号缩小摆旁边，认盘/对盘符用 */
+  .sub-name{font-size:11px;color:var(--muted);border:1px solid var(--border);border-radius:4px;padding:1px 5px;white-space:nowrap;flex:0 0 auto}
+  .rename-input{width:100%;box-sizing:border-box;padding:8px 10px;font-size:14px;border:1px solid var(--border);border-radius:8px;outline:none;background:var(--card);color:var(--text-1)}
+  .rename-input:focus{border-color:rgb(var(--semi-brand-4))}
+  /* 健康分级徽章即入口（v2.3.0 3.4）：点开看详细依据 + 缺陷趋势 */
+  .grade-btn{border:none;font-family:inherit;cursor:pointer;display:inline-flex;align-items:center;gap:3px;transition:filter .15s,box-shadow .15s}
+  .grade-btn:hover{filter:brightness(.95);box-shadow:0 0 0 2px var(--c-fill-2)}
+  .grade-btn:active{transform:translateY(1px)}
+  .grade-btn::after{content:"›";font-size:12px;opacity:.5;font-weight:400;margin-left:1px}
+  .grade-up{font-size:11px;font-weight:700;padding:0 3px;border-radius:var(--r-sm);background:rgba(255,255,255,.55)}
+  /* 健康详情弹窗 */
+  .hd-body{white-space:normal;overflow-y:auto;min-height:0}
+  .hd-id{display:flex;flex-wrap:wrap;gap:8px;align-items:baseline;font-size:12px;color:var(--text-3);padding-bottom:8px;border-bottom:1px solid var(--divider)}
+  .hd-id b{font-size:15px;color:var(--text-1)}
+  /* 温度：实时读数，跟「累计计数」分开摆（不放进计数网格） */
+  .hd-temp{margin-left:auto;font-size:12px;color:var(--text-3);white-space:nowrap}
+  .hd-temp b{font-size:12px;font-weight:700;color:var(--text-2)}
+  .hd-temp.hot b{color:var(--orange)}
+  .hd-temp .hd-trip{font-size:11px;color:var(--text-4)}
+  .hd-h4note{margin-left:6px;font-size:11px;font-weight:400;color:var(--text-4)}
+  .hd-grade{display:flex;gap:10px;align-items:flex-start;margin-top:10px;padding:10px 13px;border:1px solid var(--border);border-left-width:4px;border-radius:var(--r-md);background:var(--fill)}
+  .hd-dot{width:10px;height:10px;border-radius:50%;margin-top:6px;flex:0 0 auto}
+  .hd-level{font-size:15px;font-weight:700;line-height:1.45}
+  .hd-explain{font-size:13px;color:var(--text-2);line-height:1.7;margin-top:3px}
+  .hd-sec{margin-top:11px}
+  .hd-sec h4{font-size:12px;font-weight:600;color:var(--text-3);letter-spacing:.3px;margin:0 0 6px}
+  .hd-reasons{margin:0;padding-left:18px;font-size:13px;line-height:1.85;color:var(--text-1)}
+  .hd-reasons li::marker{color:var(--muted)}
+  .hd-none{font-size:13px;color:var(--text-3);line-height:1.75}
+  .hd-trend{font-size:13px;line-height:1.8;color:var(--text-1)}
+  .hd-trend .up{color:var(--orange);font-weight:700}
+  .hd-trend .flat{color:var(--green);font-weight:600}
+  .hd-note{margin-top:7px;font-size:12px;color:var(--text-3);line-height:1.7}
+  .hd-counters{display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:6px}
+  .hd-counter{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 10px;border:1px solid var(--border);border-radius:var(--r-sm);background:var(--fill);font-size:12px}
+  .hd-counter .ck{color:var(--text-3);flex:0 0 auto;white-space:nowrap}
+  .hd-counter .cv{font-weight:700;color:var(--text-2);flex:1 1 auto;min-width:0;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .hd-counter .cv.hot{color:var(--red)}
+  .hd-src{margin-top:14px;padding-top:10px;border-top:1px solid var(--divider);font-size:12px;color:var(--text-3);line-height:1.7}
+  /* 卡面「对比条」：多块盘并排时能横着比的少数指标（温度 / 缺陷或寿命 / 已用时长） */
+  .cmp-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(56px,1fr));gap:6px;margin-top:10px}
+  .cmp-cell{display:flex;flex-direction:column;gap:2px;padding:6px 4px;border-radius:var(--r-sm);background:var(--fill);text-align:center;min-width:0;cursor:default}
+  .cmp-k{font-size:11px;color:var(--text-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .cmp-v{font-size:13px;font-weight:700;color:var(--text-1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .cmp-v.hot{color:var(--red)}
+  .hd-dual{font-size:11px;color:var(--text-3);border:1px solid var(--border);border-radius:var(--r-sm);padding:1px 6px;cursor:default;white-space:nowrap}
+  .temp-bar{position:relative;height:12px;border-radius:6px;background:var(--fill);margin:8px 0;overflow:hidden}
+  .temp-fill{height:100%;border-radius:6px;transition:width .3s}
+  /* 条内嵌当前温度小字：自明标注，防止被误读成上一格「已用时长」的进度条 */
+  .temp-bar-label{position:absolute;left:8px;top:50%;transform:translateY(-50%);font-size:10px;line-height:1;font-weight:600;color:var(--text-1);pointer-events:none}
   .table{width:100%;border-collapse:collapse;font-size:14px}
   .table th,.table td{padding:10px 12px;text-align:left;border-bottom:1px solid var(--divider)}
   .table th{color:var(--text-3);font-weight:500;background:var(--fill)}
@@ -356,7 +420,9 @@
   .detect-cards{display:grid;grid-template-columns:1fr 1fr;gap:14px}
   .mem-slots{display:flex;gap:10px;flex-wrap:wrap;margin-top:6px}
   .mem-slot{flex:1;min-width:96px;border-radius:10px;padding:10px;border:1px solid var(--border);background:var(--bg)}
-  .mem-slot.filled{border-color:var(--blue);background:#eff4ff}
+  .mem-slot.filled{border-color:var(--blue);background:#eff4ff;cursor:pointer;transition:box-shadow .15s,transform .15s}
+  .mem-slot.filled:hover{box-shadow:var(--shadow-hover);transform:translateY(-1px)}
+  .mem-slot .ms-more{font-size:11px;color:var(--blue);margin-top:6px;opacity:.85}
   .mem-slot .ms-ch{font-size:11px;color:var(--muted);margin-bottom:4px}
   .mem-slot .ms-size{font-size:14px;font-weight:600;color:var(--text)}
   .mem-slot .ms-info{font-size:11px;color:var(--muted);margin-top:3px}
@@ -427,6 +493,35 @@
 .disk-info-card .note p:last-child{margin-bottom:0}
 .disk-info-card .safe{color:var(--success)}
 .disk-info-card .warn{color:var(--danger)}
+/* 收纳版说明卡：<details> 默认只显示一行标题，点击展开全文 */
+details.disk-info-card{padding:0;margin-bottom:16px}
+details.disk-info-card summary{display:flex;align-items:center;gap:8px;padding:16px 18px;font-size:14px;font-weight:600;color:var(--text-1);cursor:pointer;user-select:none;list-style:none}
+details.disk-info-card summary::-webkit-details-marker{display:none}
+details.disk-info-card .note{padding:12px 18px 16px;border-top:1px dashed var(--border);margin:0}
+.faq-hint{flex:1;text-align:right;font-style:normal;font-size:12px;font-weight:500;color:var(--text-3)}
+.faq-hint::after{content:"展开 ▾"}
+details.disk-info-card[open] .faq-hint::after{content:"收起 ▴"}
+/* 卷映射树（v2.3.0 3.6，存储卷页）：卷(根) → md/LVM(枝) → 物理盘(叶，可点跳硬盘页) */
+/* 卷映射：结构对齐飞牛原生存储空间管理（标题+容量→细进度条→元信息→使用硬盘N→盘块） */
+.vmap-vol{padding:14px 0;border-bottom:1px dashed var(--border)}
+.vmap-vol:last-child{border-bottom:0}
+.vmap-head{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.vmap-name{font-size:15px}
+.vmap-cap{font-size:12px;color:var(--text-3)}
+.vmap-bar{height:6px;border-radius:3px;background:var(--fill);margin:8px 0 10px;overflow:hidden}
+.vmap-bar i{display:block;height:100%;border-radius:3px;background:var(--primary)}
+.vmap-meta{display:flex;gap:18px;flex-wrap:wrap;font-size:13px;margin-bottom:10px}
+.vmap-meta i{font-style:normal;color:var(--text-3);margin-right:6px;font-size:12px}
+.vmap-cap2{font-size:12px;color:var(--text-3);margin-bottom:8px}
+.vmap-sub{color:var(--text-3);font-size:12px}
+.vmap-pds{display:flex;flex-wrap:wrap;gap:8px}
+.vmap-pd{display:inline-flex;align-items:center;gap:8px;padding:6px 10px;border:1px solid var(--border);border-radius:8px;background:var(--fill-0);cursor:pointer;font-size:13px;color:var(--text-1)}
+.vmap-pd:hover{border-color:var(--primary)}
+.vmap-temp{font-weight:600;font-size:12px}
+.vmap-temp.asleep{color:var(--text-3);font-weight:400}
+.vmap-go{color:var(--text-3);font-weight:600}
+/* 卷映射点盘跳转后的高亮（2 秒后自动褪去） */
+.disk-card.focus-flash{outline:2px solid var(--primary);outline-offset:2px;transition:outline-color 1.2s}
   @media(max-width:768px){
     .header{display:flex;height:48px;padding:0 16px;align-items:center;border-bottom:1px solid var(--border);background:var(--bg)}
     .container{flex-direction:column;padding:12px 14px 20px;gap:14px}
@@ -517,6 +612,37 @@
   .fan-hw-note{margin-top:8px;padding:6px 10px;border-radius:7px;background:var(--tint-amber-10);border:1px solid var(--tint-amber-35);font-size:12px;line-height:1.5;display:none;align-items:center;flex-wrap:wrap;gap:8px}
   /* DC(电压)调速提示：该接口用电压高低调速，低档更易停转，与 PWM 行为不同需明确告知 */
   .fan-dc-note{margin-top:8px;padding:6px 10px;border-radius:7px;background:var(--tint-cyan-10);border:1px solid var(--tint-cyan-35);font-size:12px;line-height:1.5}
+  /* v2.3.0 3.1：风扇状态卡（正常一行大白话；异常才提醒；不展示 pwm 通道映射行） */
+  .fan-status-card{margin:10px 0;padding:10px 14px;border-radius:10px;background:var(--card);border:1px solid var(--border)}
+  .fan-status-card:empty{display:none}
+  .fan-ok-row{display:flex;align-items:center;gap:8px;font-size:13px;line-height:1.6;color:var(--text)}
+  .fan-ok-dot{width:8px;height:8px;border-radius:50%;background:var(--green);flex:0 0 auto}
+  .fan-warn-title{font-size:13px;font-weight:600;color:var(--orange);margin-bottom:6px}
+  .fan-warn-row{position:relative;padding-left:13px;font-size:13px;line-height:1.6;color:var(--text)}
+  .fan-warn-row + .fan-warn-row{margin-top:4px}
+  .fan-warn-row::before{content:"";position:absolute;left:0;top:8px;width:6px;height:6px;border-radius:50%;background:var(--orange)}
+  /* v2.3.0 3.2：网卡 WOL（网络唤醒）开关 */
+  .wol-sw{display:inline-flex;align-items:center;cursor:pointer;vertical-align:middle}
+  .wol-sw input{position:absolute;opacity:0;width:0;height:0}
+  .wol-sw-ui{width:34px;height:18px;border-radius:9px;background:var(--border);position:relative;transition:background .18s;display:inline-block}
+  .wol-sw-ui::after{content:"";position:absolute;left:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#fff;transition:transform .18s}
+  .wol-sw input:checked + .wol-sw-ui{background:var(--green)}
+  .wol-sw input:checked + .wol-sw-ui::after{transform:translateX(16px)}
+  .wol-sw input:disabled + .wol-sw-ui{opacity:.55;cursor:default}
+  .wol-sw-state{font-size:12.5px;color:var(--muted)}
+  /* WOL 行：整块靠行尾对齐；「已开启 + 开关」锁成一个整体（.wol-ctl），折行也不会被拆开 */
+  .kv .v.wol-v{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:6px 12px}
+  .wol-ctl{display:inline-flex;align-items:center;gap:8px;flex:0 0 auto}
+  .wol-hint{font-size:12px;color:var(--muted)}
+  /* 网卡「未跑满」提示：支持速率 > 当前协商速率（且在线）时显示，提示瓶颈在对端/网线 */
+  .nic-cap-hint{margin-top:8px;padding:6px 10px;border-radius:7px;background:var(--tint-amber-10);border:1px solid var(--tint-amber-35);font-size:12px;line-height:1.5;color:var(--text)}
+  /* v2.3.0 3.1：接管关闭时改说「谁在管」（中性灰点，非告警） */
+  .fan-off-row{display:flex;align-items:center;gap:8px;font-size:13px;line-height:1.6;color:var(--text)}
+  .fan-off-dot{width:8px;height:8px;border-radius:50%;background:var(--muted);flex:0 0 auto}
+  /* v2.3.0 3.1：无转速信号的可展开说明（中性色，非告警） */
+  .fan-nt-note{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:8px;padding:6px 10px;border-radius:7px;background:var(--fill);border:1px solid var(--border);font-size:12px;line-height:1.5}
+  .fan-nt-sum{color:var(--muted)}
+  .fan-nt-note .fan-hw-detail b{color:var(--text)}
   .fan-hw-sum{font-weight:600;color:var(--orange)}
   .fan-hw-toggle{margin-left:auto;font-size:11px;font-weight:400;color:var(--muted);background:none;border:1px solid var(--border);border-radius:5px;padding:1px 7px;cursor:pointer}
   .fan-hw-toggle:hover{color:var(--orange);border-color:var(--orange)}
@@ -760,3 +886,128 @@
   .hero-head{border-bottom:none;padding-bottom:0}
   [data-theme="dark"] .hero-head{border-bottom:none;padding-bottom:0}
   [data-theme="dark"] .hero-stats{border-top:1px solid rgba(255,255,255,.07);padding-top:16px}
+
+  /* 历史趋势页：温度红线设置（仅温度组显示） */
+  .chart-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+  .thr-ctl{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--text-3)}
+  .thr-label{color:#e5484d;font-weight:600}
+  .thr-input{width:56px;padding:4px 6px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:13px;text-align:center;font-variant-numeric:tabular-nums}
+  .thr-input:focus{outline:none;border-color:var(--primary)}
+  .thr-unit{color:var(--text-3)}
+  [data-theme="dark"] .thr-input{background:var(--fill);color:var(--text);border-color:var(--border)}
+
+  /* 数据新鲜度角标（3.9）：实时页页眉一行，超 10s 变黄提示可能滞后 */
+  .freshness{display:inline-flex;align-items:center;gap:7px;margin:0 0 12px;padding:6px 12px;border:1px solid var(--border);border-radius:999px;background:var(--bg);color:var(--text-3);font-size:12px;line-height:1;font-variant-numeric:tabular-nums}
+  .fresh-dot{width:7px;height:7px;border-radius:50%;background:#2ea043;box-shadow:0 0 0 3px rgba(46,160,67,.15)}
+  .freshness.stale{color:#b9770a;border-color:#f0d9a8;background:#fef6e7}
+  .freshness.stale .fresh-dot{background:#e3a008;box-shadow:0 0 0 3px rgba(227,160,8,.18)}
+  [data-theme="dark"] .freshness{background:var(--fill);color:var(--text-2)}
+  [data-theme="dark"] .freshness.stale{color:#e0a830;border-color:rgba(224,168,48,.4);background:rgba(224,168,48,.1)}
+  [data-theme="dark"] .fresh-dot{background:#3fb950;box-shadow:0 0 0 3px rgba(63,185,80,.2)}
+  [data-theme="dark"] .freshness.stale .fresh-dot{background:#e3a008;box-shadow:0 0 0 3px rgba(227,160,8,.25)}
+
+  /* 端口占用页（v2.3.0）：来源列的应用 / 容器小图标。
+     各应用自带图标底色不一（有的透明底插画、有的自带白底黑图案、Docker 是彩色插画），
+     统一做成 18px 圆角小卡片（白底 + 细描边），明暗两种主题下都能看清。 */
+  /* 应用/容器图标：**不加背景**（透明底图标必须保持透明，如 docker 鲸鱼、飞牛彩色插画）。
+     浅色主题下「自带白底的应用图标」与页面同色、边界会糊，故只补一圈极淡描边；
+     深色主题下白底图标自身就有对比，透明底图标也不需要描边，故不描。 */
+  .app-ic{width:18px;height:18px;border-radius:4px;vertical-align:-4px;margin-left:6px;object-fit:contain;box-shadow:inset 0 0 0 1px rgba(0,0,0,.08)}
+  [data-theme="dark"] .app-ic{box-shadow:none}
+  /* 端口页：地址格（.port-addr-cell）。**flex 是最后一道保险** —— 格内并排「地址 + 可达徽章」，
+     两个都是不可压缩元素；用 flex 让地址可收缩省略，徽章恒在同一行，行高永不因它变高。
+     实测没这层时（普通行内布局），可用宽度比「地址上限+徽章」少 1px 就会整块掉到第二行。 */
+  .port-addr-cell{display:flex;align-items:center;min-width:0}
+  .port-addr-cell>*{flex:0 0 auto}
+  .port-addr-cell>.port-addr{flex:0 1 auto;min-width:0}
+  /* 端口页：同端口多方占用时续行的标记「↳ 同一端口（2/3）」。
+     nowrap 必需：这是中文，不锁会被逐字断行；锁的是**单个元素内部**，
+     续行格内只有它一个元素，所以不影响布局。 */
+  .port-sub{color:var(--muted);font-size:12px;white-space:nowrap}
+  /* 端口页：本地地址:端口。限制宽度并省略，避免长 IPv6 地址（如 [fe80::…]:546）撑开格子。
+     完整值在 title / 悬停里。148px 实测够放最长 IPv4（192.168.50.158:55287 需 140px），只截 IPv6。
+     ⚠ 列宽由下面 .port-table 的**固定布局**决定，这里只是格内元素的上限 ——
+     改这里的数字治不了「整列被喂胖」（曾经试过，没用）。 */
+  .port-addr{display:inline-block;max-width:148px;overflow:hidden;text-overflow:ellipsis;
+    white-space:nowrap;vertical-align:bottom;cursor:help}
+  /* 端口页：来源格（徽章 + 图标 + 应用名）。**必须是 flex 行**：
+     `inline-block + max-width` 的名称不会收缩到「可用空间」，可用宽度比内容少 1px 就整块掉到
+     第二行 —— 实测窄窗（849px）下来源格内容区 159px、内容需 160px，25 行因此从 47px 涨到 65px
+     （用户截图反馈「名称都挤换行了」）。flex 后名称恒占一行、超出省略，行高恒定。 */
+  .port-src-cell{display:flex;align-items:center;min-width:0}
+  .port-src-cell>*{flex:0 0 auto}
+  .port-src-name{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;
+    white-space:nowrap;cursor:help}
+  /* 端口页表格：**固定布局 + 显式列宽**，只有「来源」列吃剩余空间（不设 width）。
+     为什么不用默认的 auto 布局：auto 会把表格余量优先分给「刚性」列，而地址列因为
+     内含 nowrap 的徽章 / 组标记而是刚性最大的那列 —— 实测表宽 1143px 时地址列独占 338px
+     而内容只占 131px，把「来源」列压到 317px，中文名被迫逐字换行（用户两次截图反馈）。
+     实测（列宽 62/224/62/140/68/…/76，来源吃剩余）：
+       表宽 976 → 地址 224、来源 511；1500 → 来源 1035。
+       地址列 338→224（-34%）、来源列 317→511（+61%），宽屏下格内容溢出 0、长名截断 0。
+     ⚠ 调整列宽时逐个改这里，别去改 .port-addr 的上限 —— 那是格内元素的上限，
+     治不了「整列被 auto 布局喂胖」这个病（试过，改了没用）。 */
+  .port-table{table-layout:fixed}
+  .port-table th.c-proto{width:62px}
+  .port-table th.c-addr{width:224px}
+  .port-table th.c-state{width:62px}
+  .port-table th.c-proc{width:140px}
+  .port-table th.c-pid{width:68px}
+  .port-table th.c-act{width:76px}
+  /* 进程名常是长词（`deepseek.harness`、`NetworkManager`）且不可断词，
+     不给省略就会把列撑开或折行抬高行高。完整名在 title。 */
+  .port-proc{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:help}
+  /* PID 等编号列：等宽数字，避免长短不一导致左右跳动。 */
+  .port-num{white-space:nowrap;font-variant-numeric:tabular-nums}
+  /* 端口页：内核态 socket（NFS 等内核线程持有的端口）的进程占位标记。
+     虚点下划线提示「可悬停看说明」，颜色比正常进程名淡一档。 */
+  .port-kernel{color:var(--muted);font-size:12px;border-bottom:1px dotted var(--border);cursor:help}
+  /* 端口页搜索框 */
+  .port-search{width:220px;padding:6px 10px;background:#fff;border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px}
+  .port-search:focus{outline:none;border-color:var(--primary)}
+  [data-theme="dark"] .port-search{background:var(--card)}
+  /* 端口页「释放」按钮：表格里 70~120 行每行都有，用大号红实心按钮会把整屏染红、
+     噪音压过数据本身，而且红色在这里不传达额外信息（真正的危险提示在二次确认弹窗里）。
+     改成小号描边按钮：平时中性安静，鼠标指到哪行哪行才「亮」成危险色。 */
+  .port-rel{padding:2px 11px;font-size:12px;line-height:1.7;border-radius:var(--r-sm);
+    border:1px solid var(--border);background:transparent;color:var(--muted);
+    cursor:pointer;transition:.15s;white-space:nowrap;font-weight:400}
+  .port-rel:hover:not(:disabled){border-color:var(--danger);color:var(--danger)}
+  .port-rel:disabled{opacity:.35;cursor:not-allowed}
+  /* 端口页工具栏：标题 + 来源分布 + 来源下拉 + 搜索框 */
+  .port-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+  .port-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  .port-tools{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  /* 标题旁的来源分布（下拉藏起来的「各类多少条」在这里常显；颜色与表格徽章一致） */
+  .port-dist{display:inline-flex;align-items:center;gap:11px;font-size:12px;font-weight:400}
+  .port-dist .dist-item{display:inline-flex;align-items:center;gap:4px;font-variant-numeric:tabular-nums}
+  .port-dist .dist-item::before{content:"";width:7px;height:7px;border-radius:2px;background:currentColor;opacity:.85}
+  .port-dist b{font-weight:600}
+  .port-dist .d-app{color:var(--success)}
+  .port-dist .d-docker{color:var(--primary)}
+  .port-dist .d-host{color:var(--warning)}
+  /* 来源下拉（自定义，避免原生 select 在 10s 轮询刷新下闪动，也便于统一深浅主题） */
+  .port-dd{position:relative}
+  .dd-btn{display:inline-flex;align-items:center;gap:8px;min-width:120px;padding:6px 10px;background:#fff;
+    border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:13px;cursor:pointer;transition:.15s}
+  .dd-btn:hover,.dd-btn.open{border-color:var(--primary)}
+  [data-theme="dark"] .dd-btn{background:var(--card)}
+  .dd-cur{flex:1 1 auto;text-align:left;font-variant-numeric:tabular-nums}
+  .dd-caret{width:0;height:0;border-left:4px solid transparent;border-right:4px solid transparent;
+    border-top:5px solid var(--muted);transition:transform .15s;flex:0 0 auto}
+  .dd-btn.open .dd-caret{transform:rotate(180deg)}
+  .dd-menu{position:absolute;z-index:30;top:calc(100% + 6px);left:0;min-width:100%;padding:5px;background:#fff;
+    border:1px solid var(--border);border-radius:10px;box-shadow:0 10px 26px rgba(0,0,0,.14)}
+  [data-theme="dark"] .dd-menu{background:var(--card);box-shadow:0 10px 26px rgba(0,0,0,.5)}
+  .dd-item{display:flex;align-items:center;gap:8px;padding:7px 9px;border-radius:7px;font-size:13px;
+    cursor:pointer;white-space:nowrap;color:var(--text)}
+  .dd-item.hl{background:rgba(127,127,127,.13)}
+  .dd-dot{width:8px;height:8px;border-radius:3px;background:var(--muted);flex:0 0 auto}
+  .dd-item.k-all .dd-dot{background:var(--text)}
+  .dd-item.k-app .dd-dot{background:var(--success)}
+  .dd-item.k-docker .dd-dot{background:var(--primary)}
+  .dd-item.k-host .dd-dot{background:var(--warning)}
+  .dd-label{flex:1 1 auto}
+  .dd-n{color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
+  .dd-item.on{font-weight:600}
+  .dd-item.on .dd-n{color:var(--text)}

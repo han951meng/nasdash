@@ -60,6 +60,33 @@ interface Disk {
   locate_supported?: boolean
   slot?: string
   standalone?: boolean
+  // 双磁臂盘合并（v2.3.0 3.4）：同一物理盘的多个逻辑名合成一张卡显示
+  dev_label?: string
+  devs?: string[]
+  size_total?: string
+  // 通道来源（阵列卡通道 / 主板直连），弹窗「硬盘档案」里显示
+  channel?: string
+  channel_type?: string
+  // v2.3.0 3.4：后端算好的健康分级 + 缺陷趋势
+  health_grade?: HealthGrade
+  health_trend?: HealthTrend | null
+  // v2.3.0 3.8：运维自定义盘名（custom_name 空串 = 未命名；name_key 回传改名请求用）
+  custom_name?: string
+  name_key?: string
+}
+
+interface HealthGrade {
+  level: 'green' | 'yellow' | 'red' | 'unknown' | string
+  label: string
+  reasons: string[]
+  counters?: Record<string, number>
+  source?: string
+}
+
+interface HealthTrend {
+  deltas: Record<string, number>
+  delta_total: number
+  prev_ts: number
 }
 
 interface Job {
@@ -156,10 +183,23 @@ const histRows = ref<HistRow[]>([])
 const histErr = ref('')
 
 /* ================= 工具函数（与旧页同口径） ================= */
+/** 累计读写量显示成短值："185,134,624 [94.7 TB]" → "94.7 TB"；没有人话标注就原样 */
+function dataUnitShort(s?: string | null): string {
+  if (!s) return '—'
+  const m = s.match(/\[([^\]]+)\]/)
+  return (m ? m[1] : s).trim()
+}
 function fmtHours(h?: number | null): string {
   if (h == null) return '-'
   if (h >= 8760) return (h / 8760).toFixed(1) + ' 年'
   return h + ' 小时'
+}
+
+/** 卡面格子里的短时长：25910 小时 → 「25910h」，超过一年用「3.0年」 */
+function fmtHoursShort(h?: number | null): string {
+  if (h == null) return '—'
+  if (h >= 8760) return (h / 8760).toFixed(1) + '年'
+  return h + 'h'
 }
 
 function fmtSec(s?: number | null): string {
@@ -198,10 +238,264 @@ function cwBad(d: Disk): boolean {
   return (parseInt(d.critical_warning || '0', 16) || 0) > 0
 }
 
+/* ================= 健康分级 + 缺陷趋势（v2.3.0 3.4） ================= */
+/** 分级档位：后端没给（老缓存/接口异常）时按原来的 SMART 判定兜底，不至于显示空白 */
+function gradeLevel(d: Disk): string {
+  const lv = d.health_grade?.level
+  if (lv) return lv
+  if (d.asleep) return 'unknown'
+  return d.health_ok === false ? 'red' : 'green'
+}
+const GRADE_LABEL: Record<string, string> = { green: '正常', yellow: '注意', red: '异常', unknown: '未知' }
+const GRADE_CLS: Record<string, string> = { green: 'b-ok', yellow: 'b-warn', red: 'b-bad', unknown: 'b-muted' }
+const GRADE_COLOR: Record<string, string> = {
+  green: 'var(--green)', yellow: 'var(--orange)', red: 'var(--red)', unknown: 'var(--muted)',
+}
+function gradeLabel(d: Disk): string {
+  return d.health_grade?.label || GRADE_LABEL[gradeLevel(d)] || '—'
+}
+function gradeCls(d: Disk): string {
+  return GRADE_CLS[gradeLevel(d)] || 'b-muted'
+}
+function gradeColor(d: Disk): string {
+  return GRADE_COLOR[gradeLevel(d)] || 'var(--text)'
+}
+/** 分级原因（红在前、黄在后，后端已排好序）；绿盘给一句肯定话 */
+function gradeReason(d: Disk): string {
+  const rs = d.health_grade?.reasons || []
+  if (rs.length) return rs.join('；')
+  return gradeLevel(d) === 'green' ? '未发现异常信号' : ''
+}
+/** 缺陷趋势：与上一次采样（默认 6h 前）比，只看只增不减的计数 */
+const TREND_LABEL: Record<string, string> = {
+  media_err: '介质错误', other_err: '其它错误', bbm_err: '坏块管理错误', pred_fail: '预测性失败',
+  reallocated: '重映射扇区', pending: '待处理扇区', uncorrectable: '不可纠正扇区',
+  udma_crc: '接口 CRC 错误', defects: 'SAS 缺陷扇区', non_medium_errors: '非介质错误',
+  read_errors: '不可纠正读错误', write_errors: '不可纠正写错误',
+  percentage_used: 'SSD 寿命', endurance_used: 'SSD 寿命',
+}
+function fmtAge(ts: number): string {
+  const s = Math.max(0, Math.floor(Date.now() / 1000 - ts))
+  if (s < 3600) return Math.max(1, Math.round(s / 60)) + ' 分钟前'
+  if (s < 86400) return (s / 3600).toFixed(1) + ' 小时前'
+  return Math.round(s / 86400) + ' 天前'
+}
+
+/* ================= 卡面「对比条」（v2.3.0 3.4 收尾） =================
+   卡片主界面只留「多块盘并排时能一眼横着比」的少数指标，其余全进徽章弹窗。
+   判断标准就一条：**这个数字会不会自己变、且能不能横向比**——
+   身份类（型号/容量/转速）认盘用，留；实时类（温度）留；缺陷与寿命留最关键的
+   一格用来比「谁有伤、谁快用废」；细分计数、读写量、通道槽位、SN 都进弹窗。 */
+/** 盘名：双磁臂盘合并后显示 "sda/sdb"，普通盘就是 dev */
+function diskName(d: Disk): string {
+  // v2.3.0 3.8：自定义名优先（「数据盘1」比 sda/E0:S3 好认），原代号在卡上作副标
+  return d.custom_name || d.dev_label || d.dev || ''
+}
+/** 容量：双磁臂盘标出「×2」（每臂一半，整盘见 size_total / 提示） */
+function sizeText(d: Disk): string {
+  const n = d.devs?.length || 0
+  if (!d.size) return '—'
+  return n > 1 ? d.size + ' ×' + n : d.size
+}
+/** 容量 / 类型 那一行的整串（含接口、双磁臂标注；介质 HDD/SSD 由转速行表达，不在这里重复） */
+function capText(d: Disk): string {
+  const t = (d.type || '').toLowerCase() === 'nvme' ? 'NVMe' : ((d.type === 'sas') ? 'SAS' : 'SATA')
+  const parts = [sizeText(d), t]
+  if (d.devs && d.devs.length > 1) parts.push('双磁臂')
+  else if (diskFeatureClean(d.feature, d.dual_actuator)) parts.push(diskFeatureClean(d.feature, d.dual_actuator))
+  return parts.join(' · ')
+}
+/** 容量行的悬浮说明：双磁臂盘讲清「为什么显示 ×2」与整盘容量 */
+function capTip(d: Disk): string {
+  if (d.devs && d.devs.length > 1) {
+    return '双磁臂硬盘：两个执行器共用一个盘体，各向系统暴露一个逻辑盘（' + d.dev_label + '），'
+      + '每臂 ' + (d.size || '?') + '，整盘 ' + (d.size_total || '约两倍') + '。nasdash 只显示一张卡，数据取两个执行器中更差的一侧。'
+  }
+  return '硬盘总容量与接口类型（NVMe/SAS/SATA）；机械盘（HDD）还是固态盘（SSD）看下面「转速」那一行'
+}
+/** 品牌前缀：优先中文品牌名，没有才退回 vendor 英文名
+    （避免出现「希捷(Seagate) SEAGATE …」这种同一来源被拼两遍） */
+function brandPrefix(d: Disk): string {
+  const b = d.brand || d.vendor || ''
+  return b ? b + ' ' : ''
+}
+/** 型号整串（品牌 + 型号） */
+function modelText(d: Disk): string {
+  return d.model ? brandPrefix(d) + d.model : '—'
+}
+/** 卡面 4 格对比条：只放能横向比的指标，按盘型选（机械盘比缺陷、固态比寿命）。
+    没有值的格会被跳过——老固态盘 SMART 里没有寿命字段时，自动退回比扇区计数，
+    不留一排「—」占着位置。 */
+function compareCells(d: Disk): Array<{ k: string; label: string; value: string; tip: string; hot: boolean }> {
+  type Cell = { k: string; label: string; value: string; tip: string; hot: boolean; has?: boolean }
+  const na = d.asleep ? '（硬盘休眠中，读不到真实数据）' : ''
+  const cells: Cell[] = [{
+    k: 'temp',
+    label: '当前温度',
+    value: d.temp != null ? d.temp + '℃' : '—',
+    tip: '实时读数，几秒就变；多块盘并排时直接横着比谁更热。超过该盘高温线 ' + tempTrip(d) + '℃ 会判为「注意」。' + na,
+    hot: tempHot(d),
+  }]
+  // 候选池：按 key 存放，取哪两个由盘型和「有没有值」决定
+  const POOL: Record<string, Cell> = {
+    wear: {
+      k: 'wear', label: '已用寿命',
+      value: d.percentage_used != null ? d.percentage_used + '%' : '—',
+      tip: '固态盘预计寿命的已消耗百分比（累计值，只增不减）。超过 80% 判为「注意」。' + na,
+      hot: (d.percentage_used || 0) > 80,
+      has: d.percentage_used != null,
+    },
+    spare: {
+      k: 'spare', label: '剩余备用',
+      value: d.available_spare != null ? d.available_spare + '%' : '—',
+      tip: '固态盘保留的备用块剩余比例（累计值，只会变少）。低于 10% 判为「注意」。' + na,
+      hot: d.available_spare != null && d.available_spare < 10,
+      has: d.available_spare != null,
+    },
+    defects: {
+      k: 'defects', label: d.type === 'sas' ? '缺陷扇区' : '重映射',
+      value: (d.type === 'sas' ? d.defects : d.reallocated) != null ? String(d.type === 'sas' ? d.defects : d.reallocated) : '—',
+      tip: '已经坏掉、被备用块顶替的扇区数（累计值，只增不减）。>0 说明盘体已有损伤，横着比一眼能看出哪块盘带伤。' + na,
+      hot: ((d.type === 'sas' ? d.defects : d.reallocated) || 0) > 0,
+      has: (d.type === 'sas' ? d.defects : d.reallocated) != null,
+    },
+    pending: {
+      k: 'pending', label: '待处理',
+      value: d.pending != null ? String(d.pending) : '—',
+      tip: '读写时发现不稳定、还没确认或替换的扇区（累计值）。>0 是坏道的前一步信号，要盯着。' + na,
+      hot: (d.pending || 0) > 0,
+      has: d.pending != null,
+    },
+  }
+  // 候选池顺序按盘型定：固态先看寿命/备用，机械先看缺陷；没值的自动落到下一个
+  const order = d.rota !== '1' ? ['wear', 'spare', 'defects', 'pending'] : ['defects', 'pending', 'wear', 'spare']
+  const pool = order.map(k => POOL[k]).filter(Boolean) as Cell[]
+  const picked = pool.filter(x => x.has).slice(0, 2)
+  if (!picked.length) picked.push(...pool.slice(0, 2))   // 全都没值（休眠中）时留占位，保持卡片高度一致
+  cells.push(...picked)
+  cells.push({
+    k: 'hours', label: '已用时长',
+    value: fmtHoursShort(d.power_on_hours),
+    tip: '累计通电运行时间（只增不减）。横着比能看出哪块盘最老、最该列入更换计划。' + na,
+    hot: false,
+  })
+  return cells
+}
+
+/* ===== 健康详情弹窗（v2.3.0 3.4）：徽章点开看完整依据 + 缺陷趋势 + 各项计数 =====
+   卡片里不再重复摆「健康分级」这一行；徽章本身就是入口，只在有新增缺陷时挂个小角标。 */
+const gradeDev = ref<string | null>(null)
+const gradeDisk = computed<Disk | null>(() => disks.value.find(x => x.dev === gradeDev.value) || null)
+function openGrade(d: Disk) {
+  gradeDev.value = d.dev
+}
+
+/* ===== 改名弹窗（v2.3.0 3.8）：给盘起个好认的名字，存后端配置、重启不丢 ===== */
+const renameOpen = ref(false)
+const renameTarget = ref<Disk | null>(null)
+const renameValue = ref('')
+const renameBusy = ref(false)
+const renameErr = ref('')
+
+function openRename(d: Disk) {
+  renameTarget.value = d
+  renameValue.value = d.custom_name || ''
+  renameErr.value = ''
+  renameOpen.value = true
+}
+async function saveRename(clear = false): Promise<void> {
+  const d = renameTarget.value
+  if (!d || renameBusy.value) return
+  const name = clear ? '' : renameValue.value.trim()
+  if (!clear && !name) { renameErr.value = '名字不能为空（想清除请点「清除」）'; return }
+  renameBusy.value = true
+  renameErr.value = ''
+  try {
+    const r = await apiFetch('/api/disks/rename', 15000, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ key: d.name_key || d.serial || d.dev, name }),
+    })
+    const j = await r.json()
+    if (!j.ok) {
+      renameErr.value = j.error || '保存失败'
+      return
+    }
+    renameOpen.value = false
+    await loadDisks(false)
+  } catch (e) {
+    renameErr.value = '保存失败：' + String((e as Error).message || e)
+  } finally {
+    renameBusy.value = false
+  }
+}
+/** 徽章角标：本次采样相比上次**新增**的缺陷数（后端只报增长），没有就是 0、不显示 */
+function trendUp(d: Disk): number {
+  return d.health_trend?.delta_total || 0
+}
+/** 趋势明细：拆成「介质错误 +3」这样的短句，供徽章提示与弹窗共用 */
+function trendParts(d: Disk): string[] {
+  return Object.entries(d.health_trend?.deltas || {}).map(([k, v]) => (TREND_LABEL[k] || k) + ' +' + v)
+}
+/** 一句话说清「这个档意味着什么」——绿/黄/红/未知各一句 */
+function gradeExplain(d: Disk): string {
+  const lv = gradeLevel(d)
+  if (lv === 'green') return '这块盘没有发现任何异常信号，各项缺陷计数均为 0，可以放心用。'
+  if (lv === 'yellow') return '这块盘已经有损伤，或者温度/寿命接近上限。还能继续用，但建议做好备份，并留意下面的计数有没有继续变大。'
+  if (lv === 'red') return '这块盘报了明确的故障信号。建议尽快把重要数据备份出来，并准备更换。'
+  return '暂时读不到这块盘的健康数据（多为休眠中），不代表它坏了——硬盘转起来后会自动补上。'
+}
+/** 弹窗里的计数清单：只列后端真的给到的项，按「阵列卡错误 → 扇区缺陷 → 寿命」排。
+    注意：**温度不在这里**——它是实时读数（几秒就变），既不是缺陷也不是寿命消耗，
+    后端快照/趋势也显式把它排除（_TREND_COUNTERS 不含 temp）。放这一格里会让人误以为
+    温度也会被累计、拿去跟上次比。温度单独放在标题栏那一行显示。 */
+const COUNTER_META: Array<[string, string, string]> = [
+  ['media_err', '阵列卡介质错误', '阵列卡从盘体读数据时遇到的介质层错误次数'],
+  ['other_err', '阵列卡其它错误', '不属于介质错误的其它报错，多为通信/协议层'],
+  ['bbm_err', '坏块管理错误', '阵列卡坏块管理表（BBM）记录的替换失败次数'],
+  ['pred_fail', '阵列卡预测性失败', '阵列卡判断该盘可能即将失效的次数，>0 即高风险'],
+  ['pending', '待处理扇区', '读写时被发现不稳定、尚待确认或替换的扇区，>0 有恶化风险'],
+  ['uncorrectable', '不可纠正扇区', '发生错误且无法通过重映射修复的扇区，>0 风险较高'],
+  ['reallocated', '重映射扇区', '盘体已用备用块顶掉的坏扇区数量，>0 说明已有损伤'],
+  ['defects', 'SAS 缺陷扇区', 'SAS 盘缺陷表记录的已发现缺陷扇区数，>0 说明已有损伤'],
+  ['non_medium_errors', 'SAS 非介质错误', 'SAS 盘与介质无关的报错次数（多为通信/协议层）'],
+  ['read_errors', 'SAS 读错误(不可纠正)', 'SAS 盘累计无法纠正的读错误次数'],
+  ['write_errors', 'SAS 写错误(不可纠正)', 'SAS 盘累计无法纠正的写错误次数'],
+  ['udma_crc', '接口 CRC 错误', 'SATA 传输层的 CRC 校验错误，>0 多为数据线/接口接触不良，不是盘体坏了（换线通常能解决）'],
+  ['percentage_used', 'SSD 寿命已用', '固态盘预计寿命的已消耗百分比（超过 80% 标红）'],
+  ['endurance_used', 'SSD 寿命已用（阵列卡报）', '阵列卡读到的固态盘寿命消耗百分比（超过 80% 标红）'],
+  ['available_spare', 'NVMe 剩余备用', '固态盘保留的备用块剩余比例。这是反向指标：数字越大越健康，低于 10% 标红'],
+]
+/** 每项计数的「危险高亮」规则：多数是 >0 就红；寿命类 >80% 才红；剩余备用是反向指标 <10% 才红 */
+function counterHot(k: string, v: number): boolean {
+  if (k === 'available_spare') return v < 10
+  if (k === 'percentage_used' || k === 'endurance_used') return v > 80
+  return v > 0
+}
+function counterRows(d: Disk): Array<{ k: string; name: string; tip: string; v: number; hot: boolean; unit: string }> {
+  const cs = d.health_grade?.counters || {}
+  const out: Array<{ k: string; name: string; tip: string; v: number; hot: boolean; unit: string }> = []
+  for (const [k, name, tip] of COUNTER_META) {
+    const raw = cs[k]
+    if (typeof raw !== 'number') continue
+    const unit = k === 'percentage_used' || k === 'endurance_used' || k === 'available_spare' ? '%' : ''
+    out.push({ k, name, tip, v: raw, hot: counterHot(k, raw), unit })
+  }
+  return out
+}
+/** 温度是否已达该盘高温线（默认 55℃）——到了就是分级里的黄档判据之一，弹窗里要点出来 */
+function tempHot(d: Disk): boolean {
+  return d.temp != null && d.temp >= (d.temp_trip || 55)
+}
+function tempTrip(d: Disk): number {
+  return d.temp_trip || 55
+}
+
 /* ================= Hero ================= */
 const heroStats = computed(() => {
   const total = disks.value.length
-  const healthy = disks.value.filter(d => d.health_ok).length
+  // 「健康」口径 = 分级为绿（有损伤的黄色盘不再计入健康，但会在下面的黄卡里点名）
+  const healthy = disks.value.filter(d => gradeLevel(d) === 'green').length
   const nvme = disks.value.filter(d => (d.type || '').toLowerCase() === 'nvme').length
   let maxT: number | null = null
   disks.value.forEach(d => {
@@ -223,7 +517,8 @@ const heroStats = computed(() => {
   ]
 })
 
-const badDisks = computed(() => disks.value.filter(d => d.health_ok === false))
+const badDisks = computed(() => disks.value.filter(d => gradeLevel(d) === 'red'))
+const warnDisks = computed(() => disks.value.filter(d => gradeLevel(d) === 'yellow'))
 
 /* ================= 数据加载 ================= */
 async function loadDisks(force = false): Promise<void> {
@@ -254,11 +549,31 @@ async function loadDisks(force = false): Promise<void> {
   } finally {
     busy.value = false
   }
+  maybeFocusDisk()
+}
+
+/** 卷映射跳转落点（v2.3.0 3.6）：存储卷页点盘后把 dev 写进 sessionStorage，
+ *  本页首次拿到数据后滚动到该盘的健康卡并高亮 2 秒。双磁臂盘的副臂（sdb）
+ *  没有独立卡，落到主臂卡（devs 里包含它）。 */
+function maybeFocusDisk(): void {
+  let dev = ''
+  try {
+    dev = sessionStorage.getItem('nasdash_focus_disk') || ''
+    sessionStorage.removeItem('nasdash_focus_disk')
+  } catch { return }
+  if (!dev) return
+  const target = disks.value.find(d => d.dev === dev || (d.devs || []).includes(dev))
+  if (!target) return
+  requestAnimationFrame(() => {
+    const el = document.querySelector(`.disk-card[data-dev="${target.dev}"]`)
+    if (!el) return
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    el.classList.add('focus-flash')
+    setTimeout(() => el.classList.remove('focus-flash'), 2000)
+  })
 }
 
 /* ================= 自检状态轮询 ================= */
-const anyRunning = computed(() => Object.values(jobs.value).some(j => j.state === 'running'))
-
 function stopTick(): void {
   if (tickTimer != null) { window.clearInterval(tickTimer); tickTimer = null }
 }
@@ -596,8 +911,7 @@ onUnmounted(() => {
         <div style="font-weight:600;color:#b91c1c;margin-bottom:6px">⚠️ 检测到 {{ badDisks.length }} 块硬盘健康异常</div>
         <ul style="margin:0 0 8px 18px;padding:0;font-size:13px;line-height:1.7">
           <li v-for="d in badDisks" :key="d.dev">
-            <b>{{ d.dev }}</b>（{{ d.model || '未知型号' }}）：SMART 健康状态
-            <b style="color:var(--red)">{{ d.health || '异常' }}</b>
+            <b>{{ diskName(d) }}</b>（{{ d.model || '未知型号' }}）：{{ gradeReason(d) }}
           </li>
         </ul>
         <div style="font-size:13px;color:var(--text)">
@@ -605,27 +919,55 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <!-- 说明卡：自检会伤盘吗 -->
-      <div class="card disk-info-card">
-        <h3><AppIcon name="bulb" /> 硬盘自检会伤盘吗？</h3>
-        <div class="note">
-          <p>平时 nasdash 只是<b class="safe">只读 SMART 属性</b>（读健康度、温度、通电时间等），<b>不会扫描盘面，也不会写入数据</b>，对硬盘没有额外磨损。刷新一次也就 1～2 秒，点刷新/自动刷新都不会让你的硬盘一直转或一直扫。</p>
-          <p>只有当你手动点下面每块盘里的「硬盘自检」，才是真正的自检——点开后按盘的情况可选三种方式：</p>
-          <p>• <b>SMART 长自检（固件级）</b>：由硬盘固件只读自检整盘，不伤数据，适合二手盘/老盘体检，所有盘都能跑。</p>
-          <p>• <b>只读表面扫描</b>：像硬盘哨兵那样<b>只读</b>逐扇区扫盘面找坏块，不写数据、不伤盘，<b>所有盘都能跑</b>（包括正在用的盘/阵列成员），耗时较长；扫描时显示扇区网格实时进度。</p>
-          <p>• <b>全面坏块扫描</b>：会<b class="warn">写满整盘并清空数据</b>，最彻底但很慢。因此只让「独立盘」（没挂载、不在阵列、不在 LVM）跑；在用盘该项直接不显示。</p>
+      <!-- 需要注意的盘（黄）：先盯住，不用马上换 -->
+      <div
+        v-if="warnDisks.length"
+        style="background:rgba(245,158,11,.1);border:1px solid rgba(245,158,11,.4);border-radius:10px;padding:14px 16px;margin-bottom:14px"
+      >
+        <div style="font-weight:600;color:#b45309;margin-bottom:6px">🔍 {{ warnDisks.length }} 块硬盘需要注意（先用着，但要盯住）</div>
+        <ul style="margin:0 0 8px 18px;padding:0;font-size:13px;line-height:1.7">
+          <li v-for="d in warnDisks" :key="d.dev">
+            <b>{{ diskName(d) }}</b>（{{ d.model || '未知型号' }}）：{{ gradeReason(d) }}
+          </li>
+        </ul>
+        <div style="font-size:13px;color:var(--text)">
+          建议：把这块盘上的<span style="font-weight:600">重要数据也做一份备份</span>，并在「缺陷趋势」里留意数值有没有继续变大。
         </div>
       </div>
 
+      <!-- 说明卡：自检会伤盘吗（默认收起，点标题展开） -->
+      <details class="card disk-info-card">
+        <summary><AppIcon name="bulb" /> 硬盘自检会伤盘吗？<i class="faq-hint" aria-hidden="true"></i></summary>
+        <div class="note">
+          <p><b class="safe">平时不伤盘</b>：本页只读 SMART 健康数据，不扫盘面、不写数据。只有手动点某块盘的「硬盘自检」才会真扫，三种里两种只读：</p>
+          <p>• <b>SMART 长自检 / 只读表面扫描</b>：只读不写、不伤数据，<b>所有盘都能跑</b>（包括在用的阵列成员）。</p>
+          <p>• <b>全面坏块扫描</b>：会<b class="warn">写满整盘并清空数据</b>，最彻底但很慢，只对「独立盘」开放，在用盘直接不显示这个选项。</p>
+          <p><b>健康徽章</b>：<b class="safe">绿=正常</b>、<b class="warn">黄=注意</b>、<b style="color:var(--red)">红=尽快备份换盘</b>，判据全部来自盘和阵列卡自报数据。<b>点徽章</b>看详情：为什么这一档、各项计数、缺陷趋势（每 6 小时记一次，涨了徽章会挂 <b class="warn">↑N</b> 角标）。</p>
+          <p><b>卡面</b>只放能横着比的：温度、缺陷/寿命、已用时长；序列号、读写量等细节都在徽章弹窗里。</p>
+          <p><b>累计读写量</b>：NVMe、SATA 固态、SAS 盘都会显示；部分老款 SATA 机械盘固件不记总读写，这块硬件层面就拿不到，相应行直接不显示（不是故障）。</p>
+        </div>
+      </details>
+
       <!-- 每块盘一张卡 -->
       <div class="cards">
-        <div v-for="d in disks" :key="d.dev" class="card disk-card" :class="d.asleep ? '' : (d.health_ok ? '' : 'bad')">
+        <div v-for="d in disks" :key="d.dev" class="card disk-card" :data-dev="d.dev" :class="d.asleep ? '' : (gradeLevel(d) === 'red' ? 'bad' : '')">
           <div class="disk-head">
             <div style="display:flex;align-items:center;gap:8px;min-width:0">
-              <span class="name">{{ d.dev }}</span>
-              <span v-if="d.asleep" class="badge b-muted">休眠</span>
-              <span v-else class="badge" :class="d.health_ok ? 'b-ok' : 'b-bad'">{{ d.health }}</span>
+              <span class="name" :title="d.custom_name ? ('原代号：' + (d.dev_label || d.dev) + '（悬停可随时查看，终端找盘用）') : '盘符/槽位代号，点「改名」可起个好认的名字'">{{ diskName(d) }}</span>
+              <button
+                class="badge grade-btn"
+                :class="d.asleep ? 'b-muted' : gradeCls(d)"
+                :title="d.asleep
+                  ? '休眠中，点了看说明'
+                  : ('健康分级：' + gradeLabel(d) + '（依据：' + (d.health_grade?.source || 'SMART') + '）· 点开看详细依据与缺陷趋势')"
+                @click="openGrade(d)"
+              >
+                {{ d.asleep ? '休眠' : gradeLabel(d) }}
+                <span v-if="!d.asleep && trendUp(d)" class="grade-up" :title="'相比上次采样新增缺陷 ' + trendUp(d) + ' 项'">↑{{ trendUp(d) }}</span>
+              </button>
             </div>
+            <div style="display:flex;align-items:center;gap:6px;flex:0 0 auto">
+              <button class="btn-mini" title="给这块盘起个好认的名字（如「数据盘1」），重启不丢" @click="openRename(d)">改名</button>
             <button
               v-if="d.locate_supported && d.slot"
               class="btn-mini"
@@ -633,54 +975,37 @@ onUnmounted(() => {
               :disabled="locateBusy[d.slot]"
               @click="raidLocate(d.slot!)"
             >{{ locateBusy[d.slot] ? '定位中…' : (locateOn[d.slot] ? '停止闪灯' : '定位闪灯') }}</button>
-          </div>
-
-          <div class="kv"><span class="k" title="硬盘的品牌与完整型号名称">型号</span><span class="v">{{ d.model ? ((d.brand ? d.brand + ' ' : '') + (d.vendor ? d.vendor + ' ' : '') + d.model) : '—' }}</span></div>
-          <div class="kv">
-            <span class="k" title="硬盘总容量与接口/介质类型（NVMe/SAS/SATA · SSD/HDD）">容量 / 类型</span>
-            <span class="v">{{ d.size }} · {{ (d.type || '').toLowerCase() === 'nvme' ? 'NVMe' : ((d.type === 'sas') ? 'SAS' : 'SATA') }} · {{ d.rota == '1' ? 'HDD' : 'SSD' }}{{ diskFeatureClean(d.feature, d.dual_actuator) ? ' · ' + diskFeatureClean(d.feature, d.dual_actuator) : '' }}</span>
-          </div>
-          <div class="kv"><span class="k" title="机械盘每分钟转数；SSD 无转动，显示为固态">转速</span><span class="v">{{ d.rpm || ((d.rota == '1' || d.type === 'sas') ? '—' : '固态(SSD)') }}</span></div>
-          <div class="kv"><span class="k" title="硬盘出厂唯一编号（SN）">序列号</span><span class="v" style="font-size:12px">{{ d.serial || '—' }}</span></div>
-
-          <div style="margin-top:8px" title="硬盘当前温度传感器读数">
-            <span style="font-size:13px;color:var(--muted)">温度 {{ d.temp != null ? d.temp + '°C' : 'N/A' }}</span>
-            <div class="temp-bar">
-              <div
-                class="temp-fill"
-                :style="{ width: (d.temp != null ? Math.min(d.temp / (d.temp_trip || 60) * 100, 100) : 0) + '%', background: tempColor(d.temp, d.temp_trip || 60) }"
-              />
             </div>
           </div>
 
-          <!-- SAS 细节 -->
-          <template v-if="d.type === 'sas'">
-            <div class="kv"><span class="k" title="硬盘累计通电运行小时数">已用时长</span><span class="v">{{ fmtHours(d.power_on_hours) }}</span></div>
-            <div class="kv"><span class="k" title="SAS 硬盘报告的已发现缺陷扇区数">缺陷扇区</span><span class="v" :style="{ color: (d.defects || 0) > 0 ? 'var(--red)' : 'var(--text)' }">{{ d.defects }}</span></div>
-            <div class="kv"><span class="k" title="SAS 硬盘尚待处理的缺陷扇区">待处理缺陷</span><span class="v" :style="{ color: (d.pending || 0) > 0 ? 'var(--orange)' : 'var(--text)' }">{{ d.pending }}</span></div>
-            <div class="kv"><span class="k" title="SAS 硬盘与介质无关的报错次数（如通信/协议层）">非介质错误</span><span class="v">{{ d.non_medium_errors || 0 }}</span></div>
-            <div class="kv"><span class="k" title="SAS 累计不可纠正读错误数">读错误(不可纠正)</span><span class="v">{{ d.read_errors }}</span></div>
-            <div class="kv"><span class="k" title="SAS 累计不可纠正写错误数">写错误(不可纠正)</span><span class="v">{{ d.write_errors }}</span></div>
-          </template>
+          <!-- 健康分级已收进标题栏徽章的弹窗（点徽章看依据 + 缺陷趋势），卡内不再重复一行 -->
 
-          <!-- NVMe 细节 -->
-          <template v-else-if="d.type === 'nvme'">
-            <div class="kv"><span class="k" title="硬盘累计通电运行小时数">已用时长</span><span class="v">{{ fmtHours(d.power_on_hours) }}</span></div>
-            <div class="kv"><span class="k" title="SSD/NVMe 已消耗的预计寿命百分比">已用寿命</span><span class="v" :style="{ color: (d.percentage_used || 0) > 0 ? 'var(--orange)' : 'var(--text)' }">{{ d.percentage_used != null ? d.percentage_used + '%' : 'N/A' }}</span></div>
-            <div class="kv"><span class="k" title="SSD/NVMe 保留的备用块剩余比例，低于阈值可能掉速或报废">剩余备用</span><span class="v">{{ d.available_spare != null ? d.available_spare + '%' : 'N/A' }}</span></div>
-            <div class="kv"><span class="k" title="NVMe 固态盘的告警标志：0x00 表示一切正常、无任何告警；若变成 0x01、0x02 等数字，才代表某项（如温度/备用空间/可靠性）超标需关注">临界告警</span><span class="v" :style="{ color: cwBad(d) ? 'var(--red)' : 'var(--green)' }">{{ cwBad(d) ? ('0x' + d.critical_warning + ' 告警') : '正常' }}</span></div>
-            <div class="kv"><span class="k" title="SSD/NVMe 累计读取的数据量">读取量</span><span class="v">{{ d.data_units_read || 'N/A' }}</span></div>
-            <div class="kv"><span class="k" title="SSD/NVMe 累计写入的数据量">写入量</span><span class="v">{{ d.data_units_written || 'N/A' }}</span></div>
-          </template>
+          <!-- 身份 3 行：认盘用，多块盘并排也能横着比 -->
+          <div class="kv"><span class="k" title="硬盘的品牌与完整型号名称">型号</span><span class="v">{{ modelText(d) }}</span></div>
+          <div class="kv"><span class="k" :title="capTip(d)">容量 / 类型</span><span class="v">{{ capText(d) }}</span></div>
+          <div class="kv"><span class="k" title="机械盘每分钟转数；SSD 无转动，显示为固态">转速</span><span class="v">{{ d.rpm || ((d.rota == '1' || d.type === 'sas') ? '—' : '固态(SSD)') }}</span></div>
 
-          <!-- ATA（SATA）细节 -->
-          <template v-else>
-            <div class="kv"><span class="k" title="硬盘累计通电运行小时数">已用时长</span><span class="v">{{ fmtHours(d.power_on_hours) }}</span></div>
-            <div class="kv"><span class="k" title="硬盘已自动替换的坏扇区数量，>0 表示盘体已有损伤">重映射扇区</span><span class="v" :style="{ color: (d.reallocated || 0) > 0 ? 'var(--red)' : 'var(--text)' }">{{ d.reallocated != null ? d.reallocated : '—' }}</span></div>
-            <div class="kv"><span class="k" title="读写时被发现不稳定、尚待确认或替换的扇区">待处理扇区</span><span class="v" :style="{ color: (d.pending || 0) > 0 ? 'var(--orange)' : 'var(--text)' }">{{ d.pending != null ? d.pending : '—' }}</span></div>
-            <div class="kv"><span class="k" title="发生错误且无法通过重映射修复的扇区，>0 风险较高">不可纠正扇区</span><span class="v" :style="{ color: (d.uncorrectable || 0) > 0 ? 'var(--red)' : 'var(--text)' }">{{ d.uncorrectable != null ? d.uncorrectable : '—' }}</span></div>
-            <div class="kv"><span class="k" title="SATA 传输过程中产生的 CRC 校验错误，多为数据线/接口接触问题">UDMA CRC 错误</span><span class="v">{{ d.udma_crc || 0 }}</span></div>
-          </template>
+          <!-- 对比条：只放「能横着比」的少数指标（温度 / 缺陷或寿命 / 已用时长）；
+               细分计数、读写量、通道槽位、SN 全部在徽章弹窗里 -->
+          <div class="cmp-grid">
+            <div v-for="c in compareCells(d)" :key="c.k" class="cmp-cell" :title="c.tip">
+              <span class="cmp-k">{{ c.label }}</span>
+              <span class="cmp-v" :class="{ hot: c.hot }">{{ c.value }}</span>
+            </div>
+          </div>
+
+          <div class="temp-bar" :title="'温度占该盘高温线（' + tempTrip(d) + '℃）的比例，横着比一眼看出谁更热、谁更接近上限'">
+            <div
+              class="temp-fill"
+              :style="{ width: (d.temp != null ? Math.min(d.temp / (d.temp_trip || 60) * 100, 100) : 0) + '%', background: tempColor(d.temp, d.temp_trip || 60) }"
+            />
+            <span class="temp-bar-label">{{ d.temp != null ? Math.round(d.temp) + '℃' : '—' }}</span>
+          </div>
+
+          <!-- v2.3.0 3.4 收尾：原先这里的 SAS/NVMe/ATA 累计计数（缺陷扇区、待处理、
+               非介质错误、读写错误、已用寿命、剩余备用、临界告警、读写量）已全部移进
+               「健康详情」弹窗——它们要么只在出问题时才非 0、要么需要连着上下文看，
+               摆在卡面上只占地方、还不便于横向比较；卡面只留上面的对比条。 -->
 
           <!-- 硬盘自检面板 -->
           <div
@@ -748,6 +1073,105 @@ onUnmounted(() => {
         </div>
       </div>
     </template>
+
+    <!-- ===== 健康分级详情（v2.3.0 3.4）：点硬盘名旁边的徽章打开 ===== -->
+    <div v-if="gradeDisk" class="modal-overlay show" @click.self="gradeDev = null">
+      <div class="modal-box" style="max-width:700px;max-height:90vh">
+        <div class="modal-title">健康详情 · {{ diskName(gradeDisk) }}</div>
+        <div class="modal-body hd-body">
+          <div class="hd-id">
+            <b>{{ diskName(gradeDisk) }}</b>
+            <span v-if="gradeDisk.custom_name" class="sub-name">{{ gradeDisk.dev_label || gradeDisk.dev }}</span>
+            <span>{{ gradeDisk.model ? modelText(gradeDisk) : '未知型号' }}</span>
+            <span :title="capTip(gradeDisk)">{{ sizeText(gradeDisk) }}</span>
+            <span v-if="gradeDisk.devs && gradeDisk.devs.length > 1" class="hd-dual" :title="capTip(gradeDisk)">
+              双磁臂 · 整盘 {{ gradeDisk.size_total || '约两倍' }}
+            </span>
+            <!-- 温度是实时读数，跟下面的「累计计数」不是一类东西，单独放标题栏这一行 -->
+            <span
+              class="hd-temp"
+              :class="{ hot: tempHot(gradeDisk) }"
+              :title="'当前温度是实时读数，几秒就会变，不参与缺陷累计、也不跟上次比；该盘高温线 ' + tempTrip(gradeDisk) + '℃（超过会判为「注意」）'"
+            >
+              当前温度 <b>{{ gradeDisk.temp != null ? gradeDisk.temp + '℃' : 'N/A' }}</b>
+              <span class="hd-trip">&nbsp;· 高温线 {{ tempTrip(gradeDisk) }}℃</span>
+            </span>
+          </div>
+
+          <div class="hd-grade" :style="{ borderLeftColor: gradeColor(gradeDisk) }">
+            <span class="hd-dot" :style="{ background: gradeColor(gradeDisk) }" />
+            <div>
+              <div class="hd-level" :style="{ color: gradeColor(gradeDisk) }">
+                {{ gradeLabel(gradeDisk) }}
+                <span v-if="trendUp(gradeDisk)" style="font-size:12px;font-weight:600;color:var(--orange);margin-left:6px">
+                  相比上次 +{{ trendUp(gradeDisk) }}
+                </span>
+              </div>
+              <div class="hd-explain">{{ gradeExplain(gradeDisk) }}</div>
+            </div>
+          </div>
+
+          <div class="hd-sec">
+            <h4>为什么是这一档</h4>
+            <ul v-if="(gradeDisk.health_grade?.reasons || []).length" class="hd-reasons">
+              <li v-for="(r, i) in (gradeDisk.health_grade?.reasons || [])" :key="i">{{ r }}</li>
+            </ul>
+            <div v-else class="hd-none">没有发现任何异常信号——各项缺陷计数都为 0，温度也在安全范围内。</div>
+          </div>
+
+          <div class="hd-sec">
+            <h4>缺陷趋势</h4>
+            <div v-if="gradeDisk.health_trend && gradeDisk.health_trend.prev_ts" class="hd-trend">
+              较上次采样（{{ fmtAge(gradeDisk.health_trend.prev_ts) }}）：
+              <b v-if="trendParts(gradeDisk).length" class="up">{{ trendParts(gradeDisk).join('、') }}</b>
+              <b v-else class="flat">无新增缺陷</b>
+            </div>
+            <div v-else-if="counterRows(gradeDisk).length" class="hd-none">
+              首次快照已记录，现在还没有「上一次」可比。<b>下次采样（约 6 小时后）</b>起这里会显示「比上次多了多少」——数字只增不减，一旦开始涨就说明盘在变坏。
+            </div>
+            <div v-else class="hd-none">这块盘没有可跟踪的缺陷计数，暂时做不了趋势对比。</div>
+            <div v-if="counterRows(gradeDisk).length" class="hd-note">
+              后台每 6 小时记一次，保留 180 天；只跟<b>上一次</b>比，所以这里看到的是「最近 6 小时新长出来的缺陷」。
+            </div>
+          </div>
+
+          <div class="hd-sec">
+            <h4>各项缺陷 / 寿命计数<span class="hd-h4note">累计值 · 只增不减</span></h4>
+            <div v-if="counterRows(gradeDisk).length" class="hd-counters">
+              <div v-for="c in counterRows(gradeDisk)" :key="c.k" class="hd-counter" :title="c.tip">
+                <span class="ck">{{ c.name }}</span>
+                <span class="cv" :class="{ hot: c.hot }">{{ c.v }}{{ c.unit }}</span>
+              </div>
+            </div>
+            <div v-else class="hd-none">没有可显示的计数（休眠中或读不到 SMART）。</div>
+          </div>
+
+          <div class="hd-sec">
+            <h4>硬盘档案<span class="hd-h4note">认盘 / 报修用 · 不参与分级</span></h4>
+            <div class="hd-counters">
+              <div class="hd-counter" title="硬盘出厂唯一编号，报修、查保修要用它"><span class="ck">序列号</span><span class="cv" :title="gradeDisk.serial || '—'">{{ gradeDisk.serial || '—' }}</span></div>
+              <div class="hd-counter" title="这块盘接在哪：阵列卡通道 / 主板直连"><span class="ck">通道</span><span class="cv" :title="gradeDisk.channel || '—'">{{ gradeDisk.channel || '—' }}</span></div>
+              <div v-if="gradeDisk.slot" class="hd-counter" title="阵列卡上的物理槽位（对应机箱里的盘位）"><span class="ck">槽位</span><span class="cv" :title="gradeDisk.slot">{{ gradeDisk.slot }}</span></div>
+              <div class="hd-counter" title="机械盘每分钟转数；固态盘没有转动部件"><span class="ck">转速</span><span class="cv">{{ gradeDisk.rpm || ((gradeDisk.rota == '1' || gradeDisk.type === 'sas') ? '—' : '固态(SSD)') }}</span></div>
+              <div class="hd-counter" title="累计通电运行时间"><span class="ck">已用时长</span><span class="cv">{{ fmtHours(gradeDisk.power_on_hours) }}</span></div>
+              <div v-if="gradeDisk.data_units_read" class="hd-counter" title="开机以来累计读取总量（悬停看精确值）"><span class="ck">累计读取量</span><span class="cv" :title="gradeDisk.data_units_read">{{ dataUnitShort(gradeDisk.data_units_read) }}</span></div>
+              <div v-if="gradeDisk.data_units_written" class="hd-counter" title="开机以来累计写入总量（悬停看精确值）"><span class="ck">累计写入量</span><span class="cv" :title="gradeDisk.data_units_written">{{ dataUnitShort(gradeDisk.data_units_written) }}</span></div>
+              <div v-if="gradeDisk.critical_warning != null" class="hd-counter" title="NVMe 告警标志：0x00 表示一切正常"><span class="ck">临界告警</span><span class="cv" :class="{ hot: cwBad(gradeDisk) }">{{ cwBad(gradeDisk) ? ('0x' + gradeDisk.critical_warning + ' 告警') : '正常' }}</span></div>
+            </div>
+            <div v-if="gradeDisk.devs && gradeDisk.devs.length > 1" class="hd-note">
+              <b>双磁臂硬盘</b>：两个执行器共用一个盘体，系统里会看到 <b>{{ gradeDisk.dev_label }}</b> 两个逻辑盘。已合并成一张卡，各项数值取两臂中<b>更差的一侧</b>；自检、定位等操作默认作用在 <b>{{ gradeDisk.dev }}</b>。
+            </div>
+          </div>
+
+          <div class="hd-src">
+            判定依据来自：{{ gradeDisk.health_grade?.source || '硬盘自身 SMART' }}。全部是硬盘和阵列卡自己上报的数据，nasdash 只做汇总分级，不猜、不做推断。
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button class="btn" @click="gradeDev = null">关闭</button>
+        </div>
+      </div>
+    </div>
 
     <!-- ===== 自检方式选择（旧页 appPick） ===== -->
     <div v-if="pickOpen" class="modal-overlay show" @click.self="pickOpen = false">
@@ -822,6 +1246,32 @@ onUnmounted(() => {
         </div>
         <div class="modal-actions">
           <button class="btn" @click="histOpen = false">关闭</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 改名弹窗（v2.3.0 3.8） ===== -->
+    <div v-if="renameOpen && renameTarget" class="modal-overlay show" @click.self="renameOpen = false">
+      <div class="modal-box" style="max-width:420px">
+        <div class="modal-title">改名 · {{ renameTarget.dev_label || renameTarget.dev }}</div>
+        <div class="modal-body">
+          <div style="font-size:13px;color:var(--text-2);margin-bottom:10px">
+            给这块盘起个好认的名字（如「数据盘1」「仓库盘」），卡片、健康详情都会优先显示它；原代号保留作副标。留空点保存无效，<b>清除</b>恢复显示代号。重启不丢。
+          </div>
+          <input
+            v-model="renameValue"
+            class="rename-input"
+            type="text"
+            maxlength="40"
+            placeholder="如：数据盘1"
+            @keyup.enter="saveRename()"
+          />
+          <div v-if="renameErr" style="color:var(--danger);font-size:12px;margin-top:8px">{{ renameErr }}</div>
+        </div>
+        <div class="modal-actions">
+          <button class="btn" :disabled="renameBusy" @click="renameOpen = false">取消</button>
+          <button v-if="renameTarget.custom_name" class="btn" :disabled="renameBusy" @click="saveRename(true)">清除</button>
+          <button class="btn btn-primary" :disabled="renameBusy || !renameValue.trim()" @click="saveRename()">{{ renameBusy ? '保存中…' : '保存' }}</button>
         </div>
       </div>
     </div>

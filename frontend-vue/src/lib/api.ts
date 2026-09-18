@@ -3,9 +3,20 @@
  *
  * 铁律（2026-09-10 真机实测）：飞牛网关把第三方应用挂在
  * `/cgi/ThirdParty/<pkg>/index.cgi/` 之下，裸 `/api/*` 只在该根目录下有效；
- * 子路径（`/vue/`、`/legacy/`）会被网关 404。
+ * 子路径（如 `/vue/`）会被网关 404。
  * 统一从当前路径截出 `index.cgi` 前缀再拼，任意层级都通。
  */
+import { reactive } from 'vue'
+
+/**
+ * 数据新鲜度：记录各接口（按 path 归一，去掉 query）最后一次成功拿到响应的时间（ms）。
+ * 全局页眉据此显示「数据于 N 秒前更新」，超过阈值变黄提示可能滞后。
+ */
+export const freshness = reactive<{ lastAny: number; lastOk: Record<string, number> }>({
+  lastAny: 0,
+  lastOk: {},
+})
+
 export const API_BASE = (() => {
   const m = location.pathname.match(/^(.*\/index\.cgi)\/?/)
   return m ? m[1] : ''
@@ -25,10 +36,13 @@ export function apiFetch(path: string, ms = 30000, init: RequestInit = {}): Prom
     cache: 'no-store',
     ...(ctrl ? { signal: ctrl.signal } : {}),
   })
+  // 记录成功时间（网关把 404 转 200，这里按 r.ok 记；业务失败由调用方另判）
+  p.then(r => {
+    if (r.ok) {
+      const key = path.split('?')[0]
+      freshness.lastOk[key] = Date.now()
+      freshness.lastAny = Date.now()
+    }
+  }).catch(() => {})
   return to ? p.finally(() => window.clearTimeout(to)) : p
-}
-
-/** 旧版面板某个页签的「被嵌入」地址：新壳里用 iframe 内嵌尚未迁移的模块 */
-export function legacyUrl(tab: string): string {
-  return `${API_BASE}/legacy/?embed=1&tab=${encodeURIComponent(tab)}`
 }
