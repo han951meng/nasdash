@@ -738,7 +738,7 @@ function buildBody(D: any): string {
       <div class="kv"><span class="k" title="这块阵列卡在硬盘总线上的唯一编号">SAS 地址</span><span class="v">${r.sas_address || '-'}</span></div>
       <div class="kv"><span class="k" title="阵列卡插在主板上哪个插槽的物理位置">PCI 地址</span><span class="v">${r.pci || '-'}</span></div>
       <div class="kv"><span class="k" title="阵列卡主控芯片温度（ROC），更贴近过热风险点，风扇控温以它为准">芯片温度 (ROC)</span><span class="v" style="color:${tempColor(r.roc_temp, 85)}">${r.roc_temp != null ? r.roc_temp + '°C' : 'N/A'}</span></div>
-      <div class="kv"><span class="k" title="控制器/板载环境温度，与飞牛界面、storcli 摘要、多数对照工具默认读到的温度一致">控制器温度</span><span class="v" style="color:${tempColor(r.controller_temp, 85)}">${r.controller_temp != null ? r.controller_temp + '°C' : 'N/A'}</span></div>
+      ${r.controller_temp != null ? `<div class="kv"><span class="k" title="控制器/板载环境温度，与飞牛界面、storcli 摘要、多数对照工具默认读到的温度一致">控制器温度</span><span class="v" style="color:${tempColor(r.controller_temp, 85)}">${r.controller_temp}°C</span></div>` : ''}
       ${r.roc_temp != null && r.controller_temp != null ? `<div class="kv"><span class="k">两者差异</span><span class="v" style="color:var(--muted);font-size:12px">芯片比控制器高 ${r.roc_temp - r.controller_temp}°C（两个不同传感器，非故障）</span></div>` : ''}
     </div>
     <div class="card">
