@@ -366,8 +366,8 @@ def test_fan_read_sys_temp_mb_acpitz_insane_falls_back(monkeypatch):
 
 
 def test_sensors_all_mb_temp_prefers_acpitz(monkeypatch):
-    # 论坛反馈 bug 核心：面板「主板温度」条目应优先用 acpitz（ACPI 系统环境温度，稳定），
-    # 而非 SYSTIN（很多主板是错的）。SYSTIN 降级为「主板(SYSTIN)」保留展示，不丢信息。
+    # v2.3.1 契约：主板监控芯片的原始细分测点(SYSTIN/CPUTIN/AUXTIN...)统一收口过滤，
+    # 温度墙只出一条「主板温度」，值由 _parse_mb_temp 算（acpitz 优先，SYSTIN 兜底）。
     sens = json.dumps({
         "acpitz-acpi-0": {"temp1": {"temp1_input": 28.0}},
         "nct6797-isa-0a00": {
@@ -376,11 +376,13 @@ def test_sensors_all_mb_temp_prefers_acpitz(monkeypatch):
             "AUXTIN": {"temp3_input": 999.0},  # 异常值，应被忽略
         },
     })
-    temps, _ = app._parse_sensors_all(json.loads(sens))
+    j = json.loads(sens)
+    temps, _ = app._parse_sensors_all(j, app._parse_mb_temp(j))
     names = {t["name"]: t["value"] for t in temps}
     assert names.get("主板温度") == 28, "主板温度应=acpitz(28)，而非 SYSTIN(43)"
-    assert names.get("主板(SYSTIN)") == 43, "SYSTIN 应降级为「主板(SYSTIN)」"
-    assert "主板(ACPI)" not in names, "主板(ACPI)应已合并改名"
+    assert "主板(SYSTIN)" not in names, "SYSTIN 原始测点应已收口过滤"
+    assert "主板(ACPI)" not in names, "acpitz 原始测点应已收口过滤"
+    assert [n for n in names if "主板" in n] == ["主板温度"], "主板条目应恰好一条"
 
 
 def test_mb_temp_from_sensors_prefers_acpitz(monkeypatch):
