@@ -67,6 +67,10 @@ interface Disk {
   // 通道来源（阵列卡通道 / 主板直连），弹窗「硬盘档案」里显示
   channel?: string
   channel_type?: string
+  // v2.3.1：仅阵列卡可见的物理盘（无 /dev 节点）唯一身份证，前端按它渲染，避免 dev 空串撞 key
+  dev_id?: string
+  // v2.3.1：标记仅阵列卡可见（无 /dev 节点，无法跑自检）
+  raid_only?: boolean
   // v2.3.0 3.4：后端算好的健康分级 + 缺陷趋势
   health_grade?: HealthGrade
   health_trend?: HealthTrend | null
@@ -289,8 +293,12 @@ function fmtAge(ts: number): string {
 /** 盘名：双磁臂盘合并后显示 "sda/sdb"，普通盘就是 dev */
 function diskName(d: Disk): string {
   // v2.3.0 3.8：自定义名优先（「数据盘1」比 sda/E0:S3 好认），原代号在卡上作副标
+  // v2.3.1：仅阵列卡可见的物理盘没有 dev 节点，回退到「阵列卡 槽位」便于辨认
+  if (d.raid_only) return d.custom_name || d.dev_label || d.channel || ('阵列卡 ' + (d.slot || '')) || '阵列卡硬盘'
   return d.custom_name || d.dev_label || d.dev || ''
 }
+/** v2.3.1：渲染用的唯一身份证——raid_only 盘用 dev_id，普通盘用 dev */
+function diskKey(d: Disk): string { return d.dev_id || d.dev || '' }
 /** 容量：双磁臂盘标出「×2」（每臂一半，整盘见 size_total / 提示） */
 function sizeText(d: Disk): string {
   const n = d.devs?.length || 0
@@ -385,9 +393,9 @@ function compareCells(d: Disk): Array<{ k: string; label: string; value: string;
 /* ===== 健康详情弹窗（v2.3.0 3.4）：徽章点开看完整依据 + 缺陷趋势 + 各项计数 =====
    卡片里不再重复摆「健康分级」这一行；徽章本身就是入口，只在有新增缺陷时挂个小角标。 */
 const gradeDev = ref<string | null>(null)
-const gradeDisk = computed<Disk | null>(() => disks.value.find(x => x.dev === gradeDev.value) || null)
+const gradeDisk = computed<Disk | null>(() => disks.value.find(x => diskKey(x) === gradeDev.value) || null)
 function openGrade(d: Disk) {
-  gradeDev.value = d.dev
+  gradeDev.value = diskKey(d)
 }
 
 /* ===== 改名弹窗（v2.3.0 3.8）：给盘起个好认的名字，存后端配置、重启不丢 ===== */
@@ -562,10 +570,10 @@ function maybeFocusDisk(): void {
     sessionStorage.removeItem('nasdash_focus_disk')
   } catch { return }
   if (!dev) return
-  const target = disks.value.find(d => d.dev === dev || (d.devs || []).includes(dev))
+  const target = disks.value.find(d => diskKey(d) === dev || (d.devs || []).includes(dev))
   if (!target) return
   requestAnimationFrame(() => {
-    const el = document.querySelector(`.disk-card[data-dev="${target.dev}"]`)
+    const el = document.querySelector(`.disk-card[data-dev="${diskKey(target)}"]`)
     if (!el) return
     el.scrollIntoView({ behavior: 'smooth', block: 'center' })
     el.classList.add('focus-flash')
@@ -757,7 +765,7 @@ async function raidLocate(slot: string): Promise<void> {
 
 /* ================= 弹窗交互 ================= */
 function openPick(d: Disk): void {
-  pickDev.value = d.dev
+  pickDev.value = diskKey(d)
   pickModel.value = d.model || '未知型号'
   pickStandalone.value = !!d.standalone
   pickOpen.value = true
@@ -950,7 +958,7 @@ onUnmounted(() => {
 
       <!-- 每块盘一张卡 -->
       <div class="cards">
-        <div v-for="d in disks" :key="d.dev" class="card disk-card" :data-dev="d.dev" :class="d.asleep ? '' : (gradeLevel(d) === 'red' ? 'bad' : '')">
+        <div v-for="d in disks" :key="diskKey(d)" class="card disk-card" :data-dev="diskKey(d)" :class="d.asleep ? '' : (gradeLevel(d) === 'red' ? 'bad' : '')">
           <div class="disk-head">
             <div style="display:flex;align-items:center;gap:8px;min-width:0">
               <span class="name" :title="d.custom_name ? ('原代号：' + (d.dev_label || d.dev) + '（悬停可随时查看，终端找盘用）') : '盘符/槽位代号，点「改名」可起个好认的名字'">{{ diskName(d) }}</span>
@@ -1062,13 +1070,17 @@ onUnmounted(() => {
             </div>
           </div>
 
-          <div v-else class="disk-test-section">
+          <div v-else-if="!d.raid_only" class="disk-test-section">
             <div class="disk-test-title"><AppIcon name="pulse" />硬盘自检</div>
             <div class="disk-test-btns">
               <button class="btn-mini" @click="openPick(d)">硬盘自检</button>
               <button class="btn-mini" @click="showDiskTestHistory(d.dev)">自检记录</button>
             </div>
             <div class="disk-test-msg" :class="{ error: stateErr[d.dev] }">{{ stateMsg[d.dev] }}</div>
+          </div>
+          <div v-else class="disk-test-section">
+            <div class="disk-test-title"><AppIcon name="pulse" />硬盘自检</div>
+            <div class="disk-test-msg">物理盘由阵列卡接管，nasdash 无法在其上跑自检（无 /dev 节点）</div>
           </div>
         </div>
       </div>

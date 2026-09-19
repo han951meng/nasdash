@@ -71,17 +71,34 @@ def test_resolve_brand_model_empty_table_uses_inquiry():
     assert app._resolve_brand_model("-", "KINGSTON SV300S37A/120G") == "KINGSTON SV300S37A/120G"
 
 
-# ---------------- 阵列卡芯片温度解析（多格式兼容） ----------------
+# ---------------- 阵列卡温度解析（ROC 与 Controller 是两个独立传感器，v2.3.1 起分开解析） ----------------
 def test_parse_roc_temp_formats():
+    # _parse_roc_temp 只解析 ROC 芯片温度，绝不误吞 Controller Temperature
     assert app._parse_roc_temp("ROC temperature = 56") == 56
-    assert app._parse_roc_temp("Controller Temperature = 56") == 56
     assert app._parse_roc_temp("ROC temperature(Degree Celsius) 65") == 65
+    assert app._parse_roc_temp("Controller Temperature = 49") is None
+    # 两个温度都在时仍只取 ROC
+    assert app._parse_roc_temp("Controller Temperature = 49\nROC temperature = 56") == 56
+
+
+def test_parse_ctrl_temp_formats():
+    # _parse_ctrl_temp 只解析控制器/板载环境温度（飞牛界面、storcli 摘要默认读这个）
+    assert app._parse_ctrl_temp("Controller Temperature = 49") == 49
+    assert app._parse_ctrl_temp("Controller Temperature = 49\nROC temperature = 56") == 49
+    # ROC 不应被误吞
+    assert app._parse_ctrl_temp("ROC temperature = 56") is None
 
 
 def test_parse_roc_temp_invalid():
     assert app._parse_roc_temp("") is None
     assert app._parse_roc_temp("no temperature here") is None
     assert app._parse_roc_temp("Temp = abc") is None
+
+
+def test_parse_ctrl_temp_invalid():
+    assert app._parse_ctrl_temp("") is None
+    assert app._parse_ctrl_temp("no temperature here") is None
+    assert app._parse_ctrl_temp("Temp = abc") is None
 
 
 # ---------------- NVMe SMART 解析（通电时长逗号修复） ----------------

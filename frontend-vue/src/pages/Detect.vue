@@ -737,7 +737,9 @@ function buildBody(D: any): string {
       <div class="kv"><span class="k">序列号</span><span class="v">${r.serial || '-'}</span></div>
       <div class="kv"><span class="k" title="这块阵列卡在硬盘总线上的唯一编号">SAS 地址</span><span class="v">${r.sas_address || '-'}</span></div>
       <div class="kv"><span class="k" title="阵列卡插在主板上哪个插槽的物理位置">PCI 地址</span><span class="v">${r.pci || '-'}</span></div>
-      <div class="kv"><span class="k">芯片温度</span><span class="v" style="color:${tempColor(r.controller_temp, 85)}">${r.controller_temp != null ? r.controller_temp + '°C' : 'N/A'}</span></div>
+      <div class="kv"><span class="k" title="阵列卡主控芯片温度（ROC），更贴近过热风险点，风扇控温以它为准">芯片温度 (ROC)</span><span class="v" style="color:${tempColor(r.roc_temp, 85)}">${r.roc_temp != null ? r.roc_temp + '°C' : 'N/A'}</span></div>
+      <div class="kv"><span class="k" title="控制器/板载环境温度，与飞牛界面、storcli 摘要、多数对照工具默认读到的温度一致">控制器温度</span><span class="v" style="color:${tempColor(r.controller_temp, 85)}">${r.controller_temp != null ? r.controller_temp + '°C' : 'N/A'}</span></div>
+      ${r.roc_temp != null && r.controller_temp != null ? `<div class="kv"><span class="k">两者差异</span><span class="v" style="color:var(--muted);font-size:12px">芯片比控制器高 ${r.roc_temp - r.controller_temp}°C（两个不同传感器，非故障）</span></div>` : ''}
     </div>
     <div class="card">
       <h3>固件版本</h3>
@@ -878,9 +880,10 @@ function buildBody(D: any): string {
     const featBadge = feat ? ` <span class="badge b-info">${esc(feat)}</span>` : ''
     const ch = d.channel || ''
     const chBadge = ch ? ` <span class="ch-tag" title="${esc(chTip(ch))}">${esc(ch)}</span>` : ''
+    const label = d.dev || (d.raid_only ? (d.channel || ('阵列卡 ' + (d.slot || ''))) : '') || '—'
     const locateBtn = d.locate_supported && d.slot ? ` <button class="btn-mini" data-locate-slot="${esc(d.slot)}" onclick="raidLocate('${esc(d.slot)}')" title="让对应硬盘指示灯闪烁，便于在机箱里找到它">定位闪灯</button>` : ''
     return `<div class="disk-mini">
-      <span>${typeBadge}${daBadge} ${d.dev} · ${d.brand ? d.brand + ' ' : ''}${d.vendor ? d.vendor + ' ' : ''}${d.model}${chBadge}${featBadge}</span>
+      <span>${typeBadge}${daBadge} ${esc(label)} · ${d.brand ? d.brand + ' ' : ''}${d.vendor ? d.vendor + ' ' : ''}${d.model}${chBadge}${featBadge}</span>
       <span><span style="color:${tempColor(d.temp, d.temp_trip || 60)};font-weight:600">${d.temp != null ? d.temp + '°C' : 'N/A'}</span> · <span class="badge ${d.asleep ? 'b-muted' : d.health_ok ? 'b-ok' : 'b-bad'}">${d.asleep ? '休眠' : esc(d.health)}</span>${locateBtn}</span>
     </div>`
   }
