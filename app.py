@@ -984,7 +984,7 @@ def _parse_sensors_all(j):
         temps[_acpi_i]["name"] = "主板温度"
     return temps, voltages
 
-_TEMP_SNAP = {"t": 0.0, "cpu_temp": None, "mb_temp": None, "temps": [], "voltages": [], "disks": {}, "raid_temp": None}
+_TEMP_SNAP = {"t": 0.0, "cpu_temp": None, "mb_temp": None, "temps": [], "voltages": [], "disks": {}, "raid_temp": None, "raid_controller_temp": None}
 _TEMP_SNAP_LOCK = _threading.Lock()
 
 # CPU 温度 EMA 平滑状态：核心温度热容量小，瞬时负载下 1~2 秒可跳 10°C+（如 39→47），
@@ -1029,10 +1029,14 @@ def _temp_collect_loop():
             devs = _list_all_disk_devs()
             states = get_disk_temps_cached(devs) if devs else {}
             raid_temp = None
+            raid_controller_temp = None
             try:
                 _raid = get_raid_card()
                 if isinstance(_raid, dict):
-                    raid_temp = _raid.get("controller_temp")
+                    # 风扇控温 / 温度墙以 ROC 芯片温度(更热、更贴近过热风险)为基准；
+                    # 控制器温度单独透传，供前端与对照工具(飞牛/storcli)对得上。
+                    raid_temp = _raid.get("roc_temp")
+                    raid_controller_temp = _raid.get("controller_temp")
             except Exception:
                 pass
             with _TEMP_SNAP_LOCK:
@@ -1043,6 +1047,7 @@ def _temp_collect_loop():
                 _TEMP_SNAP["voltages"] = voltages
                 _TEMP_SNAP["disks"] = states
                 _TEMP_SNAP["raid_temp"] = raid_temp
+                _TEMP_SNAP["raid_controller_temp"] = raid_controller_temp
         except Exception:
             pass
         time.sleep(2)
@@ -2379,18 +2384,32 @@ def _smart_rpm_by_serial():
     return rpm_map
 
 def _parse_roc_temp(text):
-    """从 storcli 输出中解析阵列卡芯片温度(ROC Temperature)，兼容多种格式。
+    """从 storcli 输出中解析阵列卡主控芯片温度(ROC Temperature)，兼容多种格式。
 
     已验证兼容：
-      - MegaRAID /c0 show :  "ROC temperature = 56"  / "Controller Temperature = 56"
+      - MegaRAID /c0 show :  "ROC temperature = 56"
       - HBA /c0 show temperature : "ROC temperature(Degree Celsius) 65" (无等号)
+    注意：ROC 温度与 Controller Temperature 是两个不同的物理传感器，值通常相差几度
+    （ROC 偏高）。本函数只匹配 ROC，控制器温度请用 _parse_ctrl_temp。
     """
     if not text:
         return None
-    m = re.search(r"(?:Controller\s+Temperature|ROC\s+temperature\s*(?:\([^)]*\))?)\s*=?\s*(\d+)", text, re.I)
+    m = re.search(r"ROC\s+temperature\s*(?:\([^)]*\))?\s*=?\s*(\d+)", text, re.I)
     if m:
         return int(m.group(1))
     m = re.search(r"ROC\s+temperature.*?(\d+)", text, re.I)  # 兜底：极宽松匹配 ROC 后第一个数字
+    return int(m.group(1)) if m else None
+
+
+def _parse_ctrl_temp(text):
+    """从 storcli 输出中解析阵列卡控制器/板载环境温度(Controller Temperature)。
+
+    这是飞牛界面、storcli 摘要、多数对照工具默认展示的温度；与 ROC temperature 是
+    两个不同的物理传感器，值通常相差几度（Controller 偏低）。v2.3.1 起与 ROC 分开解析、分开展示。
+    """
+    if not text:
+        return None
+    m = re.search(r"Controller\s+Temperature\s*=?\s*(\d+)", text, re.I)
     return int(m.group(1)) if m else None
 
 
@@ -2656,7 +2675,7 @@ def _parse_pd_show_all(out):
     return res
 
 
-@_ttl_cache(60)
+@_ttl_cache(15)
 def get_raid_card():
     data = {"ok": False, "mode": "none", "model": "未检测到",
             "drives": [], "raw": "", "note": "", "controllers": []}
@@ -2682,14 +2701,18 @@ def get_raid_card():
         cv_text, cv_status = _parse_cachevault(out)
         data["cachevault"] = cv_text
         data["cachevault_status"] = cv_status
-        # 阵列卡芯片温度 (ROC Temperature)，兼容多种 storcli 输出格式
-        temp = _parse_roc_temp(out)
-        if temp is None:
-            temp = _parse_roc_temp(sudo_cmd([STORCLI, "/c0", "show", "all"], 15))
-        if temp is None:
-            # LSI-9300 等 HBA 卡 /c0 show 不含温度，必须单独跑 /c0 show temperature
-            temp = _parse_roc_temp(sudo_cmd([STORCLI, "/c0", "show", "temperature"], 10))
-        data["controller_temp"] = temp
+        # 阵列卡温度：分两个独立传感器分别解析（v2.3.1）
+        #  - ROC temperature        ：主控芯片温度（更高、更贴近过热风险，风扇控温以它为准）
+        #  - Controller Temperature ：控制器/板载环境温度（飞牛界面、storcli 摘要、多数对照工具默认读这个）
+        # 两者是不同的物理传感器，值通常相差几度（Controller 偏低）；之前只取了 ROC 导致与对照工具对不上。
+        roc = _parse_roc_temp(out)
+        if roc is None:
+            roc = _parse_roc_temp(sudo_cmd([STORCLI, "/c0", "show", "temperature"], 10))
+        ctl = _parse_ctrl_temp(out)
+        if ctl is None:
+            ctl = _parse_ctrl_temp(sudo_cmd([STORCLI, "/c0", "show", "temperature"], 10))
+        data["controller_temp"] = ctl
+        data["roc_temp"] = roc
         # 物理盘列表。**一条 `/c0/eall/sall show all` 拿全部盘**（v2.3.0）：
         #  ① 型号/序列号/温度走键值对，天然不受 PD LIST 的列偏移影响（用户报的 7 块盘
         #     型号显示成 U/D 就是因为老代码写死 `parts[12]`，而 Size 恒占 2 token、
@@ -2829,12 +2852,14 @@ def get_raid_card():
         data["ok"] = True
         data["mode"] = "hba"
         data["model"] = hba[0]["model"]
-        # HBA 直通卡芯片温度：/c0 show 不含温度，需单独跑 /c0 show temperature
+        # HBA 直通卡只有 ROC 芯片温度（无 Controller Temperature 概念），两字段同值
         try:
-            data["controller_temp"] = _parse_roc_temp(sudo_cmd([STORCLI, "/c0", "show", "temperature"], 10)) \
+            _hba_t = _parse_roc_temp(sudo_cmd([STORCLI, "/c0", "show", "temperature"], 10)) \
                 or _parse_roc_temp(sudo_cmd([STORCLI, "/c0", "show"], 30))
         except Exception:
-            data["controller_temp"] = None
+            _hba_t = None
+        data["controller_temp"] = _hba_t
+        data["roc_temp"] = _hba_t
         data["note"] = ("HBA 直通卡（IT 模式）：磁盘由系统内核直接管理，不经阵列卡固件。"
                         "HBA 芯片本身无独立温度传感器，本页不显示阵列卡温度（属正常现象，并非面板异常）。"
                         "每张物理盘的温度与 SMART 信息请见「硬盘 SMART」标签页。")
@@ -7838,6 +7863,7 @@ def _enrich_disk_channels(disks, raid):
             _intf = (dv.get("intf") or "").upper()
             disks.append({
                 "dev": "",                       # 无块设备节点（阵列卡持有）
+                "dev_id": "raid:" + str(dv.get("slot", "")),  # v2.3.1：前端用唯一身份证渲染（避免 dev 空串撞 key 导致多块盘只渲染一张）
                 "size": dv.get("size") or "",
                 "rota": "1",                     # 阵列卡下多为机械盘；前端主要看 size/model
                 "model": dv.get("model") or "",
@@ -7933,7 +7959,7 @@ def api_all():
             # 把阵列卡芯片温度并入 system，供「温度监控」tab 直接读取（随 /api/all /api/system 刷新）
             _raid = result.get("raid")
             if isinstance(_raid, dict):
-                result["system"]["raid_temp"] = _raid.get("controller_temp")
+                result["system"]["raid_temp"] = _raid.get("roc_temp")
             # 把显卡「实时显存占用」并入 system.gpus，供系统资源页顶部「显存占用」指标格显示。
             # 静态 gpus 只有型号与显存容量，实时占用来自 _get_gpu_live()（独显驱动直读，核显走 i915 GEM）。
             # 按 pci 优先、型号次之匹配；匹配不上就不带 mem_* 字段，前端显示「—」。
@@ -8003,7 +8029,7 @@ def api_system():
         try:
             _raid = get_raid_card()
             if isinstance(_raid, dict):
-                system["raid_temp"] = _raid.get("controller_temp")
+                system["raid_temp"] = _raid.get("roc_temp")
         except Exception:
             system["raid_temp"] = None
         # fnos_version 顶层暴露：旧版「关于」页的 fnOS 版本取自 /api/all 的 DATA，
@@ -9195,6 +9221,7 @@ def api_fan_temps():
         # 温度墙测点全量 + 阵列卡芯片温度：前端温度页 5s 实时刷新用（不再等 30s 快照）
         "sensors": _snap.get("temps") or [],
         "raid_temp": _snap.get("raid_temp"),
+        "raid_controller_temp": _snap.get("raid_controller_temp"),
         # 显卡温度：复用 GPU 实时采样缓存（2s 刷新），仅取温度相关字段，供温度墙展示。
         # iGPU（Intel 核显）temp 取 CPU 封装温度（同 die）；dGPU 走各自驱动。
         # 附带显存占用（供系统资源页顶部 hero「显存占用」指标格）：
@@ -10598,6 +10625,7 @@ def _render_report_html(rep):
             ["BIOS 版本", fmtna(raid.get("bios_version"), "阵列卡未返回")],
             ["驱动", fmtna(raid.get("driver"), "阵列卡未返回")],
             ["掉电保护（CacheVault）", _cv_txt],
+            ["芯片温度 (ROC)", fmtna(raid.get("roc_temp"), "阵列卡未返回", " ℃")],
             ["控制器温度", fmtna(raid.get("controller_temp"), "阵列卡未返回", " ℃")],
             ["序列号", fmtna(raid.get("serial"), "阵列卡未返回")],
             ["SAS 地址", fmtna(raid.get("sas_address"), "阵列卡未返回")],

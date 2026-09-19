@@ -46,6 +46,7 @@ interface TempsResp {
   disks?: DiskItem[]
   sensors?: SensorItem[]
   raid_temp?: number | null
+  raid_controller_temp?: number | null
   gpus?: GpuItem[]
 }
 interface WallEntry {
@@ -80,10 +81,11 @@ const wallEntries = computed<WallEntry[]>(() => {
   const sens = (d.sensors || [])
     .filter(t => typeof t.value === 'number' && t.value > 0 && t.value < 150 && !EXCLUDE_TEMPS.has(t.name))
     .map(t => ({ name: t.name, raw: t.raw, value: t.value as number, max: t.max, crit: t.crit }))
-  const raidEntry: WallEntry[] =
-    typeof d.raid_temp === 'number'
-      ? [{ name: '阵列卡芯片温度', raw: 'Controller Temperature (ROC)', value: d.raid_temp, max: 80, crit: 90 }]
-      : []
+  const raidEntry: WallEntry[] = []
+  if (typeof d.raid_temp === 'number')
+    raidEntry.push({ name: '阵列卡芯片温度 (ROC)', raw: 'ROC temperature', value: d.raid_temp, max: 80, crit: 90 })
+  if (typeof d.raid_controller_temp === 'number')
+    raidEntry.push({ name: '阵列卡控制器温度', raw: 'Controller Temperature', value: d.raid_controller_temp, max: 80, crit: 90 })
   const gpusSrc = d.gpus || []
   const gpuEntries = gpusSrc
     .map(g => {
@@ -128,7 +130,8 @@ const statusOk = computed(() => !summary.value.crit && !summary.value.warn)
 
 const heroStats = computed<HeroStat[]>(() => [
   { v: data.value?.cpu_temp != null ? String(data.value.cpu_temp) : '—', unit: '°C', k: 'CPU 温度' },
-  { v: data.value?.raid_temp != null ? String(data.value.raid_temp) : '—', unit: '°C', k: '阵列卡温度' },
+  { v: data.value?.raid_temp != null ? String(data.value.raid_temp) : '—', unit: '°C', k: '阵列卡(芯片)' },
+  { v: data.value?.raid_controller_temp != null ? String(data.value.raid_controller_temp) : '—', unit: '°C', k: '阵列卡(控制器)' },
   { v: summary.value.max != null ? String(summary.value.max) : '—', unit: '°C', k: '最高温度' },
   { v: summary.value.avg != null ? String(summary.value.avg) : '—', unit: '°C', k: '平均温度' },
 ])
