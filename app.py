@@ -914,7 +914,7 @@ def _parse_mb_temp(j):
     # 5) 实在没有合理值，返回全部里的最高（保持旧行为兜底）
     return max(t[2] for t in temps)
 
-def _parse_sensors_all(j):
+def _parse_sensors_all(j, mb_temp=None):
     """统一传感器全量解析（温度墙测点 + 电压）：与旧 get_system 内联解析同口径，
     抽成纯函数供采集循环与 get_system 共用，保证两处数据完全一致。"""
     temps, voltages = [], []
@@ -930,6 +930,15 @@ def _parse_sensors_all(j):
                 if fn.startswith("temp"):
                     if str(ename).strip().upper().startswith("AUXTIN"):
                         continue
+                    # 主板监控芯片(ITE/Nuvoton/Winbond/SMSC/Fintek/VIA/ADI/LM9x 等 hwmon 驱动)的原始细分测点
+                    # (temp1/temp2/SYSTIN/CPUTIN...)对普通用户是噪音，统一交给 _parse_mb_temp 收口成单条「主板温度」，
+                    # 不在温度墙逐个展示（之前中文化导致出现多个「主板(CPU附近)/主板(系统)/主板」重复条目，太乱）。
+                    # GPU 驱动芯片(i915/amdgpu/radeon/nouveau)同样过滤：温度页已从 gpus 实时数据渲染
+                    # 「核显/独显」条目（核显=CPU 封装同 die 口径），hwmon 这条是重复且口径不一致的噪音。
+                    if cs.startswith(("it", "nct", "w83", "sch", "f718", "via", "adt", "lm9")) or cs == "acpitz":
+                        continue
+                    if cs.startswith(("i915", "amdgpu", "radeon", "nouveau")):
+                        continue
                     if fv < -50 or fv > 150:
                         continue
                     mx = fields.get(prefix + "_max")
@@ -941,16 +950,16 @@ def _parse_sensors_all(j):
                     if cr is not None and (cr < 0 or cr > 150):
                         cr = None
                     nm = _temp_name_zh(ename, cs) if cs == "coretemp" else (
-                        "主板(ACPI)" if cs == "acpitz" else
-                        "PCH 芯片组" if cs.startswith("pch") else
-                        "主板(CPU附近)" if cs.startswith("it") and "temp1" in str(ename) else
-                        "主板(系统)" if cs.startswith("it") and "temp2" in str(ename) else
-                        "主板" if cs.startswith("it") else _temp_name_zh(ename, cs))
+                        "PCH 芯片组" if cs.startswith("pch") else _temp_name_zh(ename, cs))
                     if cs == "coretemp" and "package" in str(ename).lower():
                         # 系统温度合集归口：CPU 封装温度的权威来源只有 _parse_cpu_temp（核心 max、排除
                         # temp1_input 虚拟偏高值）。温度墙此条目直接引用该值，不再自己取 Package 字段，
                         # 否则会与 hero/三页 CPU 温度出现第二套语义差（曾差 2°C）。
                         fv = _parse_cpu_temp(j)
+                        # 某些机器 coretemp 只暴露 Package 没有逐核测点，_parse_cpu_temp 会返回 None，
+                        # 不拦住下面 int(float(fv)) 直接崩（/api/system 整页 500）。
+                        if not isinstance(fv, (int, float)):
+                            continue
                         if mx is None:
                             for _k, _v in fields.items():
                                 if _k.startswith("temp") and _k.endswith("_max") and _k != "temp1_max" and isinstance(_v, (int, float)):
@@ -974,14 +983,10 @@ def _parse_sensors_all(j):
                         nm = "CMOS 电池"
                     voltages.append({"name": nm, "value": round(v, 2)})
                     break
-    # 论坛反馈：很多主板 SYSTIN 是错的（虚高/无效），主板温度应优先用 ACPI(acpitz)
-    # 提供的稳定「系统环境温度」。若存在 acpitz，把「主板温度」主名让给它，SYSTIN 降级为「主板(SYSTIN)」。
-    _acpi_i = next((i for i, _t in enumerate(temps) if _t.get("name") == "主板(ACPI)"), None)
-    _systin_i = next((i for i, _t in enumerate(temps) if _t.get("name") == "主板温度"), None)
-    if _acpi_i is not None:
-        if _systin_i is not None:
-            temps[_systin_i]["name"] = "主板(SYSTIN)"
-        temps[_acpi_i]["name"] = "主板温度"
+    # 主板综合温度：由 _parse_mb_temp 算法统一收口成单条「主板温度」（ACPI 优先，SYSTIN 兜底），
+    # 取代 hwmon 芯片一堆细分测点(temp1/temp2/SYSTIN/CPUTIN...)，避免温度墙噪音。
+    if mb_temp is not None and not any(_t.get("name") == "主板温度" for _t in temps):
+        temps.append({"name": "主板温度", "raw": "mb", "value": int(float(mb_temp) + 0.5), "max": None, "crit": None})
     return temps, voltages
 
 _TEMP_SNAP = {"t": 0.0, "cpu_temp": None, "mb_temp": None, "temps": [], "voltages": [], "disks": {}, "raid_temp": None, "raid_controller_temp": None}
@@ -1015,8 +1020,8 @@ def _temp_collect_loop():
         try:
             sens_j = run_cmd([SENSORS, "-j"], 8)
             j = json.loads(sens_j) if sens_j else {}
-            temps, voltages = _parse_sensors_all(j)
             mb = _parse_mb_temp(j)
+            temps, voltages = _parse_sensors_all(j, mb)
             # CPU 封装温度：EMA 平滑（防核心瞬时尖峰秒跳）。快照 cpu_temp 与温度墙
             # "CPU 封装温度"条目写同一个平滑值，两处保持一致；风扇温控同源转速更稳。
             raw_cpu = _parse_cpu_temp(j)
@@ -4608,7 +4613,7 @@ def _collect_system_full():
     if sens_j:
         try:
             j = json.loads(sens_j)
-            _t, _v = _parse_sensors_all(j)
+            _t, _v = _parse_sensors_all(j, _parse_mb_temp(j))
             d["sensors"]["temps"] = _t
             d["sensors"]["voltages"] = _v
             if cpu_temp is None:

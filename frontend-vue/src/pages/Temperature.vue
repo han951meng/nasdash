@@ -128,13 +128,19 @@ const statusText = computed(() => {
 })
 const statusOk = computed(() => !summary.value.crit && !summary.value.warn)
 
-const heroStats = computed<HeroStat[]>(() => [
-  { v: data.value?.cpu_temp != null ? String(data.value.cpu_temp) : '—', unit: '°C', k: 'CPU 温度' },
-  { v: data.value?.raid_temp != null ? String(data.value.raid_temp) : '—', unit: '°C', k: '阵列卡(芯片)' },
-  { v: data.value?.raid_controller_temp != null ? String(data.value.raid_controller_temp) : '—', unit: '°C', k: '阵列卡(控制器)' },
-  { v: summary.value.max != null ? String(summary.value.max) : '—', unit: '°C', k: '最高温度' },
-  { v: summary.value.avg != null ? String(summary.value.avg) : '—', unit: '°C', k: '平均温度' },
-])
+const heroStats = computed<HeroStat[]>(() => {
+  const arr: HeroStat[] = [
+    { v: data.value?.cpu_temp != null ? String(data.value.cpu_temp) : '—', unit: '°C', k: 'CPU 温度' },
+    { v: data.value?.raid_temp != null ? String(data.value.raid_temp) : '—', unit: '°C', k: '阵列卡(芯片)' },
+    { v: summary.value.max != null ? String(summary.value.max) : '—', unit: '°C', k: '最高温度' },
+    { v: summary.value.avg != null ? String(summary.value.avg) : '—', unit: '°C', k: '平均温度' },
+  ]
+  // 控制器温度：阵列卡不支持该传感器（如 LSI 9271 单温度卡）时为 None，整块隐藏，不占位
+  if (data.value?.raid_controller_temp != null) {
+    arr.splice(2, 0, { v: String(data.value.raid_controller_temp), unit: '°C', k: '阵列卡(控制器)' })
+  }
+  return arr
+})
 
 // ===== 当前温度概览（CPU/主板 + 硬盘分 NVMe/SSD/HDD）=====
 interface OvChip {
