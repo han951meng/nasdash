@@ -40,10 +40,20 @@ interface DiskItem {
   is_nvme?: boolean
   nvme_start_temp?: number
 }
+/** 阵列卡物理盘（RAID5 等虚拟盘场景下物理盘不暴露 /dev，温度只能从阵列卡 storcli 拿） */
+interface RaidDriveItem {
+  slot?: string | number
+  model?: string
+  serial?: string
+  temp?: number | null
+  intf?: string
+  size?: string
+}
 interface TempsResp {
   cpu_temp?: number | null
   mb_temp?: number | null
   disks?: DiskItem[]
+  raid_drives?: RaidDriveItem[]
   sensors?: SensorItem[]
   raid_temp?: number | null
   raid_controller_temp?: number | null
@@ -220,6 +230,26 @@ const overviewCats = computed<OvCat[]>(() => {
       })
     out.push({ label: c.label, chips })
   })
+  // 阵列卡物理盘：RAID5 等虚拟盘场景下物理盘不暴露 /dev、上面的 OS 盘列表看不到，
+  // 温度由阵列卡(storcli)上报，单独成组展示（后端已按序列号与 OS 盘去重，不会重复）。
+  const rd = d.raid_drives || []
+  if (rd.length) {
+    const chips: OvChip[] = rd.map(x => {
+      const v = x.temp ?? null
+      let nm = (x.model || '').trim()
+      if (x.slot != null && x.slot !== '') nm = (nm ? nm + ' ' : '') + '槽位' + x.slot
+      return {
+        name: nm || '阵列卡硬盘',
+        val: v,
+        color: tempColor(v, 60),
+        tag: (x.intf || '').toUpperCase(),
+        tagClass: (x.intf || '').toUpperCase().includes('SAS') ? 'on' : 'off',
+        dim: false,
+        title: '这块硬盘挂在阵列卡下（RAID 虚拟盘成员，系统里看不到独立盘符），温度由阵列卡上报。',
+      }
+    })
+    out.push({ label: '阵列卡硬盘', chips })
+  }
   return out
 })
 
