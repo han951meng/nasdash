@@ -2520,6 +2520,11 @@ def _parse_vds_from_topology(out):
             continue
         dgvd, vtype, state, access = parts[0], parts[1], parts[2], parts[3]
         consist, cache_code = parts[4], parts[5]
+        # JBOD 盘不是逻辑盘（部分固件把它列进 TOPOLOGY）：过滤掉，避免纯直通机器
+        # 被误判"有逻辑盘"而显示「阵列卡增强」——该区块的功能（一致性检查/热备/
+        # CopyBack/缓存策略）对 JBOD 盘无意义
+        if vtype.upper() == "JBOD":
+            continue
         # 尾部按固件差异列数不同（Cac/sCC 列可有可无），Size/Name 用"第一个数字+可选单位"定位
         rest = parts[6:]
         size, name = '', ''
