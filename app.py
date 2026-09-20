@@ -989,7 +989,7 @@ def _parse_sensors_all(j, mb_temp=None):
         temps.append({"name": "主板温度", "raw": "mb", "value": int(float(mb_temp) + 0.5), "max": None, "crit": None})
     return temps, voltages
 
-_TEMP_SNAP = {"t": 0.0, "cpu_temp": None, "mb_temp": None, "temps": [], "voltages": [], "disks": {}, "raid_temp": None, "raid_controller_temp": None}
+_TEMP_SNAP = {"t": 0.0, "cpu_temp": None, "mb_temp": None, "temps": [], "voltages": [], "disks": {}, "raid_drives": [], "raid_temp": None, "raid_controller_temp": None}
 _TEMP_SNAP_LOCK = _threading.Lock()
 
 # CPU 温度 EMA 平滑状态：核心温度热容量小，瞬时负载下 1~2 秒可跳 10°C+（如 39→47），
@@ -1035,6 +1035,7 @@ def _temp_collect_loop():
             states = get_disk_temps_cached(devs) if devs else {}
             raid_temp = None
             raid_controller_temp = None
+            raid_drives = []
             try:
                 _raid = get_raid_card()
                 if isinstance(_raid, dict):
@@ -1042,6 +1043,24 @@ def _temp_collect_loop():
                     # 控制器温度单独透传，供前端与对照工具(飞牛/storcli)对得上。
                     raid_temp = _raid.get("roc_temp")
                     raid_controller_temp = _raid.get("controller_temp")
+                    # 阵列卡物理盘（带温度）并入快照，供温度页显示 SAS 物理盘温度。
+                    # RAID5 等虚拟盘场景下，物理盘不暴露 /dev 节点、OS 盘列表看不到，
+                    # 只能经 storcli 拿到 Drive Temperature；按序列号去重，OS 已可见的盘不重复列出。
+                    _os_sn = {(st.get("serial") or "").strip().upper() for st in states.values() if isinstance(st, dict)}
+                    for dv in (_raid.get("drives") or []):
+                        _sn = (dv.get("sn") or "").strip().upper()
+                        if _sn and _sn in _os_sn:
+                            continue
+                        if dv.get("temp") is None:
+                            continue
+                        raid_drives.append({
+                            "slot": dv.get("slot"),
+                            "model": dv.get("model") or "",
+                            "serial": dv.get("sn") or "",
+                            "temp": dv.get("temp"),
+                            "intf": (dv.get("intf") or "").upper(),
+                            "size": dv.get("size") or "",
+                        })
             except Exception:
                 pass
             with _TEMP_SNAP_LOCK:
@@ -1051,6 +1070,7 @@ def _temp_collect_loop():
                 _TEMP_SNAP["temps"] = temps
                 _TEMP_SNAP["voltages"] = voltages
                 _TEMP_SNAP["disks"] = states
+                _TEMP_SNAP["raid_drives"] = raid_drives
                 _TEMP_SNAP["raid_temp"] = raid_temp
                 _TEMP_SNAP["raid_controller_temp"] = raid_controller_temp
         except Exception:
@@ -1544,7 +1564,8 @@ def _fan_sys_temp_pwm(T, cfg):
     if T is None:
         return None
     if T < start:
-        return 0
+        # 方案A（v2.3.2）：低于开转温度维持最低占空 min_pwm，不交还主板（避免 DIY 主板拉满 100%）
+        return round(minp / 100 * 255)
     if T >= full:
         return round(maxp / 100 * 255)
     r = (T - start) / (full - start)
@@ -1555,31 +1576,17 @@ def _fan_sys_temp_pwm(T, cfg):
 _st_engaged = {"v": None}
 
 def _fan_sys_temp_decision(T, cfg):
-    """主板/CPU 温控滞回状态机。返回 (action, pwm)：
-      "control" → 按曲线接管，pwm 为目标 raw
-      "release" → 温度低于 recover_temp（或读不到温度）→ 交还自动
-      "hold"    → 已交还且温度仍在滞回区(recover≤T<start)→ 保持释放、不写
-    滞回：接管后须 T<recover 才释放；释放后须 T≥start 才重新接管（避免临界抖动）。"""
+    """主板/CPU 温控决策。返回 (action, pwm)：
+      "control" → 接管，pwm 为目标 raw（低于开转温度时维持最低占空 min_pwm，不交还主板）
+      "release" → 读不到温度（安全兜底，交还主板/内核自动控速）
+    说明同 _fan_disk_temp_decision：有效温度时始终接管，低于开转温度维持最低占空而非交还
+    （避免无 FCS 主板被 BIOS 拉满 100% 全速）。"""
     global _st_engaged
-    start = float(cfg.get("start_temp", 45))
-    recover = float(cfg.get("recover_temp", start - 5))
-    if recover >= start:
-        recover = start - 5  # 安全约束：recover 必须 < start
     if T is None:
         _st_engaged["v"] = False
         return ("release", None)
-    if _st_engaged["v"] is None:
-        _st_engaged["v"] = (T >= start)
-    if _st_engaged["v"]:
-        if T < recover:
-            _st_engaged["v"] = False
-            return ("release", None)
-        return ("control", _fan_sys_temp_pwm(T, cfg))
-    else:
-        if T >= start:
-            _st_engaged["v"] = True
-            return ("control", _fan_sys_temp_pwm(T, cfg))
-        return ("hold", None)
+    _st_engaged["v"] = True
+    return ("control", _fan_sys_temp_pwm(T, cfg))
 
 def _disk_is_ssd(dev):
     """非 NVMe 的固态盘（SATA/SAS SSD）识别：/sys/block/<name>/queue/rotational=0。
@@ -1609,16 +1616,19 @@ def get_disk_temps(devs):
         is_nvme = dev.startswith("/dev/nvme")
         try:
             no_sleep = False
+            serial = None
             if is_nvme:
-                out = sudo_cmd([SMARTCTL, "-A", dev], 8)
+                out = sudo_cmd([SMARTCTL, "-i", "-A", dev], 8)
                 asleep = False
                 no_sleep = True  # NVMe 不停机休眠
             else:
-                out = sudo_cmd([SMARTCTL, "-n", "standby", "-A", dev], 8)
+                # -i 顺带取序列号：温度快照用于与阵列卡物理盘按 SN 去重
+                # （实测 fnOS 的 smartctl -A 输出不含 Information 段，必须显式加 -i）
+                out = sudo_cmd([SMARTCTL, "-n", "standby", "-i", "-A", dev], 8)
                 asleep = False
                 if out and "STANDBY" in out.upper():
                     states[dev] = {"dev": dev, "temp": None, "asleep": True,
-                                   "no_sleep": False, "is_nvme": False}
+                                   "no_sleep": False, "is_nvme": False, "serial": serial}
                     continue
                 # SAS 企业盘（阵列卡后）永不休眠：厂商为数据安全锁死。
                 # smartctl -A 对 SAS 盘输出 "Current Drive Temperature"（SATA 走属性表
@@ -1634,7 +1644,7 @@ def get_disk_temps(devs):
                     no_sleep = True
             if not out:
                 states[dev] = {"dev": dev, "temp": None, "asleep": None,
-                               "no_sleep": no_sleep, "is_nvme": is_nvme}
+                               "no_sleep": no_sleep, "is_nvme": is_nvme, "serial": serial}
                 continue
             temp = None
             for line in out.splitlines():
@@ -1657,11 +1667,17 @@ def get_disk_temps(devs):
                             t = t - 273
                         temp = t
                         break
+            serial = None
+            if out:
+                # 大小写不敏感：SAS 盘输出 "Serial number:"、SATA/NVMe 为 "Serial Number:"
+                m = re.search(r"Serial\s*Number\s*:\s*(\S+)", out, re.I)
+                if m:
+                    serial = m.group(1).strip()
             states[dev] = {"dev": dev, "temp": temp, "asleep": asleep,
-                           "no_sleep": no_sleep, "is_nvme": is_nvme}
+                           "no_sleep": no_sleep, "is_nvme": is_nvme, "serial": serial}
         except Exception:
             states[dev] = {"dev": dev, "temp": None, "asleep": None,
-                           "no_sleep": False, "is_nvme": is_nvme}
+                           "no_sleep": False, "is_nvme": is_nvme, "serial": serial}
     return states
 
 
@@ -1956,7 +1972,8 @@ def _fan_disk_temp_pwm(states, cfg):
     if curve_raw is not None:
         return curve_raw
     if T < start:
-        return 0
+        # 方案A（v2.3.2）：低于开转温度维持最低占空 min_pwm，不交还主板（避免 DIY 主板拉满 100%）
+        return round(minp / 100 * 255)
     if T >= full:
         return round(maxp / 100 * 255)
     r = (T - start) / (full - start)
@@ -2023,41 +2040,29 @@ def _fan_set_pwm_mode(hwmon, idx, mode):
     return True, None
 
 def _fan_disk_temp_decision(states, cfg):
-    """硬盘温控滞回状态机。返回 (action, pwm)：
-      "control" → 按曲线接管，pwm 为目标 raw
-      "release" → 盘温低于 recover_temp（或休眠/读不到温度）→ 交还自动
-      "hold"    → 已交还且盘温仍在滞回区(recover≤T<start)→ 保持释放、不写
-    滞回：接管后须 T<recover 才释放；释放后须 T≥start 才重新接管（避免临界抖动）。"""
+    """硬盘温控决策。返回 (action, pwm)：
+      "control" → 接管，pwm 为目标 raw（低于开转温度时维持最低占空 min_pwm，不交还主板）
+      "release" → 完全读不到温度（安全兜底，交还主板/内核自动控速）
+    说明：只要能读到有效盘温，nasdash 始终接管——避免无 FCS 的主板（如 DIY B360M）在
+    交还后被 BIOS Thermal Cruise 拉满 100% 全速。低于开转温度不再停转/交还，而是维持最低
+    占空（用户设的 min_pwm，默认 30%），既安静又保留基础气流。
+    休眠停转（sleep_stop + 所有盘 idle 且无不可休眠盘偏热）仍走 _all_monitored_idle → 0（停转）。"""
     global _dt_engaged
-    start = float(cfg.get("start_temp", 40))
-    recover = float(cfg.get("recover_temp", start - 5))
-    if recover >= start:
-        recover = start - 5  # 安全约束：recover 必须 < start
     valid = [s for s in (states or {}).values() if isinstance(s, dict)]
     if not valid:
         _dt_engaged["v"] = False
         return ("release", None)
     if _all_monitored_idle(valid, cfg):
+        # 所有可休眠盘休眠且无不可休眠盘偏热 → 停转（显式休眠停转功能，nasdash 接管写 0）
         _dt_engaged["v"] = False
-        return ("release", None)
-    # NVMe 换算后再取最热：否则 M.2 固态常年 50°C+ 会让滞回状态恒定判为"该接管"，
-    # 风扇永远交不回主板自动控制（与停转失效同源）。
-    T = _disk_source_max_temp(valid, start, float(cfg.get("full_temp", 60)))
+        return ("control", 0)
+    T = _disk_source_max_temp(valid, float(cfg.get("start_temp", 40)), float(cfg.get("full_temp", 60)))
     if T is None:
+        # 完全读不到温度 → 安全兜底交还主板/内核自动（怕真热却不知道）
         _dt_engaged["v"] = False
         return ("release", None)
-    if _dt_engaged["v"] is None:
-        _dt_engaged["v"] = (T >= start)
-    if _dt_engaged["v"]:
-        if T < recover:
-            _dt_engaged["v"] = False
-            return ("release", None)
-        return ("control", _fan_disk_temp_pwm(states, cfg))
-    else:
-        if T >= start:
-            _dt_engaged["v"] = True
-            return ("control", _fan_disk_temp_pwm(states, cfg))
-        return ("hold", None)
+    _dt_engaged["v"] = True
+    return ("control", _fan_disk_temp_pwm(states, cfg))
 
 # ===================== 风扇：逐风扇温度联动规则（fan_rules）=====================
 # 论坛需求（huhaibo820）：两台硬盘风扇跟同一组硬盘温度走，但各用不同曲线
@@ -2191,7 +2196,9 @@ def _fan_rule_pwm(T, rule):
     start = float(rule.get("start_temp", 40))
     full = float(rule.get("full_temp", 60))
     if T < start:
-        return 0
+        # 方案A（v2.3.2）：低于开转温度不再停转为 0，而是维持最低占空 min_pwm，
+        # 避免「交还主板/内核自动」在无 FCS 的 DIY 主板上被 BIOS Thermal Cruise 拉满 100% 全速。
+        return round(minp / 100 * 255)
     if T >= full:
         return round(maxp / 100 * 255)
     r = (T - start) / (full - start) if full > start else 0
@@ -2224,13 +2231,11 @@ def _fan_rule_decision(key, rule, T, all_idle=False):
             # 低温强制停转：直接写 0%（保持在 nasdash 软件接管，不交还自动）
             _FAN_ENGAGED[key] = False
             return ("control", 0)
-        # 原滞回逻辑：已接管则低于 recover 才释放；未接管则保持释放
-        if _FAN_ENGAGED.get(key):
-            if T < recover:
-                _FAN_ENGAGED[key] = False
-                return ("release", None)
-            return ("control", _fan_rule_pwm(T, rule))
-        return ("hold", None)
+        # 方案A（v2.3.2）：低于开转温度且不勾「低温停转」→ nasdash 仍接管，维持最低占空 min_pwm，
+        # 不再交还主板/内核自动。无 FCS 的 DIY 主板（如 B360M）交还后会被 BIOS Thermal Cruise
+        # 拉满 100% 全速，与「低温应安静」的直觉相反；常接管既安静又保留基础气流。
+        _FAN_ENGAGED[key] = True
+        return ("control", _fan_rule_pwm(T, rule))
     # 已达开转温度：接管并按曲线控速
     _FAN_ENGAGED[key] = True
     return ("control", _fan_rule_pwm(T, rule))
@@ -2477,40 +2482,49 @@ def _parse_cachevault(out):
 
 
 def _parse_vds_from_topology(out):
-    """从 storcli /c0 show 的 TOPOLOGY 表解析 Virtual Drive（逻辑盘）元信息。"""
+    """从 storcli /c0 show 的 Virtual Drives 表解析 Virtual Drive（逻辑盘）元信息。
+
+    v2.3.2 修复：旧版遇第一条 '----' 分隔线就把 in_topo 置 False，但真实 storcli
+    输出里分隔线夹在表头和数据行之间（表头行 → ---- → 数据行 → ----），
+    导致数据行全部被跳过、virtual_drives 恒为空 → 有硬件 RAID 逻辑盘的机器上
+    「逻辑盘/一致性检查/热备盘/CopyBack」等区块被误判为"无逻辑盘"整块隐藏
+    （论坛 RAID5 用户反馈的根因）。现改为：分隔线仅跳过，遇到非数据行的
+    实质内容（下一段标题/图例行）才结束；表头匹配同时放宽大小写
+    （不同固件有 'TYPE'/'Type' 两种写法）。"""
     vds = []
     in_topo = False
     for line in out.splitlines():
         s = line.strip()
-        if 'DG/VD' in s and 'TYPE' in s and 'State' in s:
+        if 'DG/VD' in s.upper() and 'TYPE' in s.upper() and 'STATE' in s.upper():
             in_topo = True
             continue
         if not in_topo:
             continue
-        if re.match(r'^-+$', s):
-            in_topo = False
-            continue
         if not s:
             continue
+        # 分隔线：表头前后、表尾都有，一律跳过（v2.3.2 前会把 in_topo 置 False 导致漏行）
+        if re.match(r'^[-=]+$', s):
+            continue
         parts = s.split()
+        # 数据行特征：首列必须是 'DG/VD' 形如 0/0；其余任何实质行（"Physical Drives = 3"、
+        # "Cac=CacheCade|..." 图例）都视为表格结束
         if len(parts) < 6 or not re.match(r'^\d+/\d+$', parts[0]):
+            in_topo = False
             continue
         dgvd, vtype, state, access = parts[0], parts[1], parts[2], parts[3]
         consist, cache_code = parts[4], parts[5]
-        cac = parts[6] if len(parts) > 6 else ''
-        scc = parts[7] if len(parts) > 7 else ''
-        rest = parts[8:]
+        # 尾部按固件差异列数不同（Cac/sCC 列可有可无），Size/Name 用"第一个数字+可选单位"定位
+        rest = parts[6:]
         size, name = '', ''
-        if rest:
-            if re.match(r'^[\d.]+$', rest[0]):
-                unit = rest[1] if len(rest) > 1 and re.match(r'^[TGMK]B?$', rest[1]) else ''
-                size = rest[0] + ((' ' + unit) if unit else '')
-                name = ' '.join(rest[2:]) if len(rest) > 2 else ''
-            else:
-                name = ' '.join(rest)
+        for i, tok in enumerate(rest):
+            if re.match(r'^\d+(\.\d+)?$', tok):
+                unit = rest[i + 1] if len(rest) > i + 1 and re.match(r'^[TGMK]B?$', rest[i + 1]) else ''
+                size = tok + ((' ' + unit) if unit else '')
+                name = ' '.join(rest[i + 2:]) if len(rest) > i + 2 else ''
+                break
         vds.append({
             "dgvd": dgvd, "type": vtype, "state": state, "access": access,
-            "consist": consist, "cache_code": cache_code, "cac": cac, "scc": scc,
+            "consist": consist, "cache_code": cache_code, "cac": "", "scc": "",
             "size": size, "name": name,
             "write_policy": "", "read_policy": "", "read_cache": "", "wb": None, "cache_raw": ""
         })
@@ -7847,16 +7861,47 @@ def _enrich_disk_channels(disks, raid):
             d["slot"] = raid_sn[sn]
             d["locate_supported"] = locate_ok
         else:
-            t = (d.get("type") or "").lower()
-            if t == "nvme":
-                d["channel"] = "主板 M.2"
-                d["channel_type"] = "mobo_nvme"
-            elif t == "sas":
-                d["channel"] = "主板 SAS 直连"
-                d["channel_type"] = "mobo_sas"
-            else:
-                d["channel"] = "主板 SATA 直连"
-                d["channel_type"] = "mobo_sata"
+            # 阵列卡虚拟盘（硬件 RAID 逻辑盘经控制器暴露为 /dev/sdX，如 MR9362-8i 的 RAID5）：
+            # 其 SN 是逻辑盘序列号、不会命中任何物理盘 raid_sn，旧版会误标成
+            # 「主板 SAS 直连」，让用户误以为阵列卡判断有 bug。判据：块设备 model 与
+            # 阵列卡型号一致（MegaRAID 把 VD 的 model 填成控制器型号），或与某条
+            # 逻辑盘的自定义 name 一致 → 标为阵列卡虚拟盘（v2.3.2）。
+            _hit_vd = False
+            if raid and isinstance(raid, dict) and raid.get("mode") == "mega" \
+                    and raid.get("virtual_drives"):
+                _m = re.sub(r'[^0-9A-Za-z]', '', (d.get("model") or "")).upper()
+                if _m:
+                    _card = re.sub(r'[^0-9A-Za-z]', '', (raid.get("model") or "")).upper()
+                    _vd_names = {
+                        re.sub(r'[^0-9A-Za-z]', '', (v.get("name") or "")).upper()
+                        for v in raid["virtual_drives"]
+                    } - {""}
+                    # 型号匹配三层：① 全等/互含；② 数字核心互含（storcli 报全名
+                    # LSIMegaRAIDSAS9361-8i、块设备 inquiry 报短名 MR9361-8i，
+                    # 归一化后互不包含，但数字核心 "93618" 一致；数字串 ≥4 位才比，
+                    # 防止 "WD30" 这类短数字串误命中）。
+                    _cd = re.sub(r'[^0-9]', '', _card)
+                    _md = re.sub(r'[^0-9]', '', _m)
+                    _digit_hit = bool(_cd) and len(_cd) >= 4 and (_cd in _md or _md in _cd)
+                    _hit_card = bool(_card) and (_m == _card or _card in _m
+                                                 or _m in _card or _digit_hit)
+                    if _hit_card or _m in _vd_names:
+                        _v0 = raid["virtual_drives"][0]
+                        _lvl = str(_v0.get("type") or "").strip()
+                        d["channel"] = "阵列卡虚拟盘" + (f"（{_lvl}）" if _lvl else "（硬件 RAID）")
+                        d["channel_type"] = "raid_vd"
+                        _hit_vd = True
+            if not _hit_vd:
+                t = (d.get("type") or "").lower()
+                if t == "nvme":
+                    d["channel"] = "主板 M.2"
+                    d["channel_type"] = "mobo_nvme"
+                elif t == "sas":
+                    d["channel"] = "主板 SAS 直连"
+                    d["channel_type"] = "mobo_sas"
+                else:
+                    d["channel"] = "主板 SATA 直连"
+                    d["channel_type"] = "mobo_sata"
     # 双磁臂盘（同一物理盘拆成多个逻辑盘）先合并成一张卡，再统一算分级 / 趋势
     disks = _merge_dual_actuator(disks)
     # 阵列卡「藏起来」的物理盘：RAID 卡把组阵的盘攥在手里，OS 里没有对应的 /dev/sdX
@@ -9229,6 +9274,9 @@ def api_fan_temps():
         "cpu_temp": round(cpu_T, 1) if isinstance(cpu_T, (int, float)) else None,
         "mb_temp": round(mb_T, 1) if isinstance(mb_T, (int, float)) else None,
         "disks": disks,
+        # 阵列卡物理盘温度（RAID5 等虚拟盘场景下物理盘不暴露 /dev，OS 盘列表看不到，
+        # 只能从 storcli 拿；已按序列号与上方 OS 可见盘去重）：
+        "raid_drives": _snap.get("raid_drives") or [],
         # 温度墙测点全量 + 阵列卡芯片温度：前端温度页 5s 实时刷新用（不再等 30s 快照）
         "sensors": _snap.get("temps") or [],
         "raid_temp": _snap.get("raid_temp"),
