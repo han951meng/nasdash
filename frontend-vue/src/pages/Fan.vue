@@ -432,7 +432,8 @@ function _renderTempChip(name: string, val: any, opts: any): string {
   else if (opts.is_nvme) tag = '<span class="temp-chip-tag off">被动散热</span>'
   else if (opts.no_sleep) tag = '<span class="temp-chip-tag on">常驻</span>'
   const ti = opts.title ? ' title="' + esc(opts.title) + '"' : ''
-  return '<span class="temp-chip' + (opts.asleep ? ' off' : '') + '"' + ti + '><span class="temp-chip-name">' + esc(name) + '</span><span class="temp-chip-val" style="color:' + color + '">' + showVal + '</span>' + tag + '</span>'
+  const badge = (opts.intf || '').toUpperCase().indexOf('SAS') >= 0 ? '<span class="temp-chip-badge">SAS</span>' : ''
+  return '<span class="temp-chip' + (opts.asleep ? ' off' : '') + '"' + ti + '>' + badge + '<span class="temp-chip-name">' + esc(name) + '</span><span class="temp-chip-val" style="color:' + color + '">' + showVal + '</span>' + tag + '</span>'
 }
 
 function _buildTempRow(): string {
@@ -468,6 +469,7 @@ function _buildTempRow(): string {
       const nvStart = d.nvme_start_temp || 65
       html += _renderTempChip(name, d.temp, {
         asleep: !!d.asleep, no_sleep: !!d.no_sleep, is_nvme: isNv,
+        intf: d.intf || '',
         // 告警色阈值也要分量纲：机械盘 60°C 该警惕，M.2 固态 60°C 还很凉快
         trip: isNv ? 75 : 60,
         title: isNv

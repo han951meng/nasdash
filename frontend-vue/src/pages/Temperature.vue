@@ -39,6 +39,7 @@ interface DiskItem {
   no_sleep?: boolean
   is_nvme?: boolean
   nvme_start_temp?: number
+  intf?: string
 }
 /** 阵列卡物理盘（RAID5 等虚拟盘场景下物理盘不暴露 /dev，温度只能从阵列卡 storcli 拿） */
 interface RaidDriveItem {
@@ -157,6 +158,8 @@ interface OvChip {
   name: string
   val: number | null
   color: string
+  /** 名字前的身份徽标（如 SAS），与右侧状态 tag（常驻/休眠）分开 */
+  badge: string
   tag: string
   tagClass: string
   /** 整卡压暗（只给「休眠」盘用；NVMe 被动散热只灰标签、不暗整卡，与旧页口径一致） */
@@ -176,8 +179,8 @@ const overviewCats = computed<OvCat[]>(() => {
   out.push({
     label: '核心',
     chips: [
-      { name: 'CPU', val: cpu, color: tempColor(cpu, 100), tag: '', tagClass: '', dim: false, title: '' },
-      { name: '主板', val: mb, color: tempColor(mb, 90), tag: '', tagClass: '', dim: false, title: '' },
+      { name: 'CPU', val: cpu, color: tempColor(cpu, 100), badge: '', tag: '', tagClass: '', dim: false, title: '' },
+      { name: '主板', val: mb, color: tempColor(mb, 90), badge: '', tag: '', tagClass: '', dim: false, title: '' },
     ],
   })
   const cats = [
@@ -222,6 +225,7 @@ const overviewCats = computed<OvCat[]>(() => {
           name: x.name || (x.dev || '').replace(/^\/dev\//, ''),
           val: v,
           color: tempColor(v, trip),
+          badge: (x.intf || '').toUpperCase().includes('SAS') ? 'SAS' : '',
           tag,
           tagClass,
           dim,
@@ -242,6 +246,7 @@ const overviewCats = computed<OvCat[]>(() => {
         name: nm || '阵列卡硬盘',
         val: v,
         color: tempColor(v, 60),
+        badge: '',
         tag: (x.intf || '').toUpperCase(),
         tagClass: (x.intf || '').toUpperCase().includes('SAS') ? 'on' : 'off',
         dim: false,
@@ -340,6 +345,7 @@ onUnmounted(() => {
             :class="{ off: c.dim }"
             :title="c.title"
           >
+            <span v-if="c.badge" class="temp-chip-badge">{{ c.badge }}</span>
             <span class="temp-chip-name">{{ c.name }}</span>
             <span class="temp-chip-val" :style="{ color: c.color }">{{ c.val != null ? c.val + '°C' : '—' }}</span>
             <span v-if="c.tag" class="temp-chip-tag" :class="c.tagClass">{{ c.tag }}</span>
@@ -461,6 +467,15 @@ onUnmounted(() => {
 }
 .temp-chip-name {
   color: var(--c-text-2);
+}
+.temp-chip-badge {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 6px;
+  line-height: 1.3;
+  font-weight: 600;
+  color: var(--c-primary);
+  background: var(--c-primary-bg);
 }
 .temp-chip-val {
   font-weight: 700;
