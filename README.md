@@ -1,6 +1,6 @@
 # nasdash
 
-**当前版本：v2.3.1** · [下载最新 fpk](https://github.com/han951meng/nasdash/releases/latest) · [📖 操作手册](docs/使用手册.md) · [💬 飞牛社区讨论帖](https://club.fnnas.com/forum.php?mod=viewthread&tid=67060)
+**当前版本：v2.3.2** · [下载最新 fpk](https://github.com/han951meng/nasdash/releases/latest) · [📖 操作手册](docs/使用手册.md) · [💬 飞牛社区讨论帖](https://club.fnnas.com/forum.php?mod=viewthread&tid=67060)
 
 飞牛OS（fnOS）NAS 硬件监控面板 —— FPK 应用包
 
@@ -229,6 +229,9 @@
 > 本应用仅在以上硬件完成完整实测；其他主板/阵列卡组合功能可能不同，欢迎在 Issues 反馈。
 
 ## 更新日志
+
+### v2.3.2
+- 【论坛反馈】修复风扇控制按「硬盘温度」源时读不到 SAS 盘温度的问题：`smartctl -A` 对 SAS 企业盘输出 `Current Drive Temperature: 34 C`，此前只解析 SATA 的 `Temperature_Celsius` 属性表，导致 SAS 盘温度为 `None`，风扇按硬盘温度源不生效。
 
 ### v2.3.1
 - 【论坛反馈】修复阵列卡温度显示偏差：之前只显示 ROC 芯片温度（偏高），与飞牛界面 / storcli 对照工具看到的「控制器温度」差好几度、刷新永远对不上。现同时展示两个独立传感器温度（芯片 ROC + 控制器），并标注两者差异原因（不同传感器、非故障）；温度采集缓存由 60s 收紧到 15s，缩短采集失败后的恢复时间。
