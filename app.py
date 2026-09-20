@@ -1628,7 +1628,7 @@ def get_disk_temps(devs):
                 asleep = False
                 if out and "STANDBY" in out.upper():
                     states[dev] = {"dev": dev, "temp": None, "asleep": True,
-                                   "no_sleep": False, "is_nvme": False, "serial": serial}
+                                   "no_sleep": False, "is_nvme": False, "serial": serial, "intf": ""}
                     continue
                 # SAS 企业盘（阵列卡后）永不休眠：厂商为数据安全锁死。
                 # smartctl -A 对 SAS 盘输出 "Current Drive Temperature"（SATA 走属性表
@@ -1644,7 +1644,7 @@ def get_disk_temps(devs):
                     no_sleep = True
             if not out:
                 states[dev] = {"dev": dev, "temp": None, "asleep": None,
-                               "no_sleep": no_sleep, "is_nvme": is_nvme, "serial": serial}
+                               "no_sleep": no_sleep, "is_nvme": is_nvme, "serial": serial, "intf": ""}
                 continue
             temp = None
             for line in out.splitlines():
@@ -1668,16 +1668,23 @@ def get_disk_temps(devs):
                         temp = t
                         break
             serial = None
+            intf = ""
             if out:
                 # 大小写不敏感：SAS 盘输出 "Serial number:"、SATA/NVMe 为 "Serial Number:"
                 m = re.search(r"Serial\s*Number\s*:\s*(\S+)", out, re.I)
                 if m:
                     serial = m.group(1).strip()
+                # 接口类型：SAS 盘 -i 段有 "Transport protocol: SAS (SPL-4)"；
+                # SATA 盘一般无此行。供温度页给 SAS 盘加小徽标（直通 SAS 机械盘
+                # 的 lsblk TRAN 为空，判不了，必须靠这里）。
+                m = re.search(r"Transport protocol:\s*([A-Za-z0-9]+)", out)
+                if m and m.group(1).upper().startswith("SAS"):
+                    intf = "SAS"
             states[dev] = {"dev": dev, "temp": temp, "asleep": asleep,
-                           "no_sleep": no_sleep, "is_nvme": is_nvme, "serial": serial}
+                           "no_sleep": no_sleep, "is_nvme": is_nvme, "serial": serial, "intf": intf}
         except Exception:
             states[dev] = {"dev": dev, "temp": None, "asleep": None,
-                           "no_sleep": False, "is_nvme": is_nvme, "serial": serial}
+                           "no_sleep": False, "is_nvme": is_nvme, "serial": serial, "intf": ""}
     return states
 
 
@@ -9261,6 +9268,8 @@ def api_fan_temps():
             # 供前端标注「被动散热、不参与风扇温控」，并说明其判定阈值与机械盘不同
             "is_nvme": st.get("is_nvme", False),
             "nvme_start_temp": NVME_START_TEMP,
+            # 接口类型（SAS/空）：供温度页给 SAS 盘加身份小徽标
+            "intf": (st.get("intf") or "").upper(),
         })
     # 同型号同容量的盘（典型：双磁臂 SAS 盘拆成两个 LUN、或买了两块一样的盘）友好名会撞车，
     # 撞车时补上内核名后缀，保证「一眼能认出是哪块」这个目标不被重名破坏。

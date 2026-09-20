@@ -722,6 +722,8 @@ details.disk-info-card[open] .faq-hint::after{content:"收起 ▴"}
   .temp-chip-tag{font-size:10px;padding:1px 5px;border-radius:6px;line-height:1.3}
   .temp-chip-tag.off{color:var(--blue);background:var(--tint-blue-12)}
   .temp-chip-tag.on{color:var(--muted);background:#fff;border:1px solid var(--border)}
+  /* 盘名前的身份徽标（SAS 等），与右侧状态 tag（常驻/休眠）分开 */
+  .temp-chip-badge{font-size:10px;padding:1px 5px;border-radius:6px;line-height:1.3;font-weight:600;color:var(--blue);background:var(--tint-blue-12);margin-right:2px}
   .temp-chip-empty{font-size:12px;color:var(--muted);padding:4px 0}
   /* 风扇曲线编辑器：横向自适应（节点放成表格，单元更紧凑） */
   .curve-pt-table{width:100%;border-collapse:collapse;font-size:12px}
@@ -873,6 +875,7 @@ details.disk-info-card[open] .faq-hint::after{content:"收起 ▴"}
   [data-theme="dark"] .update-banner,[data-theme="dark"] .alert-banner{filter:brightness(.92)}
   [data-theme="dark"] .temp-bar,[data-theme="dark"] .progress{background:var(--border)}
   [data-theme="dark"] .temp-chip-tag.on{background:var(--fill);color:var(--text-2)}
+  [data-theme="dark"] .temp-chip-badge{background:rgba(88,146,255,.16)}
   [data-theme="dark"] .btn-mini.danger{background:rgba(247,105,101,.12);color:#ff9a8a;border-color:rgba(247,105,101,.4)}
   [data-theme="dark"] .dt-warn{background:rgba(255,154,46,.12);color:#ffb56b;border-color:rgba(255,154,46,.4)}
   [data-theme="dark"] .b-ok{color:var(--success)} [data-theme="dark"] .b-warn{color:var(--warning)} [data-theme="dark"] .b-bad{color:var(--danger)}
