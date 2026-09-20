@@ -712,7 +712,7 @@ details.disk-info-card[open] .faq-hint::after{content:"收起 ▴"}
   .temp-cat:first-of-type{margin-top:8px;padding-top:0;border-top:none}
   .temp-cat-label{font-size:11px;color:var(--muted);min-width:42px;font-weight:600;align-self:center}
   /* 顶部温度概览的紧凑 chip（白名单作用域：不能影响温度墙 .temp-wall 的同名 .temp-chip，否则 nowrap 会让长测点名撑破格子） */
-  .temp-overview .temp-chip{display:inline-flex;align-items:center;justify-content:center;gap:6px;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:5px 9px;font-size:12px;line-height:1.4;white-space:nowrap;min-height:34px}
+  .temp-overview .temp-chip{display:inline-flex;flex-direction:row;align-items:center;justify-content:center;gap:6px;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:5px 9px;font-size:12px;line-height:1.4;white-space:nowrap;min-height:34px}
   .temp-overview .temp-chip.off{opacity:.65}
   /* 温度墙格子兜底：长测点名必须换行收纳，不允许撑破 grid 列宽遮挡相邻卡片 */
   .temp-wall .temp-chip{min-width:0;white-space:normal;overflow-wrap:anywhere;align-items:center;text-align:center}
