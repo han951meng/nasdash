@@ -1643,6 +1643,12 @@ def get_disk_temps(devs):
                     if m:
                         temp = int(m.group(1))
                         break
+                elif "Current Drive Temperature" in line:
+                    # SAS 企业盘（阵列卡后）走这条：smartctl -A 输出 "Current Drive Temperature: 34 C"
+                    m = re.search(r"Current Drive Temperature:\s*(\d+)", line, re.I)
+                    if m:
+                        temp = int(m.group(1))
+                        break
                 elif "Temperature:" in line:
                     m = re.search(r"Temperature:\s*(\d+)", line)
                     if m:
