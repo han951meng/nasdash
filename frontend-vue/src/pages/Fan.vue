@@ -204,15 +204,15 @@ function fanCardHtml(f: any): string {
 
   return `<div class="fan-card" id="${id}-box">
       <div class="fan-card-head">
-        <input class="fan-label-input" id="${id}-label" value="${esc(f.label || f.name || '')}" placeholder="自定义名称（如 CPU 风扇）" maxlength="40">
+        <input class="fan-label-input" id="${id}-label" value="${esc(f.label || f.name || '')}" data-orig="${esc(f.label || f.name || '')}" placeholder="自定义名称（如 CPU 风扇）" maxlength="40" oninput="onFanLabelInput('${id}')">
+        <button class="btn-mini fan-save-btn" id="${id}-savebtn" style="display:none;margin-left:6px" onclick="saveFanLabel('${f.hwmon}', ${f.idx})">保存</button>
         <span class="pill ${pi.cls}" id="${id}-pill">${pi.txt}</span>
         <span class="fan-label-save">
-          <select class="fan-volt-select" id="${id}-volt" title="风扇供电电压">
+          <select class="fan-volt-select" id="${id}-volt" title="风扇供电电压" data-orig="${esc(f.voltage || '未知')}" onchange="onFanLabelInput('${id}')">
             <option value="12V" ${f.voltage === '12V' ? 'selected' : ''}>12V</option>
             <option value="5V" ${f.voltage === '5V' ? 'selected' : ''}>5V</option>
             <option value="未知" ${(!f.voltage || f.voltage === '未知') ? 'selected' : ''}>未知</option>
           </select>
-          <button class="btn-mini" onclick="saveFanLabel('${f.hwmon}', ${f.idx})">保存标注</button>
           <button class="btn-mini" onclick="toggleFanHidden('${f.hwmon}', ${f.idx}, ${f.hidden ? 'false' : 'true'})" title="隐藏无风扇/无转速的空通道，可随时恢复">${f.hidden ? '取消隐藏' : '隐藏'}</button>
           <span id="${id}-label-state" class="fan-label-state"></span>
         </span>
@@ -998,6 +998,19 @@ async function setFanAuto(hwmon: string, idx: number, activeMode?: string): Prom
   } catch (e) { if (st) st.textContent = '请求失败' }
 }
 
+function onFanLabelInput(id: string): void {
+  const inp = document.getElementById(id + '-label') as HTMLInputElement | null
+  const vol = document.getElementById(id + '-volt') as HTMLSelectElement | null
+  const btn = document.getElementById(id + '-savebtn') as HTMLButtonElement | null
+  if (!btn) return
+  const origName = (inp && inp.getAttribute('data-orig')) || ''
+  const nameDirty = inp ? inp.value.trim() !== origName.trim() : false
+  const origVolt = (vol && vol.getAttribute('data-orig')) || ''
+  const voltDirty = vol ? vol.value !== origVolt : false
+  // 仅在名称或电压被改动时显示「保存」按钮，未改动则隐藏
+  btn.style.display = (nameDirty || voltDirty) ? '' : 'none'
+}
+
 async function saveFanLabel(hwmon: string, idx: number): Promise<void> {
   const id = fanUid(hwmon, idx)
   const labInp = document.getElementById(id + '-label') as HTMLInputElement | null
@@ -1018,7 +1031,17 @@ async function saveFanLabel(hwmon: string, idx: number): Promise<void> {
     })
     const j = await r2.json()
     if (st) st.innerHTML = j.ok ? (iconSvg('check') + ' 已保存') : '失败'
-    if (j.ok) await loadFanData(false)
+    if (j.ok) {
+      // 保存成功后即时把新名字写回内存并重渲卡片，确保改名立刻可见（不依赖后续轮询）
+      if (labInp) labInp.setAttribute('data-orig', labInp.value.trim())
+      if (voltSel) voltSel.setAttribute('data-orig', voltSel.value)
+      const btn = document.getElementById(id + '-savebtn')
+      if (btn) btn.style.display = 'none'
+      const fans = (DATA && DATA.system && DATA.system.sensors && DATA.system.sensors.fans) || []
+      fans.forEach((f: any) => { if (f.hwmon === hwmon && f.idx === idx) { f.label = labInp ? labInp.value.trim() : f.label; f.voltage = voltSel ? voltSel.value : f.voltage } })
+      renderBody()
+      await loadFanData(false)
+    }
   } catch (e) { if (st) st.textContent = '请求失败' }
 }
 
@@ -1364,6 +1387,7 @@ const GLOBALS: Record<string, any> = {
   toggleShowHiddenFans, toggleFanHwNote, toggleSleepPanel, stepIdle, saveSleepLink,
   toggleFanNtNote,
   applyCurvePreset, addCurvePoint, removeCurvePoint, refreshFanPanel,
+  onFanLabelInput,
 }
 
 onMounted(async () => {
