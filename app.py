@@ -1378,7 +1378,7 @@ def fan_smooth_loop():
                 if ov and ov.get("mode") == "manual":
                     continue
                 controlled.add(key)
-                action, target = _fan_rule_decision(key, rule, T, all_idle=all_idle)
+                action, target = _fan_rule_decision(key, rule, T, all_idle=all_idle, source=src)
                 if action == "control" and target is not None:
                     _fan_smooth_step(hwmon, idx, target, _snap); controlling_any = True
                 elif action == "release":
@@ -1435,10 +1435,57 @@ FAN_LABELS_FILE = os.path.join(_config_dir(), "fan_labels.json")
 _FAN_VOLT_ALLOWED = ("12V", "5V", "未知", "")
 
 def _load_fan_labels():
-    return _load_json_file(FAN_LABELS_FILE, {})
+    d = _load_json_file(FAN_LABELS_FILE, {})
+    # 自修复：hwmon 路径随重启漂移会产生同 idx 重复 key(如 hwmon4::5 与 hwmon5::5
+    # 指向同一物理扇)。按 idx 归并,名字取最长(最具体)标注,hidden/no_tach/voltage 取并集,
+    # 其余重复 key 删除,避免改名/隐藏在下次开机后像『没保存』。仅在有重复时写回。
+    if _consolidate_fan_labels(d):
+        _save_fan_labels(d)
+    return d
 
 def _save_fan_labels(d):
     return _save_json_file(FAN_LABELS_FILE, d)
+
+def _consolidate_fan_labels(d):
+    """按 idx 归并重复 key(应对 hwmon 路径漂移)。返回是否发生过修改。
+
+    同一物理风扇通道由 idx 唯一标识,hwmon 前缀(N::4/5)仅是枚举路径、会随重启变。
+    归并规则：名字取最长的非空中标注(最具体),voltage/hidden/no_tach 取并集(任一为 True 即保留),
+    其余重复 key 删除,只留 canonical(首个 key)。
+    """
+    groups = {}
+    for k in list(d.keys()):
+        if "::" in k:
+            idx = k.split("::", 1)[1]
+            groups.setdefault(idx, []).append(k)
+    changed = False
+    for idx, keys in groups.items():
+        if len(keys) <= 1:
+            continue
+        changed = True
+        canonical = keys[0]
+        merged_name = ""
+        merged = {}
+        for k in keys:
+            v = d.get(k)
+            if not isinstance(v, dict):
+                continue
+            nm = v.get("name") or ""
+            if nm and len(nm) > len(merged_name):
+                merged_name = nm
+            if v.get("voltage"):
+                merged["voltage"] = v["voltage"]
+            if v.get("hidden"):
+                merged["hidden"] = True
+            if v.get("no_tach"):
+                merged["no_tach"] = True
+        if merged_name:
+            merged["name"] = merged_name
+        for k in keys:
+            if k != canonical:
+                d.pop(k, None)
+        d[canonical] = merged
+    return changed
 
 def _fan_label_for(hwmon, idx):
     labels = _load_fan_labels()
@@ -1451,6 +1498,18 @@ def _fan_label_for(hwmon, idx):
                 lbl = v
                 break
     return lbl or {}
+
+def _canon_label_key(labels, idx):
+    """返回同一物理风扇通道(idx 稳定, hwmon 路径随重启漂移)的已有标注 key。
+
+    用于保存时把改名/隐藏归并到那条既有 key,避免每次重启 hwmon 重排都新建孤立 key,
+    导致改名/隐藏在下次开机后像『没保存』(精确 hwmon::{idx} 查不到→回退默认 风扇N)。
+    """
+    suffix = "::%d" % idx
+    for k in labels:
+        if k.endswith(suffix):
+            return k
+    return None
 
 # ===================== 风扇：硬盘温度控制（disk_temp）=====================
 # 论坛需求（服务器/硬盘多/风扇多场景）：用指定硬盘温度驱动风扇——
@@ -2166,10 +2225,40 @@ def _disk_source_state(dt_cfg):
         return (False, None, False)
     states = get_disk_temps_cached(devs)
     valid = [s for s in states.values() if isinstance(s, dict)]
+    # v2.3.3：阵列卡 SAS/阵列物理盘温度经 storcli 采集进 _TEMP_SNAP["raid_drives"]，
+    # 必须并入风扇的硬盘温度源——RAID5/RAID0/RAID10 等真实阵列场景下物理盘不暴露 /dev 节点、
+    # smartctl 读不到，否则「风扇按硬盘温度」只控到主板 SATA 盘、SAS 阵列盘说了不算；
+    # 读不到时还会被交还 BIOS，在无 FCS 的 DIY 主板（如 B360M）上被 Thermal Cruise 拉满 100% 狂转
+    #（论坛反馈 + 158 实机一夜风扇满速）。按序列号已去重，OS 可见盘不会重复计入。
+    try:
+        _snap = _temp_snapshot_read()
+        for _rd in (_snap.get("raid_drives") or []):
+            _t = _rd.get("temp")
+            if not isinstance(_t, (int, float)):
+                continue
+            _st = {
+                "dev": "raid:" + str(_rd.get("slot")),
+                "temp": _t,
+                "asleep": False,
+                "no_sleep": True,   # SAS 企业盘永不休眠，不参与"全部休眠→停转"
+                "is_nvme": False,
+                "serial": _rd.get("serial") or "",
+                "intf": (str(_rd.get("intf") or "").upper()),
+            }
+            valid.append(_st)
+            states[_st["dev"]] = _st
+    except Exception:
+        pass
     if not valid:
         return (False, None, True)
     if _all_monitored_idle(valid, dt_cfg):
-        return (True, None, True)
+        # 全部监控盘休眠/空闲 → 交还自动控速（停转）。但仍返回真实最热盘温供预览展示，
+        # 停转决策由 all_idle 标志单独控制（get_fan_status 中 _raw=0 if _ridle），
+        # 故此处返回真实 T 不会让风扇在空闲时反而转起来。
+        T = _disk_source_max_temp(valid,
+                                  float(dt_cfg.get("start_temp", 40)),
+                                  float(dt_cfg.get("full_temp", 60)))
+        return (True, T, True)
     # NVMe 先换算到机械盘量纲再参与取最热（低于 65°C 不参与），
     # 否则常年 50°C 出头的 M.2 固态会恒定当选"最热盘"，把机箱风扇一直顶在中高速。
     T = _disk_source_max_temp(valid,
@@ -2214,7 +2303,7 @@ def _fan_rule_pwm(T, rule):
 # 逐风扇温控滞回状态：{(hwmon, idx): True/False/None}
 _FAN_ENGAGED = {}
 
-def _fan_rule_decision(key, rule, T, all_idle=False):
+def _fan_rule_decision(key, rule, T, all_idle=False, source=None):
     """逐风扇温控滞回状态机，语义与旧的两套全局状态机一致但按风扇独立记忆。
     返回 (action, raw)：control=按曲线接管 / release=交还自动 / hold=已释放且在滞回区不写。
     stop_below_start=True 时：温度低于开转温度（或硬盘空闲=冷态）直接强制 0%（保持在 nasdash
@@ -2225,13 +2314,28 @@ def _fan_rule_decision(key, rule, T, all_idle=False):
     if recover >= start:
         recover = start - 5
     stop_below = bool(rule.get("stop_below_start", False))
+    # 接管总开关开着、且本机无可用 FCS（fnOS 原生控温）时，绝不把任何风扇交还 BIOS：
+    # 无 FCS 的 DIY 主板（如 B360M）交还后会被 Thermal Cruise 拉满 100% 狂转。
+    # 因此无论温度源（硬盘/CPU/主板/阵列卡/混合）读不到温度还是全空闲，都维持最低占空保底气流。
+    # 仅「开关关闭」或「有可用 FCS 兜底」（FCS 接管控温，安全）时才交还自动。
+    _no_fcs = not (_fcs_running_cached() and _fcs_has_board_config())
     if all_idle:
-        # 硬盘空闲（disk 源）视为冷态：勾选了低温停转则强制 0%，否则交还自动
         _FAN_ENGAGED[key] = False
-        return ("control", 0) if stop_below else ("release", None)
+        if stop_below:
+            # 勾选「低温停转」：空闲=冷态，强制 0%（保持在 nasdash 软件接管、不交还自动）
+            return ("control", 0)
+        if _no_fcs:
+            # 无 FCS 主板（B360M）：全盘空闲维持最低占空，绝不交还 BIOS 狂转
+            minp = float(rule.get("min_pwm", 30))
+            return ("control", round(minp / 100 * 255))
+        return ("release", None)
     if T is None:
-        # 读不到温度：保守交还自动（不强制停转，避免未知高温时风扇熄火）
         _FAN_ENGAGED[key] = False
+        if _no_fcs:
+            # 无 FCS 主板（B360M）：任何温度源读不到都维持最低占空，绝不交还 BIOS 拉满 100%
+            minp = float(rule.get("min_pwm", 30))
+            return ("control", round(minp / 100 * 255))
+        # 有可用 FCS：读不到温度交还自动，由 FCS 接管控温（安全兜底）
         return ("release", None)
     if T < start:
         if stop_below:
@@ -6671,6 +6775,10 @@ def _init_history_db():
                     con.execute(f"ALTER TABLE samples ADD COLUMN {col} REAL")
                 except Exception:
                     pass
+            try:
+                con.execute("ALTER TABLE samples ADD COLUMN fan_detail TEXT")
+            except Exception:
+                pass
             con.commit(); con.close()
     except Exception:
         pass
@@ -6706,7 +6814,17 @@ def _write_history_sample():
             rpms = [f.get("rpm") for f in fans if isinstance(f.get("rpm"), (int, float))]
             fan_rpm_avg = round(sum(rpms) / len(rpms), 0) if rpms else None
         except Exception:
+            fans = []
             fan_rpm_avg = None
+        try:
+            # 每通道转速 + 占空比 + 接管状态(pwm_enable: 1=软件控 2=交还主板) 快照，
+            # 供「风扇问题排查」复盘：哪台扇何时被谁接管/抢走。
+            fan_detail = json.dumps(
+                [{"n": f.get("name"), "idx": f.get("idx"), "rpm": f.get("rpm"), "pwm": f.get("pwm"),
+                  "pe": int(f.get("pwm_enable")) if f.get("pwm_enable") is not None else None} for f in fans],
+                ensure_ascii=False)
+        except Exception:
+            fan_detail = None
         try:
             meminfo = read_file("/proc/meminfo")
             mi = {}
@@ -6721,8 +6839,8 @@ def _write_history_sample():
         with _db_lock:
             con = _sqlite3.connect(_DB_PATH)
             con.execute(
-                "INSERT OR REPLACE INTO samples(ts,disk_read,disk_write,net_rx,net_tx,cpu_power,cpu_temp,mb_temp,gpu_temp,disk_temp_max,raid_temp,fan_rpm_avg,mem_used_pct) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (now, dr, dw, nr, nw, cpu, cpu_temp, mb_temp, gpu_temp, disk_temp_max, raid_temp, fan_rpm_avg, mem_used_pct))
+                "INSERT OR REPLACE INTO samples(ts,disk_read,disk_write,net_rx,net_tx,cpu_power,cpu_temp,mb_temp,gpu_temp,disk_temp_max,raid_temp,fan_rpm_avg,mem_used_pct,fan_detail) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (now, dr, dw, nr, nw, cpu, cpu_temp, mb_temp, gpu_temp, disk_temp_max, raid_temp, fan_rpm_avg, mem_used_pct, fan_detail))
             cutoff = now - 30*86400
             con.execute("DELETE FROM samples WHERE ts < ?", (cutoff,))
             con.commit(); con.close()
@@ -6731,6 +6849,43 @@ def _write_history_sample():
         pass
 
 _init_history_db()
+
+def _rename_history_fan(idx, new_name, old_name=None):
+    """把历史库里所有属于该 idx 的采样点名字改为 new_name。
+
+    改名必须连带历史：趋势图按名字分组,若不回填旧样本,改名后旧样本(旧名)+新样本(新名)
+    会被拆成两条通道,旧名残留。这里把整库该 idx 的 fan_detail.n 全部改写为新名,
+    既保证趋势图无残留,又保留全部历史(调试查 bug 用),只是名字跟着更新。
+    old_name 用于兜底匹配「idx 字段上线前的旧样本」(无 idx 但有旧名)。
+    """
+    try:
+        con = _sqlite3.connect(_DB_PATH)
+        rows = con.execute(
+            "SELECT ts, fan_detail FROM samples WHERE fan_detail IS NOT NULL").fetchall()
+        upd = []
+        for ts, detail in rows:
+            try:
+                fl = json.loads(detail) if detail else []
+            except Exception:
+                continue
+            if not isinstance(fl, list):
+                continue
+            changed = False
+            for f in fl:
+                if not isinstance(f, dict):
+                    continue
+                if f.get("idx") == idx or (old_name is not None and f.get("n") == old_name):
+                    if f.get("n") != new_name:
+                        f["n"] = new_name
+                        changed = True
+            if changed:
+                upd.append((json.dumps(fl, ensure_ascii=False), ts))
+        if upd:
+            con.executemany("UPDATE samples SET fan_detail=? WHERE ts=?", upd)
+            con.commit()
+        con.close()
+    except Exception as e:
+        print("[history] rename fan failed idx=%s: %s" % (idx, e), flush=True)
 
 def metrics_collect_loop():
     """daemon 线程：每 ~1s 采样一次，计算速率/功率/CPU 使用率并写入 _metrics_cur。
@@ -9143,7 +9298,9 @@ def get_fan_status():
         if tcfg and tcfg.get("mode") == "manual":
             mode = "manual"
             active_mode = None
-        _lbl = labels.get(f"{hwmon}::{idx}", {})
+        # 用 _fan_label_for：精确 key 缺失时按 idx 跨 hwmon 兜底（hwmon 编号随重启漂移，
+        # 如 hwmon4→hwmon5，否则标签/隐藏/自定义名全部错位成 风扇N）。
+        _lbl = _fan_label_for(hwmon, idx)
         fans.append({
             "name": _lbl.get("name") or names.get(idx, f"风扇{idx}"),
             "label": _lbl.get("name", ""),
@@ -9314,6 +9471,10 @@ def api_fan_disk_temp_get():
     """读取硬盘温度控风扇配置 + 实时监控盘温度/休眠 + 计算所得目标PWM"""
     cfg = _load_fan_disk_temp()
     devs = cfg.get("disks", [])
+    # 未设监控盘白名单时，与控速循环保持一致：自动用本机全部盘作温度源，
+    # 否则 preview 永远空、与实际控制态（已用全部盘）不一致。
+    if not devs:
+        devs = _list_all_disk_devs()
     states = get_disk_temps_cached(devs) if devs else {}
     disks_out = [{
         "dev": dev,
@@ -9470,7 +9631,7 @@ def api_fan_rules_get():
     for (hwmon, idx) in _enumerate_fans():
         rk = "%s::%d" % (hwmon, idx)
         rule = rules.get(rk)
-        lbl = _load_fan_labels().get(rk, {})
+        lbl = _fan_label_for(hwmon, idx)
         src = (rule or {}).get("source")
         if src == "cpu":
             T = cpu_T
@@ -9581,6 +9742,31 @@ def api_fan_labels_get():
     return jsonify(_load_fan_labels())
 
 
+@app.route("/api/fan/history")
+def api_fan_history():
+    """返回每台风扇的转速/占空比/接管状态历史（每 30s 一点，保留 30 天）。供风扇问题排查复盘。"""
+    try:
+        rng = request.args.get("range", "24h")
+        secs = {"24h": 86400, "7d": 7*86400, "30d": 30*86400}.get(rng, 86400)
+        end = int(time.time()); start = end - secs
+        with _db_lock:
+            con = _sqlite3.connect(_DB_PATH)
+            rows = con.execute(
+                "SELECT ts, fan_detail FROM samples WHERE ts>=? AND fan_detail IS NOT NULL ORDER BY ts",
+                (start,)).fetchall()
+            con.close()
+        points = []
+        for ts, detail in rows:
+            try:
+                fl = json.loads(detail) if detail else []
+            except Exception:
+                fl = []
+            points.append({"ts": ts * 1000, "fans": fl})
+        return jsonify({"range": rng, "points": points})
+    except Exception as e:
+        return jsonify({"error": str(e), "points": []})
+
+
 @app.route("/api/fan/labels", methods=["POST"])
 @require_admin()
 def api_fan_labels_post():
@@ -9589,6 +9775,21 @@ def api_fan_labels_post():
         data = request.get_json(force=True) or {}
     except Exception:
         return jsonify({"ok": False, "error": "bad json"}), 400
+    # 先读出现有标注,用于把改名/隐藏归并到同一 idx 的既有 key(跨 hwmon 漂移兜底,
+    # 否则每次重启 hwmon 重排都新建孤立 key,改名在下次开机后像『没保存』)
+    existing = _load_fan_labels()
+    # 改动前名字快照：用于检测哪些 idx 被改名,以便连带重写历史库
+    _old_names: dict = {}
+    for _k, _v in existing.items():
+        if "::" not in _k:
+            continue
+        try:
+            _ii = int(_k.split("::", 1)[1])
+        except (TypeError, ValueError):
+            continue
+        _nm = (_v or {}).get("name")
+        if _nm:
+            _old_names[_ii] = _nm
     incoming = {}
     for k, v in data.items():
         if not isinstance(k, str) or "::" not in k:
@@ -9598,7 +9799,7 @@ def api_fan_labels_post():
         if not hwmon.startswith("/sys/class/hwmon/hwmon"):
             continue
         try:
-            int(idx)
+            idx_i = int(idx)
         except (TypeError, ValueError):
             continue
         if not isinstance(v, dict):
@@ -9619,20 +9820,46 @@ def api_fan_labels_post():
             # 风扇本身在转，只是主板永远读不到 rpm。标了之后转速栏不再显示刺眼的 0，
             # 也不会被误判成「停转/空通道」。
             entry["no_tach"] = True
-        # 空标注（name 空且无 hidden/no_tach）→ 视为取消该通道标注，删除键
+        # 空标注（name 空且无 hidden/no_tach）→ 视为取消该 idx 的标注，删除既有 key
         if not entry:
-            incoming[k] = None
-        else:
-            incoming[k] = entry
+            canon = _canon_label_key(existing, idx_i)
+            if canon:
+                incoming[canon] = None
+            continue
+        # 同一 idx 的既有标注可能落在别的 hwmon 路径下(hwmon 漂移),写入时归并到那条 key,
+        # 避免重复建 key;没有既有 key 才用本次传入的(当前 hwmon 路径)。
+        canon = _canon_label_key(existing, idx_i) or k
+        incoming[canon] = entry
     # 合并现有标注，而非整体覆盖：防御前端只传单条导致全量清空
-    existing = _load_fan_labels()
     for k, v in incoming.items():
         if v is None:
             existing.pop(k, None)
         else:
             existing[k] = v
     _replicate_aliases(existing)   # 别名同步：同名标注通道改名/隐藏联动（huhaibo820 #1）
+    _consolidate_fan_labels(existing)  # 保存前再归并一次：清除漂移产生的重复 idx key
     if _save_fan_labels(existing):
+        # 保存成功后立即让系统总览缓存失效，风扇卡片无需强制刷新即可显示新名字
+        global _SYSTEM_CACHE
+        _SYSTEM_CACHE["v"] = None
+        _SYSTEM_CACHE["t"] = 0.0
+        # 检测改名：把历史库里该 idx 的所有旧样本名字也改成新名(连带改名,无残留,不丢历史)
+        _renames = []
+        for _k, _v in existing.items():
+            if "::" not in _k:
+                continue
+            try:
+                _ii = int(_k.split("::", 1)[1])
+            except (TypeError, ValueError):
+                continue
+            _nm = (_v or {}).get("name")
+            if _nm and _old_names.get(_ii) != _nm:
+                _renames.append((_ii, _nm, _old_names.get(_ii)))
+        if _renames:
+            def _rename_history_bg():
+                for (_i, _nn, _on) in _renames:
+                    _rename_history_fan(_i, _nn, _on)
+            _threading.Thread(target=_rename_history_bg, daemon=True).start()
         return jsonify({"ok": True})
     return jsonify({"ok": False, "error": "save failed"}), 500
 
@@ -11021,3 +11248,4 @@ if __name__ == "__main__":
         _env_port = (os.environ.get("TRIM_SERVICE_PORT") or "").strip()
         port = int(_env_port) if _env_port else 9800
         app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
+

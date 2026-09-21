@@ -1,6 +1,6 @@
 # nasdash
 
-**当前版本：v2.3.2** · [下载最新 fpk](https://github.com/han951meng/nasdash/releases/latest) · [📖 操作手册](docs/使用手册.md) · [💬 飞牛社区讨论帖](https://club.fnnas.com/forum.php?mod=viewthread&tid=67060)
+**当前版本：v2.3.3** · [下载最新 fpk](https://github.com/han951meng/nasdash/releases/latest) · [📖 操作手册](docs/使用手册.md) · [💬 飞牛社区讨论帖](https://club.fnnas.com/forum.php?mod=viewthread&tid=67060)
 
 飞牛OS（fnOS）NAS 硬件监控面板 —— FPK 应用包
 
@@ -229,6 +229,12 @@
 > 本应用仅在以上硬件完成完整实测；其他主板/阵列卡组合功能可能不同，欢迎在 Issues 反馈。
 
 ## 更新日志
+
+### v2.3.3
+- 【风扇历史】趋势图「风扇」指标从单一平均转速线改为**每台扇独立彩色曲线**，曲线上按接管状态打点（绿=软件接管、红=交还主板），只在起始与状态变化拐点打点。
+- 【风扇历史】历史图**直接读取风扇控制页自定义名**，改名后该扇所有历史记录同步改名（数据不丢、零残留）；风扇控制里隐藏的空口扇，历史图一并隐藏，两边一致。
+- 【风扇控制】修复 hwmon 重启漂移导致标签错位、改名偶尔「像没保存」；改名保存交互优化（编辑输入框后自动出现「保存」按钮，保存后立即生效、无需强制刷新）。
+- 【风扇控制】修复「硬盘温度」源预览页偶发把硬盘温度显示为空的问题，现已正确列出每块盘真实温度。
 
 ### v2.3.2
 - 【论坛反馈】修复风扇控制按「硬盘温度」源时读不到 SAS 盘温度的问题：`smartctl -A` 对 SAS 企业盘输出 `Current Drive Temperature: 34 C`，此前只解析 SATA 的 `Temperature_Celsius` 属性表，导致 SAS 盘温度为 `None`，风扇按硬盘温度源不生效。

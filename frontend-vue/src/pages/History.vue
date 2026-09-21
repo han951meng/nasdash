@@ -153,6 +153,7 @@ function drawHist(d: { points?: HistPoint[] } | null): void {
   lastHist = d
   const cv = canvasEl.value
   if (!cv) return
+  if (histMetric.value === 'fan') { drawFanMulti(); return }
   const pts = (d && d.points) || []
   const dpr = window.devicePixelRatio || 1
   const cssW = cv.clientWidth || 600
@@ -256,6 +257,87 @@ function drawHist(d: { points?: HistPoint[] } | null): void {
   }
 }
 
+function drawFanMulti(): void {
+  const cv = canvasEl.value
+  if (!cv) return
+  const chs = fanChannels.value
+  const dpr = window.devicePixelRatio || 1
+  const cssW = cv.clientWidth || 600
+  const cssH = 170
+  cv.width = Math.round(cssW * dpr)
+  cv.height = Math.round(cssH * dpr)
+  const ctx = cv.getContext('2d')
+  if (!ctx) return
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+  ctx.clearRect(0, 0, cssW, cssH)
+  const muted = cssVar('--muted', '#8a93a6')
+  if (!chs.length || !chs[0].rpm.length) {
+    ctx.fillStyle = muted; ctx.font = '13px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
+    ctx.fillText('暂无风扇通道历史数据（运行一段时间后会自动积累）', cssW / 2, cssH / 2)
+    legendHtml.value = ''
+    return
+  }
+  let maxV = 1
+  chs.forEach(c => c.rpm.forEach(v => { if (v != null && v > maxV) maxV = v }))
+  maxV = Math.max(maxV, 200)
+  const padL = 46, padR = 10, padT = 10, padB = 20
+  const n = chs[0].rpm.length
+  const X = (i: number) => padL + (cssW - padL - padR) * (i / ((n - 1) || 1))
+  const Y = (v: number) => cssH - padB - (cssH - padT - padB) * (v / maxV)
+  ctx.strokeStyle = 'rgba(128,128,128,0.15)'; ctx.lineWidth = 1; ctx.fillStyle = muted; ctx.font = '10px sans-serif'; ctx.textAlign = 'right'; ctx.textBaseline = 'middle'
+  for (let g = 0; g <= 3; g++) {
+    const yy = padT + (cssH - padT - padB) * (g / 3)
+    ctx.beginPath(); ctx.moveTo(padL, yy); ctx.lineTo(cssW - padR, yy); ctx.stroke()
+    ctx.fillText(Math.round(maxV * (1 - g / 3)) + ' RPM', padL - 4, yy)
+  }
+  chs.forEach(c => {
+    ctx.strokeStyle = c.color; ctx.lineWidth = 1.6; ctx.beginPath()
+    let started = false
+    c.rpm.forEach((v, j) => {
+      if (v == null) return
+      const xx = X(j), yy = Y(v)
+      if (!started) { ctx.moveTo(xx, yy); started = true } else ctx.lineTo(xx, yy)
+    })
+    ctx.stroke()
+    // 折线只关键节点标记接管状态：起始点、结束点、状态变化拐点（绿=软件接管 红=交还主板）
+    // 中间一段状态不变就只在段首/段尾/整线首尾打点，不密密麻麻铺满
+    let firstIdx = -1, lastIdx = -1
+    for (let j = 0; j < n; j++) if (c.rpm[j] != null) { if (firstIdx === -1) firstIdx = j; lastIdx = j }
+    const dotSet = new Set<number>()
+    let prevPe: number | null = null
+    for (let j = firstIdx; j <= lastIdx; j++) {
+      const v = c.rpm[j]
+      if (v == null) continue
+      const pe = c.peArr ? c.peArr[j] : null
+      if (pe == null) continue
+      if (j === firstIdx || j === lastIdx) { dotSet.add(j); prevPe = pe; continue }
+      if (prevPe !== null && pe !== prevPe) dotSet.add(j)
+      prevPe = pe
+    }
+    dotSet.forEach((j) => {
+      const pe = c.peArr ? c.peArr[j] : null
+      const stc = pe === 1 ? '#3ec97a' : pe === 2 ? '#ff5d5d' : '#9aa1ad'
+      ctx.fillStyle = stc
+      ctx.beginPath(); ctx.arc(X(j), Y(c.rpm[j] as number), 3, 0, Math.PI * 2); ctx.fill()
+    })
+  })
+  ctx.fillStyle = muted; ctx.textBaseline = 'alphabetic'; ctx.textAlign = 'left'
+  if (fanHistPoints.value.length) {
+    ctx.fillText(fmtTime(fanHistPoints.value[0].ts), padL, cssH - 6)
+    ctx.textAlign = 'right'
+    ctx.fillText(fmtTime(fanHistPoints.value[fanHistPoints.value.length - 1].ts), cssW - padR, cssH - 6)
+  }
+  const nameRow = chs.map(c =>
+    '<span style="white-space:nowrap;display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--text-1);"><span style="color:' + c.color + '">■</span>' + c.name + '</span>'
+  ).join('')
+  const stRow =
+    '<span style="white-space:nowrap;display:inline-flex;align-items:center;gap:5px;"><span style="color:#3ec97a">●</span> 绿色 = 软件接管</span>' +
+    '<span style="white-space:nowrap;display:inline-flex;align-items:center;gap:5px;"><span style="color:#ff5d5d">●</span> 红色 = 交还主板</span>'
+  legendHtml.value =
+    '<div style="display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;margin-bottom:6px;">' + nameRow + '</div>' +
+    '<div style="display:flex;flex-wrap:wrap;gap:6px 18px;align-items:center;font-size:12px;color:var(--muted);">' + stRow + '</div>'
+}
+
 async function loadHistory(): Promise<void> {
   // 切页签回来先用缓存把图画出来（秒开），再拉最新数据替换
   const cacheKey = 'hist:' + histRange.value
@@ -274,6 +356,7 @@ async function loadHistory(): Promise<void> {
     const d = await r.json()
     await nextTick()
     drawHist(d)
+    void loadFanHistory()
     pageCacheSet(cacheKey, d)
     lastUpdate.value = '更新于 ' + new Date().toLocaleTimeString('zh-CN')
   } catch {
@@ -291,6 +374,187 @@ function pickRange(r: Range): void {
   histRange.value = r
   void loadHistory()
 }
+
+/* ---------------- 风扇各通道历史（供排查：哪台扇何时被谁接管） ---------------- */
+const fanHistPoints = ref<{ ts: number; fans: any[] }[]>([])
+const FAN_PALETTE = ['#4aa3ff', '#3ec97a', '#ff7a59', '#b07cff', '#ffb020', '#ff5d8f']
+// 风扇控制里被「隐藏」的通道：拉取标注,按 idx 建集合(hwmon 路径随重启漂移也不影响),
+// 历史图与其保持一致——隐藏的「空口」通道不画曲线。
+const fanLabels = ref<Record<string, any>>({})
+async function loadFanLabels(): Promise<void> {
+  try {
+    const r = await apiFetch('/api/fan/labels', 20000)
+    fanLabels.value = await r.json()
+  } catch { /* 忽略：不影响风扇历史绘制 */ }
+}
+const hiddenFanIdx = computed(() => {
+  const s = new Set<number>()
+  for (const [k, v] of Object.entries(fanLabels.value || {})) {
+    if (v && v.hidden) {
+      const parts = k.split('::')
+      const i = parseInt(parts[parts.length - 1], 10)
+      if (!Number.isNaN(i)) s.add(i)
+    }
+  }
+  return s
+})
+// 隐藏通道的「当前名字」也纳入隐藏：历史库里有一批旧样本(idx 字段缺失,但已带自定义名),
+// 仅靠 idx 过滤会漏掉它们,所以同时按名字匹配(名字在所有样本里都稳定)。
+const hiddenFanNames = computed(() => {
+  const s = new Set<string>()
+  for (const [, v] of Object.entries(fanLabels.value || {})) {
+    if (v && v.hidden && v.name) s.add(v.name)
+  }
+  return s
+})
+async function loadFanHistory(): Promise<void> {
+  try {
+    await loadFanLabels()
+    const r = await apiFetch('/api/fan/history?range=' + histRange.value + '&_=' + Date.now(), 20000)
+    const d = await r.json()
+    fanHistPoints.value = d.points || []
+    if (histMetric.value === 'fan') { await nextTick(); drawFanMulti() }
+  } catch {
+    /* 拉取失败忽略，不影响主图 */
+  }
+}
+const fanChannels = computed<
+  { name: string; color: string; rpm: (number | null)[]; pe: number | null; pwm: number | null }[]
+>(() => {
+  const pts = fanHistPoints.value
+  if (!pts.length) return []
+  // 关键：以「通道编号 idx」(物理风扇本身) 为主键分组,显示名直接映射风扇控制里的自定义名。
+  // 改名只是换显示名,不该多出一条通道——同 idx 的样本天然合并成一条。
+  // 历史库里难免混入「缺 idx 的旧样本」(早期构建写的 / 改名前残留)：它们按名字兜底,
+  // 但最终按名字归并回「同名的 idx 组」,避免一台扇裂成两条。隐藏通道(按 idx 或 名字)同样跳过。
+  const hidden = hiddenFanIdx.value
+  const hiddenNames = hiddenFanNames.value
+  const isHiddenFan = (fi: number, n: string): boolean =>
+    (!Number.isNaN(fi) && hidden.has(fi)) || hiddenNames.has(n || '')
+  const labelNameByIdx = (fi: number): string => {
+    for (const [k, v] of Object.entries(fanLabels.value || {})) {
+      const parts = k.split('::')
+      if (parts.length >= 2 && parseInt(parts[parts.length - 1], 10) === fi) {
+        const nm = (v && v.name) || ''
+        if (nm) return nm
+      }
+    }
+    return ''
+  }
+  function toNum(v: any): number | null {
+    if (v == null || v === '') return null
+    const n = Number(v)
+    return Number.isFinite(n) ? n : null
+  }
+  const lastName = (names: string[]): string => {
+    for (let i = names.length - 1; i >= 0; i--) if (names[i]) return names[i]
+    return ''
+  }
+
+  // 第一阶段：有 idx 的样本 -> idx 组(物理风扇)
+  const idxGroups: { fi: number; names: string[]; dispName: string }[] = []
+  const idxIndex: Record<string, number> = {}
+  for (const p of pts) for (const f of p.fans || []) {
+    const fi = Number(f.idx); const n = f.n || '风扇'
+    if (isHiddenFan(fi, n)) continue
+    if (Number.isNaN(fi)) continue
+    const key = 'I:' + fi
+    if (!(key in idxIndex)) { idxIndex[key] = idxGroups.length; idxGroups.push({ fi, names: [], dispName: '' }) }
+    idxGroups[idxIndex[key]].names.push(n)
+  }
+  // 解析 idx 组显示名(直接读控制页自定义名,否则样本最新名) + 建立 名字->idx组 映射
+  const nameToIdx: Record<string, number> = {}
+  idxGroups.forEach((g, gi) => {
+    let nm = labelNameByIdx(g.fi) || lastName(g.names)
+    g.dispName = nm
+    nameToIdx[nm] = gi
+    for (const nn of new Set(g.names)) nameToIdx[nn] = gi
+  })
+  // 健壮性：当前标注名也映射到对应 idx 组,让「改名前残留的缺 idx 旧样本」能归并回正确通道
+  for (const [k, v] of Object.entries(fanLabels.value || {})) {
+    const parts = k.split('::')
+    const fi = parts.length >= 2 ? parseInt(parts[parts.length - 1], 10) : NaN
+    if (Number.isNaN(fi)) continue
+    const gi = idxIndex['I:' + fi]
+    if (gi == null) continue
+    const nm = (v && v.name) || ''
+    if (nm) nameToIdx[nm] = gi
+  }
+
+  // 第二阶段：缺 idx 的样本 -> 按名字归并回同名 idx 组(否则单列,30 天滚动清除)
+  const otherGroups: { names: string[] }[] = []
+  const otherIndex: Record<string, number> = {}
+  for (const p of pts) for (const f of p.fans || []) {
+    const fi = Number(f.idx); const n = f.n || '风扇'
+    if (isHiddenFan(fi, n)) continue
+    if (!Number.isNaN(fi)) continue
+    const key = 'N:' + n
+    if (!(key in otherIndex)) { otherIndex[key] = otherGroups.length; otherGroups.push({ names: [] }) }
+    otherGroups[otherIndex[key]].names.push(n)
+  }
+
+  // 合并成最终通道：idx 组优先,缺 idx 组按名字并入同名 idx 组
+  const finalIndex: Record<string, number> = {}
+  const finalOrder: { name: string }[] = []
+  const rawToFinal: number[] = new Array(idxGroups.length + otherGroups.length).fill(-1)
+  idxGroups.forEach((g, gi) => {
+    if (!(g.dispName in finalIndex)) { finalIndex[g.dispName] = finalOrder.length; finalOrder.push({ name: g.dispName }) }
+    rawToFinal[gi] = finalIndex[g.dispName]
+  })
+  otherGroups.forEach((g, oi) => {
+    const nm = lastName(g.names)
+    const target = nameToIdx[nm]
+    const mi = target != null ? rawToFinal[target] : ((nm in finalIndex) ? finalIndex[nm] : (finalIndex[nm] = finalOrder.length, finalOrder.push({ name: nm }), finalIndex[nm]))
+    rawToFinal[idxGroups.length + oi] = mi
+  })
+
+  const series = finalOrder.map(o => ({
+    name: o.name, rpm: [] as (number | null)[], pe: [] as (number | null)[], pwm: [] as (number | null)[],
+  }))
+  const rawIndexOf = (f: any): number => {
+    const fi = Number(f.idx); const n = f.n || '风扇'
+    if (isHiddenFan(fi, n)) return -1
+    const key = Number.isNaN(fi) ? 'N:' + n : 'I:' + fi
+    const ri = Number.isNaN(fi) ? otherIndex[key] : idxIndex[key]
+    if (ri == null) return -1
+    return Number.isNaN(fi) ? idxGroups.length + ri : ri
+  }
+  for (const p of pts) {
+    const seen: Record<number, boolean> = {}
+    for (const f of p.fans || []) {
+      const ri = rawIndexOf(f); if (ri < 0) continue
+      const mi = rawToFinal[ri]; if (mi < 0) continue
+      if (seen[mi]) continue
+      const s = series[mi]
+      s.rpm.push(toNum(f.rpm)); s.pe.push(toNum(f.pe)); s.pwm.push(toNum(f.pwm))
+      seen[mi] = true
+    }
+    for (let i = 0; i < series.length; i++) if (!seen[i]) {
+      series[i].rpm.push(null); series[i].pe.push(null); series[i].pwm.push(null)
+    }
+  }
+  // 降采样到 ~120 点，避免 3 天 8640 点拖慢渲染
+  const step = Math.max(1, Math.ceil(series[0].rpm.length / 120))
+  return series.map((s, i) => {
+    const rpmDs: (number | null)[] = []
+    const peDs: (number | null)[] = []
+    const pwmDs: (number | null)[] = []
+    for (let k = 0; k < s.rpm.length; k += step) {
+      rpmDs.push(s.rpm[k] != null ? (s.rpm[k] as number) : null)
+      peDs.push(s.pe[k] != null ? (s.pe[k] as number) : null)
+      pwmDs.push(s.pwm[k] != null ? (s.pwm[k] as number) : null)
+    }
+    if (rpmDs.length === 0 && s.rpm.some(v => v != null)) {
+      const first = s.rpm.findIndex(v => v != null)
+      rpmDs.push(s.rpm[first] as number)
+      peDs.push(s.pe[first] != null ? (s.pe[first] as number) : null)
+      pwmDs.push(s.pwm[first] != null ? (s.pwm[first] as number) : null)
+    }
+    const pe = s.pe.filter(v => v != null).pop() ?? null
+    const pwm = s.pwm.filter(v => v != null).pop() ?? null
+    return { name: s.name, color: FAN_PALETTE[i % FAN_PALETTE.length], rpm: rpmDs, pe, pwm, peArr: peDs, pwmArr: pwmDs }
+  })
+})
 
 function onResize(): void {
   if (resizeTimer) window.clearTimeout(resizeTimer)
@@ -733,6 +997,29 @@ onUnmounted(() => {
     </div>
     <canvas ref="canvasEl" style="width: 100%; height: 170px; margin-top: 10px; display: block" />
     <div v-if="legendHtml" style="font-size: 12px; color: var(--muted); margin-top: 6px" v-html="legendHtml" />
+  </div>
+
+  <div v-if="histMetric === 'fan'" class="card" style="margin-top: 12px">
+    <div class="section-title">各风扇通道历史（转速 + 接管状态）</div>
+    <div style="font-size: 12px; color: var(--text-3); margin: 4px 0 10px; line-height: 1.6">
+      绿点 = 软件接管(1) · 红点 = 交还主板(2)。可据此排查「哪台扇何时被谁抢走」——红点出现即说明该时刻风扇脱离了 nasdash 控制。
+    </div>
+    <div v-if="fanChannels.length === 0" style="font-size: 13px; color: var(--muted)">暂无风扇通道历史数据（让 NAS 运行一段时间后会自动积累，每 30 秒记录一次）。</div>
+    <div
+      v-for="ch in fanChannels"
+      :key="ch.name"
+      style="display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border, #eee)"
+    >
+      <div style="width: 96px; font-size: 13px; font-weight: 600; color: var(--text-1)">{{ ch.name }}</div>
+      <div style="flex: 1; min-width: 0">
+        <div v-if="ch.rpm.length >= 2" v-html="sparkline(ch.rpm, ch.color, 340, 40)"></div>
+        <div v-else style="font-size: 12px; color: var(--muted)">样本不足</div>
+      </div>
+      <div style="width: 168px; font-size: 12px; display: flex; align-items: center; gap: 8px; white-space: nowrap">
+        <span :style="{ color: ch.pe === 1 ? '#3ec97a' : ch.pe === 2 ? '#ff5d5d' : '#9aa1ad', fontWeight: 600 }">● {{ ch.pe === 1 ? '软件接管' : ch.pe === 2 ? '交还主板' : '未知' }}</span>
+        <span style="color: var(--muted)">占空 {{ ch.pwm != null ? ch.pwm + '%' : '—' }}</span>
+      </div>
+    </div>
   </div>
 
   <div class="modal-overlay" :class="{ show: reportOpen }">
