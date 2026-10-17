@@ -367,7 +367,7 @@ function fanRuleLinearBody(f: any, id: string): string {
       <span><label>全速占空</label><input type="number" id="${sid}rmax" min="0" max="100" value="${v('max_pwm', d.max)}">%</span>
       <span><label>恢复</label><input type="number" id="${sid}rrec" min="0" max="120" value="${v('recover_temp', d.rec)}">°C</span>
     </div>
-    <label class="fan-rule-stop"><input type="checkbox" id="${sid}rstop" ${r && r.stop_below_start ? 'checked' : ''}> 低于开转温度即停转（强制 0%）</label>
+    <label class="fan-rule-stop"><input type="checkbox" id="${sid}rstop" ${r && r.stop_below_start ? 'checked' : ''} onchange="saveFanRule('${f.hwmon}',${f.idx},'linear')"> 低于开转温度即停转（强制 0%）</label>
     <span class="fan-stop-hint">不勾：温度掉到「恢复」温度以下才把这个风扇交还主板自动控制。另外，部分风扇（尤其 CPU 散热器）自带最低转速保护，下发 0% 也停不到底，属于风扇/主板限制——真遇到本卡片会提示。</span>
     <div class="fan-rule-actions">
       <button class="btn-mini" onclick="saveFanRule('${f.hwmon}',${f.idx},'linear')">保存为线性</button>
@@ -383,6 +383,7 @@ function fanRuleCurveBody(f: any, id: string): string {
     <div class="fan-rule-curve-wrap" id="${id}-curve-wrap">
       ${renderCurveEditor(cprefix, (f.rule && f.rule.curve) ? f.rule.curve : null)}
     </div>
+    <label class="fan-rule-stop"><input type="checkbox" id="${id}-curve_rstop" ${(f.rule && f.rule.stop_below_start) ? 'checked' : ''} onchange="saveFanRule('${f.hwmon}',${f.idx},'curve',true)"> 低于开转温度即停转（强制 0%）</label>
     <div class="fan-rule-actions">
       <button class="btn-mini" onclick="saveFanRule('${f.hwmon}',${f.idx},'curve')">保存为曲线</button>
       <span class="fan-rule-state" id="${id}-curve_rstate"></span>
@@ -793,10 +794,10 @@ async function onRuleSrcChange(hwmon: string, idx: number, body: string): Promis
     setv(id + '-' + pre + 'rstart', d.start); setv(id + '-' + pre + 'rfull', d.full)
     setv(id + '-' + pre + 'rmin', d.min); setv(id + '-' + pre + 'rmax', d.max); setv(id + '-' + pre + 'rrec', d.rec)
   }
-  await saveFanRule(hwmon, idx, body === 'curve' ? 'curve' : 'linear')
+  await saveFanRule(hwmon, idx, body === 'curve' ? 'curve' : 'linear', true)
 }
 
-async function saveFanRule(hwmon: string, idx: number, activeMode?: string): Promise<void> {
+async function saveFanRule(hwmon: string, idx: number, activeMode?: string, fromSrcChange: boolean = false): Promise<void> {
   const id = fanUid(hwmon, idx)
   const body = activeMode || 'linear'
   const pre = body + '_'
@@ -808,14 +809,21 @@ async function saveFanRule(hwmon: string, idx: number, activeMode?: string): Pro
   if (!src) {
     body4.rule = null    // 关闭 → 清除该风扇联动
   } else {
-    const pts = readCurve(id + '-r')
+    const fans = (DATA && DATA.system && DATA.system.sensors && DATA.system.sensors.fans) || []
+    const f = fans.find((x: any) => x.hwmon === hwmon && x.idx === idx)
+    let pts = readCurve(id + '-r')
     let start: number, full: number, minp: number, maxp: number, rec: number, stopv: boolean
     if (body === 'curve') {
       // 曲线体没有线性输入框（旧页同源缺陷：曾致「保存为曲线」静默失败、从未发出 POST）。
       // 基线字段直接从曲线节点推导，与后端缺省语义对齐（start_temp 缺省取首点温度、recover 取 start-5）。
+      // 仅改温度源（fromSrcChange）且暂无曲线时，沿用已存曲线或留空，不阻断温度源/停转保存。
       if (!pts || pts.length < 2) {
-        if (st) { st.textContent = '请先添加至少 2 个曲线节点'; st.className = 'fan-rule-state' }
-        return
+        if (fromSrcChange) {
+          pts = (f && f.rule && f.rule.curve) ? f.rule.curve : []
+        } else {
+          if (st) { st.textContent = '请先添加至少 2 个曲线节点'; st.className = 'fan-rule-state' }
+          return
+        }
       }
       const temps = pts.map((p: any) => Number(p[0]))
       const pwms = pts.map((p: any) => Number(p[1]))
@@ -828,7 +836,8 @@ async function saveFanRule(hwmon: string, idx: number, activeMode?: string): Pro
       minp = Math.min(...pwms)
       maxp = Math.max(...pwms)
       rec = Math.max(0, start - 5)
-      stopv = false
+      const stopElC = document.getElementById(id + '-curve_rstop') as HTMLInputElement | null
+      stopv = stopElC ? stopElC.checked : false
     } else {
       const gv = (elid: string) => parseFloat((document.getElementById(elid) as HTMLInputElement).value)
       start = gv(id + '-' + pre + 'rstart')
@@ -842,8 +851,6 @@ async function saveFanRule(hwmon: string, idx: number, activeMode?: string): Pro
       if (!(rec < start)) { if (st) { st.textContent = '恢复温度须小于开转温度'; st.className = 'fan-rule-state' } return }
     }
     // 保留旧 active_mode：仅当「保存为线性/曲线」显式指定时才覆盖（老配置可能没这字段 → 曲线优先推断）
-    const fans = (DATA && DATA.system && DATA.system.sensors && DATA.system.sensors.fans) || []
-    const f = fans.find((x: any) => x.hwmon === hwmon && x.idx === idx)
     const curActive = (f && f.active_mode) || ((f && f.rule && f.rule.curve && f.rule.curve.length >= 2) ? 'curve' : 'linear')
     const newActive = activeMode || curActive
     body4.rule = { enabled: true, source: src, start_temp: start, full_temp: full, min_pwm: minp, max_pwm: maxp, recover_temp: rec, stop_below_start: stopv, curve: pts, active_mode: newActive }
