@@ -1,6 +1,6 @@
 # nasdash
 
-**当前版本：v2.3.3** · [下载最新 fpk](https://github.com/han951meng/nasdash/releases/latest) · [📖 操作手册](docs/使用手册.md) · [💬 飞牛社区讨论帖](https://club.fnnas.com/forum.php?mod=viewthread&tid=67060)
+**当前版本：v2.3.4** · [下载最新 fpk](https://github.com/han951meng/nasdash/releases/latest) · [📖 操作手册](docs/使用手册.md) · [💬 飞牛社区讨论帖](https://club.fnnas.com/forum.php?mod=viewthread&tid=67060)
 
 飞牛OS（fnOS）NAS 硬件监控面板 —— FPK 应用包
 
@@ -229,6 +229,11 @@
 > 本应用仅在以上硬件完成完整实测；其他主板/阵列卡组合功能可能不同，欢迎在 Issues 反馈。
 
 ## 更新日志
+
+### v2.3.4
+- 【硬盘温度】修复三星等固态硬盘（如 840 PRO）在硬件配置检测 / SMART 页温度显示 N/A 的问题：这类盘用属性 ID 190（Airflow_Temperature）报温度、没有 ID 194，之前只认 ID 194 导致读不出，现已正确读取。
+- 【风扇控制】修复「温度源」选择与「低于开转温度即停转」开关的改动偶发没保存成功的问题，现在选择后即时生效。
+- 【系统资源】CPU 每核占用小框在核心多的机器上支持折叠 / 展开，页面更紧凑、小窗也好看。
 
 ### v2.3.3
 - 【风扇历史】趋势图「风扇」指标从单一平均转速线改为**每台扇独立彩色曲线**，曲线上按接管状态打点（绿=软件接管、红=交还主板），只在起始与状态变化拐点打点。

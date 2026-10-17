@@ -485,6 +485,12 @@ import glob as _glob
 #  - 并发请求在 1s 内共享同一份缓存值，不会各自开一个微小窗口导致数值乱跳。
 _CPU_USAGE_CACHE = {"v": None, "t": 0.0, "prev": None}   # v=最新使用率, t=写入时间, prev=上一次 /proc/stat(total,idle)
 _CPU_USAGE_LOCK = _threading.Lock()
+# 每核 CPU 使用率缓存：结构与 _CPU_USAGE_CACHE 平行，由 metrics_collect_loop 同一 1s 窗口写入，
+# 前端 CPU 卡片下排每核小条；prev 存 {idx:(idle,total)} 供差分，首轮未采到时 v=[]（前端不显示）。
+_CPU_CORES_CACHE = {"v": [], "t": 0.0, "prev": {}}
+# 每核 CPU 历史（Windows 资源监视器风格：每核一条滚动曲线）：list of lists，每核一个滑动窗口，最多 60 点。
+# 由 metrics_collect_loop 每 ~1s 写入（与 _CPU_CORES_CACHE 同窗口），经 /api/metrics 秒级喂给前端。
+_CPU_CORES_HIST = []
 
 def _cpu_snap():
     """读 /proc/stat 首行聚合，返回 (idle, total)。idle 含 iowait，total 含 user..steal。"""
@@ -523,6 +529,36 @@ def get_cpu_usage():
         if c["v"] is not None and (now - c["t"]) < 2.0:
             return c["v"]
         return _cpu_sample_1s()
+    except Exception:
+        return None
+
+def get_cpu_core_usage():
+    """每核 CPU 使用率列表（0-100，后台 daemon 1s 窗口刷新，无尖刺）。
+    返回 [] 表示 daemon 尚未采到首份（前端据此隐藏每核条，避免首屏空白）。"""
+    try:
+        now = time.time()
+        with _CPU_USAGE_LOCK:
+            v = _CPU_CORES_CACHE["v"]
+            t = _CPU_CORES_CACHE["t"]
+        if v and (now - t) < 5.0:
+            return v
+        return []
+    except Exception:
+        return []
+
+def get_cpu_cores_history():
+    """每核 CPU 历史二维数组（秒级滚动，每核最多 60 点），供前端每核曲线。
+    返回 [] 表示尚未采到首份（前端据此隐藏每核曲线区）。"""
+    try:
+        with _CPU_USAGE_LOCK:
+            return [list(h) for h in _CPU_CORES_HIST]
+    except Exception:
+        return []
+
+def get_proc_count():
+    """进程数：统计 /proc 下数字目录（每个即一个 PID）。轻量、无额外命令开销。"""
+    try:
+        return sum(1 for _n in os.listdir("/proc") if _n.isdigit())
     except Exception:
         return None
 
@@ -2816,6 +2852,10 @@ def _parse_pd_show_all(out):
     return res
 
 
+# 阵列卡「上次好值」兜底：storcli 瞬时失败（超时/权限抖动）时，若此前成功采到过该卡，
+# 回退上次好值，避免温度监控页与风扇控温源瞬断（纯 SATA 无卡环境从未成功过，last 为 None 不触发）。
+_RAID_LAST_GOOD = {"v": None}
+
 @_ttl_cache(15)
 def get_raid_card():
     data = {"ok": False, "mode": "none", "model": "未检测到",
@@ -2983,6 +3023,8 @@ def get_raid_card():
             data["virtual_drives"] = []
             _debug("parse VD cache failed: " + str(e))
         data["locate_supported"] = _probe_locate_support(data.get("raw", ""))
+        if data.get("ok"):
+            _RAID_LAST_GOOD["v"] = data
         return data
     # ---- 非 MegaRAID：判断是否为 HBA 直通卡 / 纯 SATA ----
     controllers = detect_storage_controllers()
@@ -3010,6 +3052,9 @@ def get_raid_card():
         data["mode"] = "mega_error"
         data["model"] = megaraid[0]["model"]
         data["note"] = "检测到 MegaRAID 卡，但 storcli 读取失败，请确认已安装 storcli 且本应用具备 sudo 权限。"
+        # 瞬时失败兜底：此前成功采到过该卡则回退上次好值，避免温度页/风扇控温源瞬断
+        if _RAID_LAST_GOOD.get("v") is not None:
+            return _RAID_LAST_GOOD["v"]
         return data
     data["ok"] = False
     data["mode"] = "none"
@@ -3080,6 +3125,12 @@ def parse_ata_smart(text):
                 d["power_on_hours"] = raw_num
             elif aid == "194":
                 d["temp"] = raw_num
+            elif aid == "190":
+                # 三星 SSD（如 840 PRO）等常用属性 ID 190（Airflow_Temperature_Cel）报温度，
+                # ID 194 可能缺失；此前只认 ID 194 → 三星盘温度在 SMART/硬件检测页显示 N/A。
+                # 与 get_disk_temps 的解析口径对齐（它已认 Airflow_Temperature）。
+                if d.get("temp") is None:
+                    d["temp"] = raw_num
             elif aid == "5":
                 d["reallocated"] = raw_num
             elif aid == "197":
@@ -6968,6 +7019,43 @@ def metrics_collect_loop():
                     _CPU_USAGE_CACHE["prev"] = (total, idle)
             except Exception:
                 pass
+            # 每核 CPU 使用率：复用同一 1s 窗口差分，写 _CPU_CORES_CACHE（prev 存 {idx:(idle,total)}），
+            # 前端 CPU 卡片下排每核小条；并发请求只读缓存，不各自开窗口，避免每核条闪烁归零。
+            try:
+                _cur = {}
+                try:
+                    with open("/proc/stat") as _fs:
+                        for _ln in _fs:
+                            _p = _ln.split()
+                            if len(_p) >= 2 and re.fullmatch(r"cpu\d+", _p[0]):
+                                _n = [int(x) for x in _p[1:]]
+                                _cur[int(_p[0][3:])] = (_n[3] + _n[4], sum(_n[:8]))  # (idle, total)
+                except Exception:
+                    _cur = {}
+                with _CPU_USAGE_LOCK:
+                    _pp = _CPU_CORES_CACHE.get("prev") or {}
+                    _out = []
+                    for _idx in sorted(_cur):
+                        _ci, _ct = _cur[_idx]
+                        _pv = _pp.get(_idx)
+                        if _pv and (_ct - _pv[1]) > 0:
+                            _u = max(0.0, min(100.0, round((1.0 - (_ci - _pv[0]) / (_ct - _pv[1])) * 100, 1)))
+                        else:
+                            _u = 0.0
+                        _out.append(_u)
+                    _CPU_CORES_CACHE["v"] = _out
+                    _CPU_CORES_CACHE["t"] = time.time()
+                    _CPU_CORES_CACHE["prev"] = _cur
+                if _out:
+                    if len(_CPU_CORES_HIST) != len(_out):
+                        _CPU_CORES_HIST[:] = [[] for _ in _out]
+                    for _k, _u in enumerate(_out):
+                        _h = _CPU_CORES_HIST[_k]
+                        _h.append(_u)
+                        if len(_h) > 60:
+                            _h.pop(0)
+            except Exception:
+                pass
             # CPU 封装功耗 (RAPL)：两次采样差算功率 + EMA 平滑
             e = _read_rapl_energy()
             with _METRICS_LOCK:
@@ -8164,8 +8252,12 @@ def api_all():
                 # 首屏直接拿真实 CPU 使用率；_warmup_caches 已预热基准，不再短 sleep。
                 try:
                     system["cpu_usage"] = get_cpu_usage()
+                    system["cpu_cores_usage"] = get_cpu_core_usage()
+                    system["proc_count"] = get_proc_count()
                 except Exception:
                     system["cpu_usage"] = None
+                    system["cpu_cores_usage"] = []
+                    system["proc_count"] = None
             except Exception:
                 system = {}
             result = {
@@ -8246,8 +8338,12 @@ def api_system():
         system = {**get_system(request.args.get("force") == "1"), "board": board, "memory_modules": memory_modules}
         try:
             system["cpu_usage"] = get_cpu_usage()
+            system["cpu_cores_usage"] = get_cpu_core_usage()
+            system["proc_count"] = get_proc_count()
         except Exception:
             system["cpu_usage"] = None
+            system["cpu_cores_usage"] = []
+            system["proc_count"] = None
         # 阵列卡芯片温度（ROC Temperature），供「温度监控」tab 显示（get_raid_card 有 60s 缓存，开销极低）
         try:
             _raid = get_raid_card()
@@ -8923,6 +9019,7 @@ def api_metrics():
         return jsonify({"net": list(merged.values()), "diskio": diskio,
                         "cpu_usage": cpu_usage, "mem_percent": mem_percent, "load": load,
                         "cpu_freq_mhz": cpu_freq_mhz,
+                        "cpu_cores_history": get_cpu_cores_history(),
                         "gpu": _get_gpu_live(),
                         "time": time.strftime("%Y-%m-%d %H:%M:%S")})
     except Exception as e:
@@ -10235,8 +10332,12 @@ def build_health_report():
     # 否则刚重启那次会被 _fresh 覆盖掉（踩过）。
     try:
         system["cpu_usage"] = get_cpu_usage()
+        system["cpu_cores_usage"] = get_cpu_core_usage()
+        system["proc_count"] = get_proc_count()
     except Exception:
         system["cpu_usage"] = None
+        system["cpu_cores_usage"] = []
+        system["proc_count"] = None
     system_full = {**system, "board": board, "memory_modules": memory_modules}
     storage = get_storage()
     docker = get_docker()
@@ -11211,6 +11312,11 @@ def _serve_gateway(app, socket_path):
 
 
 if __name__ == "__main__":
+    # 静默访问日志：前端每 ~2s 轮询一次接口，Werkzeug/wsgiref 默认会把每条请求写进 app.log，
+    # 长期运行会刷屏且无诊断价值。统一把 werkzeug 降到 ERROR，并让 TCP 转发 handler 不打印请求行。
+    import logging as _logging
+    _logging.getLogger("werkzeug").setLevel(_logging.ERROR)
+    _logging.getLogger("werkzeug").disabled = True
     APP_DIR = os.path.dirname(os.path.abspath(__file__))
     # 统一网关模式（飞牛 fnOS 应用中心）：监听 Unix Socket，网关先校验 NAS 登录态再转发。
     # 由 cmd/main 注入 NAS_DASH_GATEWAY=1 启用；本地开发/CI 不设则保持 TCP 端口（便于测试）。
@@ -11237,8 +11343,11 @@ if __name__ == "__main__":
         _service_port = (os.environ.get("TRIM_SERVICE_PORT") or "").strip()
         if _service_port:
             def _serve_tcp(app, port):
-                from wsgiref.simple_server import make_server
-                srv = make_server("127.0.0.1", port, app)
+                from wsgiref.simple_server import make_server, WSGIRequestHandler
+                class _QuietHandler(WSGIRequestHandler):
+                    def log_message(self, *a, **k):
+                        pass
+                srv = make_server("127.0.0.1", port, app, handler_class=_QuietHandler)
                 srv.serve_forever()
             _port = int(_service_port)
             _tcp_thread = _threading.Thread(target=_serve_tcp, args=(app, _port), daemon=True)

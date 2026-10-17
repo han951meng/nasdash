@@ -13,7 +13,7 @@ import PanelHero from '../components/PanelHero.vue'
 import type { HeroStat } from '../components/PanelHero.vue'
 import { apiFetch } from '../lib/api'
 import { pageCacheGet, pageCacheSet } from '../lib/pageCache'
-import { clampPct, fmtLoad, fmtSpeed } from '../lib/format'
+import { clampPct, fmtSpeed } from '../lib/format'
 
 interface MemInfo {
   used?: string
@@ -35,10 +35,13 @@ interface GpuItem {
 }
 interface SysInfo {
   cpu_usage?: number | null
+  cpu_cores_usage?: number[]
   cpu_threads?: number
   load?: (string | number)[]
   memory?: MemInfo
   uptime?: string
+  hostname?: string
+  proc_count?: number | null
   nics?: { name?: string }[]
   gpus?: GpuItem[]
 }
@@ -64,6 +67,7 @@ interface MetricsResp {
   net?: NetItem[]
   gpu?: GpuItem[]
   diskio?: DiskItem[]
+  cpu_cores_history?: number[][]   // 每核 CPU 历史（秒级滚动，Windows 资源监视器风格每核一条曲线）
 }
 
 const HIST_LEN = 60
@@ -117,6 +121,14 @@ const cpuPct = computed(() => {
   if (s?.cpu_usage != null) return Math.round(parseFloat(String(s.cpu_usage)))
   return null
 })
+
+// 每核 CPU 占用（后台 daemon 1s 窗口刷新）：用于 CPU 卡片下排每核小条
+const cpuCores = computed<number[]>(() => sys.value?.cpu_cores_usage || [])
+function coreColor(c: number): string {
+  if (c >= 80) return 'var(--red)'
+  if (c >= 50) return 'var(--orange)'
+  return 'var(--green)'
+}
 
 const memPct = computed(() => {
   const l = live.value
@@ -179,13 +191,19 @@ const heroStats = computed<HeroStat[]>(() => [
   { v: sys.value?.uptime ? String(sys.value.uptime).replace(/\s+/g, '') : '—', k: '已运行' },
 ])
 
-const loadText = computed(() => {
-  const arr = live.value?.load || sys.value?.load || []
-  return arr.map(fmtLoad).join(' / ') || '—'
-})
 
 // ===== 折线数据 =====
 const cpuLines = computed(() => [{ data: cpuHist.value as (number | null)[], color: 'var(--blue)' }])
+// 每核 CPU 曲线：后端 daemon 维护的每核历史（秒级），与全 CPU 曲线同源、流畅滚动
+const cpuCoresHistory = computed<number[][]>(() => live.value?.cpu_cores_history || [])
+// 每核框：默认每行 2 个、最多显示 4 行（8 个核），核数更多时折叠并给出展开按钮
+const CPU_CORES_VISIBLE = 8
+const showAllCores = ref(false)
+const cpuCoresVisibleHistory = computed<number[][]>(() =>
+  cpuCoresHistory.value.length > CPU_CORES_VISIBLE && !showAllCores.value
+    ? cpuCoresHistory.value.slice(0, CPU_CORES_VISIBLE)
+    : cpuCoresHistory.value
+)
 const memLines = computed(() => [{ data: memHist.value as (number | null)[], color: '#a855f7' }])
 const netLines = computed(() => [
   { data: netHist.value.map(p => p.tx), color: 'var(--blue)' },
@@ -313,6 +331,38 @@ onUnmounted(() => {
         <div style="position: relative">
           <Sparkline :lines="cpuLines" :max="100" :w="600" :h="100" :css-h="80" :line-width="2" />
         </div>
+        <div v-if="cpuCoresHistory.length" style="margin-top: 10px">
+          <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px">
+            <div
+              v-for="(h, i) in cpuCoresVisibleHistory"
+              :key="i"
+              style="border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; background: rgba(127,127,127,0.06)"
+            >
+              <div style="display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 4px">
+                <span style="font-size: 11px; color: var(--muted)">核 {{ i }}</span>
+                <span
+                  :style="{ fontSize: '12px', fontWeight: 600, color: coreColor(h.length ? h[h.length - 1] : 0), fontVariantNumeric: 'tabular-nums' }"
+                >{{ h.length ? Math.round(h[h.length - 1]) + '%' : '—' }}</span>
+              </div>
+              <Sparkline
+                :lines="[{ data: h, color: coreColor(h.length ? h[h.length - 1] : 0) }]"
+                :max="100"
+                :w="240"
+                :h="56"
+                :css-h="44"
+                :line-width="1.6"
+              />
+            </div>
+          </div>
+          <button
+            v-if="cpuCoresHistory.length > CPU_CORES_VISIBLE"
+            type="button"
+            @click="showAllCores = !showAllCores"
+            style="margin-top: 8px; padding: 5px 12px; font-size: 12px; cursor: pointer; border-radius: 6px; border: 1px solid var(--border); background: rgba(127,127,127,0.08); color: var(--text)"
+          >
+            {{ showAllCores ? '收起' : '展开全部 ' + cpuCoresHistory.length + ' 个核' }}
+          </button>
+        </div>
       </div>
 
       <div class="card sys-area-mem">
@@ -398,10 +448,8 @@ onUnmounted(() => {
         </div>
         <div v-else class="loading">未检测到核显 / 独显，或 BIOS 已禁用</div>
       </div>
+
     </div>
 
-    <div style="margin-top: 12px; font-size: 12px; color: var(--text-2)">
-      负载 {{ loadText }}（共 {{ sys?.cpu_threads ?? '—' }} 线程）
-    </div>
   </div>
 </template>
