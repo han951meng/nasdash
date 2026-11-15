@@ -10121,8 +10121,8 @@ def _send_bark(url, text):
 def _send_email(cfg, text):
     try:
         import smtplib
-        from email.mime.text import MimeText
-        msg = MimeText("nasdash 告警通知\n\n%s\n\n时间：%s" % (text, time.strftime("%Y-%m-%d %H:%M:%S")), "plain", "utf-8")
+        from email.mime.text import MIMEText
+        msg = MIMEText("nasdash 告警通知\n\n%s\n\n时间：%s" % (text, time.strftime("%Y-%m-%d %H:%M:%S")), "plain", "utf-8")
         msg["Subject"] = "nasdash 告警"
         msg["From"] = cfg.get("user", "")
         msg["To"] = cfg.get("to", "")
